@@ -1,0 +1,50 @@
+name: Hermes Mobile release checks
+
+on:
+  push:
+    branches:
+      - "main"
+      - "contrib/**"
+      - "release/strix-halo-*"
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - "deploy/strix-halo/**"
+      - "server/mobile_relay.py"
+      - "server/test_mobile_relay.py"
+      - ".github/workflows/hermes-mobile-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mobile-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Test crash recoverable installer
+        run: python3 -W error::ResourceWarning -m unittest deploy.strix-halo.test_installer
+      - name: Test mobile relay and large uploads
+        run: uv run --with aiohttp==3.14.3 python -W error::ResourceWarning -m unittest server.test_mobile_relay
+      - name: Install desktop dependencies
+        run: npm ci
+      - name: Type check desktop
+        working-directory: apps/desktop
+        run: npm run typecheck
+      - name: Build mobile renderer
+        working-directory: apps/desktop
+        run: npm run build
+      - name: Build candidate twice
+        run: |
+          python3 deploy/strix-halo/build_release.py --version ci --source-commit "$GITHUB_SHA" --output /tmp/mobile-one.tar.gz
+          python3 deploy/strix-halo/build_release.py --version ci --source-commit "$GITHUB_SHA" --output /tmp/mobile-two.tar.gz
+          cmp /tmp/mobile-one.tar.gz /tmp/mobile-two.tar.gz
+      - name: Verify exact archive
+        run: python3 deploy/strix-halo/verify_release.py /tmp/mobile-one.tar.gz --version ci --source-commit "$GITHUB_SHA"
