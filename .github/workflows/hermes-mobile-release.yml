@@ -12,6 +12,12 @@ on:
       - "deploy/strix-halo/**"
       - "server/mobile_relay.py"
       - "server/test_mobile_relay.py"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/npm-audit-policy.*"
+      - "tests-js/npm-audit-policy.test.ts"
+      - "website/package.json"
+      - "website/package-lock.json"
       - ".github/workflows/hermes-mobile-release.yml"
   workflow_dispatch:
 
@@ -35,6 +41,10 @@ jobs:
         run: uv run --with aiohttp==3.14.3 python -W error::ResourceWarning -m unittest server.test_mobile_relay
       - name: Install desktop dependencies
         run: npm ci
+      - name: Audit shipped dependencies for high severity advisories
+        run: npm run audit:mobile
+      - name: Audit website dependencies for high severity advisories
+        run: npm --prefix website audit --audit-level=high
       - name: Type check desktop
         working-directory: apps/desktop
         run: npm run typecheck
