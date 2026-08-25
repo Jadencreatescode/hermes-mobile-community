@@ -8296,22 +8296,73 @@ def delete_custom_endpoint(endpoint_id: str, profile: Optional[str] = None):
         raise HTTPException(status_code=500, detail="Failed to delete custom endpoint")
 
 
+def _custom_endpoint_probe_url(base_url: str) -> Optional[str]:
+    """Build a safe model-discovery URL for an operator supplied endpoint.
+
+    Private and loopback addresses are intentional here because local model
+    servers are a supported product feature.  The non-negotiable floor still
+    rejects non-HTTP schemes, URL credentials, and cloud metadata targets.
+    """
+    try:
+        parsed = urllib.parse.urlsplit((base_url or "").strip())
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+
+    path = parsed.path.rstrip("/") + "/models"
+    probe_url = urllib.parse.urlunsplit(
+        (parsed.scheme.lower(), parsed.netloc, path, "", "")
+    )
+    from tools.url_safety import is_always_blocked_url
+
+    return None if is_always_blocked_url(probe_url) else probe_url
+
+
+def _custom_endpoint_async_client(*, timeout):
+    """Return a connect-time guarded client that still permits local models."""
+    from tools.url_safety import create_ssrf_safe_async_client
+
+    return create_ssrf_safe_async_client(
+        allow_private_urls=True,
+        follow_redirects=False,
+        timeout=timeout,
+        trust_env=False,
+    )
+
+
 @app.post("/api/providers/custom-endpoints/validate")
-async def validate_custom_endpoint(body: CustomEndpointUpdate):
+async def validate_custom_endpoint(body: CustomEndpointUpdate, request: Request):
     """Probe a custom endpoint by calling its OpenAI-compatible /models URL."""
     import httpx
+
+    _require_token(request)
 
     base_url = (body.base_url or "").strip().rstrip("/")
     if not base_url:
         return {"ok": False, "reachable": True, "message": "Enter an endpoint URL first.", "models": []}
 
-    url = base_url + "/models"
+    url = _custom_endpoint_probe_url(base_url)
+    if url is None:
+        return {
+            "ok": False,
+            "reachable": False,
+            "message": "Endpoint URL is not allowed.",
+            "models": [],
+        }
     headers = {"Accept": "application/json"}
     if body.api_key and body.api_key.strip():
         headers["Authorization"] = f"Bearer {body.api_key.strip()}"
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0)) as client:
+        async with _custom_endpoint_async_client(timeout=httpx.Timeout(8.0)) as client:
             resp = await client.get(url, headers=headers)
     except Exception:
         return {"ok": False, "reachable": False, "message": f"Could not reach {url}.", "models": []}
@@ -8346,14 +8397,20 @@ async def validate_provider_credential(body: EnvVarUpdate, request: Request):
     # ids the endpoint advertises (OpenAI ``/v1/models`` shape) so the GUI can
     # auto-pick a default without asking the user to type a model name.
     if key == "OPENAI_BASE_URL":
-        url = value.rstrip("/") + "/models"
+        url = _custom_endpoint_probe_url(value)
+        if url is None:
+            return {
+                "ok": False,
+                "reachable": False,
+                "message": "Endpoint URL is not allowed.",
+            }
         # Send the optional API key so endpoints that require auth on
         # ``/v1/models`` (many hosted OpenAI-compatible servers) still enumerate
         # their models instead of returning an empty list behind a 401.
         api_key = (body.api_key or "").strip()
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(8.0)) as client:
+            async with _custom_endpoint_async_client(timeout=httpx.Timeout(8.0)) as client:
                 resp = await client.get(url, headers=headers)
             return {"ok": True, "reachable": True, "message": "", "models": _parse_model_ids(resp)}
         except Exception:

@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name("installer.py")
+REPO_ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("strix_installer", MODULE_PATH)
 assert spec and spec.loader
 installer = importlib.util.module_from_spec(spec)
@@ -70,6 +71,54 @@ def bundle(root: Path, version: str, marker: str = "one") -> Path:
         entries.append(f"{hashlib.sha256(file_path.read_bytes()).hexdigest()}  {relative}")
     (path / "MANIFEST.sha256").write_text("\n".join(entries) + "\n")
     return path
+
+
+class ReleaseSecurityWorkflowTests(unittest.TestCase):
+    def test_codeql_is_scoped_to_the_mobile_release_surface(self):
+        workflow = REPO_ROOT / ".github" / "workflows" / "codeql-mobile.yml"
+        config = REPO_ROOT / ".github" / "codeql" / "mobile-config.yml"
+        self.assertTrue(workflow.is_file())
+        self.assertTrue(config.is_file())
+
+        workflow_text = workflow.read_text(encoding="utf-8")
+        config_text = config.read_text(encoding="utf-8")
+        release_workflow_text = (
+            REPO_ROOT / ".github" / "workflows" / "hermes-mobile-release.yml"
+        ).read_text(encoding="utf-8")
+        for language in ("actions", "javascript-typescript", "python"):
+            self.assertIn(f"language: {language}", workflow_text)
+        self.assertNotIn("language: c-cpp", workflow_text)
+        self.assertNotIn("language: rust", workflow_text)
+        self.assertIn("github/codeql-action/init@", workflow_text)
+        self.assertIn("github/codeql-action/analyze@", workflow_text)
+
+        for path in (
+            "apps/desktop",
+            "apps/shared",
+            "deploy/strix-halo",
+            "server/mobile_relay.py",
+            "scripts/npm-audit-policy.mjs",
+            "tests-js/npm-audit-policy.test.ts",
+            ".github/workflows/hermes-mobile-release.yml",
+        ):
+            self.assertIn(f"- {path}", config_text)
+
+        for ignored_path in (
+            'apps/desktop/**/*.test.ts',
+            'apps/desktop/**/*.test.tsx',
+            'apps/desktop/scripts/perf',
+        ):
+            self.assertIn(f'- "{ignored_path}"', config_text)
+
+        for path in (
+            ".github/workflows/codeql-mobile.yml",
+            ".github/codeql/mobile-config.yml",
+        ):
+            self.assertIn(f'- "{path}"', release_workflow_text)
+
+        for branch in ("main", "contrib/**", "release/strix-halo-*"):
+            self.assertIn(f'- "{branch}"', workflow_text)
+            self.assertIn(f'- "{branch}"', release_workflow_text)
 
 
 class InstallerTests(unittest.TestCase):

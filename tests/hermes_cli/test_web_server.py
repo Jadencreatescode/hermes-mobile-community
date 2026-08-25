@@ -4520,7 +4520,76 @@ class TestValidateProviderCredential:
         data = self._post("OPENROUTER_API_KEY", "sk-real").json()
         assert data["ok"] is False and data["reachable"] is False
 
+    @pytest.mark.parametrize(
+        ("path", "payload"),
+        [
+            (
+                "/api/providers/validate",
+                {
+                    "key": "OPENAI_BASE_URL",
+                    "value": "http://169.254.169.254/latest/meta-data",
+                },
+            ),
+            (
+                "/api/providers/custom-endpoints/validate",
+                {
+                    "name": "Blocked metadata",
+                    "base_url": "http://metadata.google.internal/computeMetadata/v1",
+                    "model": "blocked",
+                },
+            ),
+            (
+                "/api/providers/custom-endpoints/validate",
+                {
+                    "name": "Invalid scheme",
+                    "base_url": "file:///etc/passwd",
+                    "model": "blocked",
+                },
+            ),
+        ],
+    )
+    def test_custom_endpoint_probe_rejects_unsafe_url_before_network(
+        self, monkeypatch, path, payload
+    ):
+        class _NetworkMustNotOpen:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("unsafe endpoint reached the HTTP client")
 
+        monkeypatch.setattr(
+            "hermes_cli.web_server._custom_endpoint_async_client",
+            _NetworkMustNotOpen,
+        )
+
+        response = self.client.post(path, json=payload)
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "ok": False,
+            "reachable": False,
+            "message": "Endpoint URL is not allowed.",
+            **({"models": []} if "custom-endpoints" in path else {}),
+        }
+
+    def test_custom_endpoint_client_ignores_environment_proxies(self, monkeypatch):
+        captured = {}
+        sentinel = object()
+
+        def _create_client(**kwargs):
+            captured.update(kwargs)
+            return sentinel
+
+        monkeypatch.setattr(
+            "tools.url_safety.create_ssrf_safe_async_client",
+            _create_client,
+        )
+        from hermes_cli.web_server import _custom_endpoint_async_client
+
+        result = _custom_endpoint_async_client(timeout=8.0)
+
+        assert result is sentinel
+        assert captured["allow_private_urls"] is True
+        assert captured["follow_redirects"] is False
+        assert captured["trust_env"] is False
 
     def test_local_endpoint_forwards_api_key_as_bearer(self, monkeypatch):
         """A custom endpoint that gates /v1/models behind auth must still
@@ -4550,7 +4619,10 @@ class TestValidateProviderCredential:
                 captured["headers"] = headers
                 return _Resp()
 
-        monkeypatch.setattr("httpx.AsyncClient", _Client)
+        monkeypatch.setattr(
+            "hermes_cli.web_server._custom_endpoint_async_client",
+            lambda **_kwargs: _Client(),
+        )
 
         resp = self.client.post(
             "/api/providers/validate",
@@ -4591,7 +4663,10 @@ class TestValidateProviderCredential:
                 captured["headers"] = headers
                 return _Resp()
 
-        monkeypatch.setattr("httpx.AsyncClient", _Client)
+        monkeypatch.setattr(
+            "hermes_cli.web_server._custom_endpoint_async_client",
+            lambda **_kwargs: _Client(),
+        )
 
         self.client.post(
             "/api/providers/validate",
@@ -4625,7 +4700,10 @@ class TestValidateProviderCredential:
                 captured["headers"] = headers
                 return _Resp()
 
-        monkeypatch.setattr("httpx.AsyncClient", _Client)
+        monkeypatch.setattr(
+            "hermes_cli.web_server._custom_endpoint_async_client",
+            lambda **_kwargs: _Client(),
+        )
 
         response = self.client.post(
             "/api/providers/custom-endpoints/validate",

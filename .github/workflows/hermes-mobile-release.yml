@@ -19,6 +19,8 @@ on:
       - "website/package.json"
       - "website/package-lock.json"
       - ".github/workflows/hermes-mobile-release.yml"
+      - ".github/workflows/codeql-mobile.yml"
+      - ".github/codeql/mobile-config.yml"
   workflow_dispatch:
 
 permissions:
