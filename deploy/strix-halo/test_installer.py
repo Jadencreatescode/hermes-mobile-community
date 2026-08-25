@@ -96,10 +96,10 @@ class ReleaseSecurityWorkflowTests(unittest.TestCase):
             "apps/desktop",
             "apps/shared",
             "deploy/strix-halo",
-            "server/mobile_relay.py",
-            "scripts/npm-audit-policy.mjs",
-            "tests-js/npm-audit-policy.test.ts",
-            ".github/workflows/hermes-mobile-release.yml",
+            "server",
+            "scripts",
+            "tests-js",
+            ".github",
         ):
             self.assertIn(f"- {path}", config_text)
 

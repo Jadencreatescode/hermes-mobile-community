@@ -4,12 +4,10 @@ paths:
   - apps/desktop
   - apps/shared
   - deploy/strix-halo
-  - server/mobile_relay.py
-  - scripts/npm-audit-policy.mjs
-  - tests-js/npm-audit-policy.test.ts
-  - .github/workflows/hermes-mobile-release.yml
-  - .github/workflows/codeql-mobile.yml
-  - .github/codeql/mobile-config.yml
+  - server
+  - scripts
+  - tests-js
+  - .github
 
 paths-ignore:
   - apps/desktop/dist
