@@ -14,6 +14,12 @@ The private owner source, Android message access, private node addresses, creden
 
 Dependency findings and the Electron compatibility exceptions are documented in [the NPM security policy](docs/npm-security-policy.md).
 
+### About the creator
+
+Jaden Gibson grew up in Las Vegas, a city whose constant reinvention helped shape his curiosity about how systems work. He immersed himself in coding out of genuine interest and learned by building practical tools that connect artificial intelligence, personal knowledge, and the devices people use every day.
+
+His current work includes the Hermes Mobile Control Center, which brings the Hermes desktop experience to phones and foldable devices, and [My Journal for Hermes](https://github.com/Jadencreatescode/my-journal), which turns approved conversations into private, evidence backed daily progress notes. Both projects reflect a focus on useful software, user ownership, privacy, access across devices, and open collaboration.
+
 <p align="center">
   <img src="docs/mobile-screenshots/01-chat.png" alt="Hermes mobile chat" width="18%">
   <img src="docs/mobile-screenshots/02-appearance.png" alt="Appearance settings" width="18%">
