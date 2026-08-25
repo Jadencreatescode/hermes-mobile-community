@@ -12,7 +12,7 @@ This public repository contains the shareable Hermes Mobile renderer, relay, tes
 
 The private owner source, Android message access, private node addresses, credentials, deployment state, release branches, and history are not present here. Changes pushed to this repository do not deploy to or modify the private owner application. Owner releases can adopt public changes only through a separate review and manual import.
 
-Dependency findings and the Electron compatibility exceptions are documented in [the NPM security policy](docs/npm-security-policy.md).
+Dependency findings and the Electron compatibility exceptions are documented in [the NPM security policy](docs/npm-security-policy.md). The exact shipped archive boundary and release gates are documented in [the mobile release security scope](docs/security/mobile-release-scope.md).
 
 ### About the creator
 

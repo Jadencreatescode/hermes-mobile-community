@@ -6477,6 +6477,7 @@ import {
   applyZoomLevel,
   DEFAULT_ZOOM_LEVEL,
   installZoomReassertOnWindowEvents,
+  LEGACY_ZOOM_READ_SCRIPT,
   percentToZoomLevel,
   ZOOM_STEP,
   ZOOM_STORAGE_KEY,
@@ -6528,9 +6529,7 @@ function restorePersistedZoomLevel(window) {
   applyZoomLevel(window.webContents, DEFAULT_ZOOM_LEVEL)
 
   window.webContents
-    .executeJavaScript(
-      `(() => { try { return localStorage.getItem(${JSON.stringify(ZOOM_STORAGE_KEY)}) } catch { return null } })()`
-    )
+    .executeJavaScript(LEGACY_ZOOM_READ_SCRIPT)
     .then(stored => {
       if (!window || window.isDestroyed()) {
         return

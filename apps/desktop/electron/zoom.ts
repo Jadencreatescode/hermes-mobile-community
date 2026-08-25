@@ -10,6 +10,8 @@
  */
 
 export const ZOOM_STORAGE_KEY = 'hermes:desktop:zoomLevel'
+export const LEGACY_ZOOM_READ_SCRIPT =
+  "(() => { try { return localStorage.getItem('hermes:desktop:zoomLevel') } catch { return null } })()"
 
 const ZOOM_FACTOR_BASE = 1.2
 const MIN_ZOOM_LEVEL = -9

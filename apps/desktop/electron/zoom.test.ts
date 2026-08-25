@@ -13,6 +13,7 @@ import {
   clampZoomLevel,
   DEFAULT_ZOOM_LEVEL,
   installZoomReassertOnWindowEvents,
+  LEGACY_ZOOM_READ_SCRIPT,
   percentToZoomLevel,
   ZOOM_RESIZE_REASSERT_DELAY_MS,
   ZOOM_STEP,
@@ -24,6 +25,11 @@ import {
 
 test('storage key stays stable so persisted zoom survives upgrades', () => {
   assert.equal(ZOOM_STORAGE_KEY, 'hermes:desktop:zoomLevel')
+})
+
+test('legacy zoom read script is fixed code rather than constructed input', () => {
+  assert.match(LEGACY_ZOOM_READ_SCRIPT, /localStorage\.getItem\('hermes:desktop:zoomLevel'\)/)
+  assert.equal(LEGACY_ZOOM_READ_SCRIPT.includes('${'), false)
 })
 
 test('default zoom matches the Appearance 90% preset', () => {

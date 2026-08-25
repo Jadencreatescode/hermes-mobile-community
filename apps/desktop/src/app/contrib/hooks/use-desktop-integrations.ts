@@ -258,7 +258,7 @@ export function useDesktopIntegrations({
       if (action.type === 'composer-blueprint') {
         const slots = Object.entries(action.params || {})
           .map(([k, v]) => {
-            const sval = /\s/.test(v) ? `"${v.replace(/"/g, '\\"')}"` : v
+            const sval = /[\s"\\]/.test(v) ? JSON.stringify(v) : v
 
             return `${k}=${sval}`
           })
