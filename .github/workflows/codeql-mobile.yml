@@ -11,22 +11,26 @@ on:
       - "apps/shared/**"
       - "deploy/strix-halo/**"
       - "server/mobile_relay.py"
-      - "scripts/npm-audit-policy.mjs"
+      - "scripts/release-security/**"
       - "tests-js/npm-audit-policy.test.ts"
       - ".github/workflows/hermes-mobile-release.yml"
       - ".github/workflows/codeql-mobile.yml"
-      - ".github/codeql/mobile-config.yml"
+      - ".github/codeql/mobile-actions.yml"
+      - ".github/codeql/mobile-javascript-typescript.yml"
+      - ".github/codeql/mobile-python.yml"
   pull_request:
     paths:
       - "apps/desktop/**"
       - "apps/shared/**"
       - "deploy/strix-halo/**"
       - "server/mobile_relay.py"
-      - "scripts/npm-audit-policy.mjs"
+      - "scripts/release-security/**"
       - "tests-js/npm-audit-policy.test.ts"
       - ".github/workflows/hermes-mobile-release.yml"
       - ".github/workflows/codeql-mobile.yml"
-      - ".github/codeql/mobile-config.yml"
+      - ".github/codeql/mobile-actions.yml"
+      - ".github/codeql/mobile-javascript-typescript.yml"
+      - ".github/codeql/mobile-python.yml"
   schedule:
     - cron: "17 9 * * 1"
   workflow_dispatch:
@@ -50,17 +54,20 @@ jobs:
         include:
           - language: actions
             build-mode: none
+            config: ./.github/codeql/mobile-actions.yml
           - language: javascript-typescript
             build-mode: none
+            config: ./.github/codeql/mobile-javascript-typescript.yml
           - language: python
             build-mode: none
+            config: ./.github/codeql/mobile-python.yml
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: github/codeql-action/init@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          config-file: ./.github/codeql/mobile-config.yml
+          config-file: ${{ matrix.config }}
       - uses: github/codeql-action/analyze@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4
         with:
           category: /language:${{ matrix.language }}

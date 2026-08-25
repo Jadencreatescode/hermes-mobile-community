@@ -93,6 +93,15 @@ class MobileRelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Hermes Mobile", await route.text())
         self.assertEqual(await asset.text(), "window.mobile = true")
 
+    async def test_static_asset_inventory_is_fixed_at_startup(self):
+        late_asset = self.static_root / "late.js"
+        late_asset.write_text("window.late = true", encoding="utf-8")
+
+        response = await self.client.get("/late.js")
+
+        self.assertEqual(response.status, 200)
+        self.assertIn("Hermes Mobile", await response.text())
+
     async def test_serves_single_backend_runtime_descriptor_without_proxying(self):
         response = await self.client.get("/.well-known/hermes-mobile-runtime.json")
 

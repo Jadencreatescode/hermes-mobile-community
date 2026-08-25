@@ -1,0 +1,5 @@
+name: Hermes Mobile Python surface
+
+paths:
+  - deploy/strix-halo
+  - server

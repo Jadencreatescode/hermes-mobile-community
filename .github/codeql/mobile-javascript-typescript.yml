@@ -1,13 +1,9 @@
-name: Hermes Mobile release surface
+name: Hermes Mobile JavaScript and TypeScript surface
 
 paths:
   - apps/desktop
   - apps/shared
-  - deploy/strix-halo
-  - server
-  - scripts
-  - tests-js
-  - .github
+  - scripts/release-security
 
 paths-ignore:
   - apps/desktop/dist

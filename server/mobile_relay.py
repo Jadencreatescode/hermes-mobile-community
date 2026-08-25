@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import io
+import mimetypes
 import re
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -29,6 +30,7 @@ _BACKEND_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 MAX_REQUEST_BYTES = 64 * 1024 * 1024
 
 STATIC_ROOT = web.AppKey("static_root", Path)
+STATIC_FILES = web.AppKey("static_files", dict[str, tuple[bytes, str]])
 UPSTREAM = web.AppKey("upstream", URL)
 NODES = web.AppKey("nodes", dict[str, URL])
 READ_ONLY_NODES = web.AppKey("read_only_nodes", frozenset[str])
@@ -122,9 +124,16 @@ def create_relay_app(
     read_only_nodes: set[str] | None = None,
 ) -> web.Application:
     root = static_root.resolve(strict=True)
-    index = root / "index.html"
-    if not index.is_file():
-        raise ValueError(f"Desktop renderer index is missing: {index}")
+    static_files: dict[str, tuple[bytes, str]] = {}
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise ValueError(f"Desktop renderer contains a symlink: {path}")
+        if path.is_file():
+            relative = path.relative_to(root).as_posix()
+            content_type = mimetypes.guess_type(relative)[0] or "application/octet-stream"
+            static_files[relative] = (path.read_bytes(), content_type)
+    if "index.html" not in static_files:
+        raise ValueError(f"Desktop renderer index is missing: {root / 'index.html'}")
 
     upstream_origin = _origin(upstream)
     if not _BACKEND_ID.fullmatch(backend_id):
@@ -139,6 +148,7 @@ def create_relay_app(
 
     app = web.Application(client_max_size=MAX_REQUEST_BYTES)
     app[STATIC_ROOT] = root
+    app[STATIC_FILES] = static_files
     app[UPSTREAM] = upstream_origin
     app[NODES] = node_origins
     unknown_read_only = set(read_only_nodes or ()) - node_origins.keys()
@@ -253,10 +263,16 @@ def create_relay_app(
 
     async def serve_renderer(request: web.Request) -> web.StreamResponse:
         relative = request.match_info.get("path", "")
-        candidate = (root / relative).resolve()
-        if candidate.is_relative_to(root) and candidate.is_file():
-            return web.FileResponse(candidate)
-        return web.FileResponse(index, headers={"Cache-Control": "no-store"})
+        asset = request.app[STATIC_FILES].get(relative)
+        if asset is not None:
+            body, content_type = asset
+            return web.Response(body=body, content_type=content_type)
+        body, content_type = request.app[STATIC_FILES]["index.html"]
+        return web.Response(
+            body=body,
+            content_type=content_type,
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def runtime_descriptor(request: web.Request) -> web.Response:
         return web.json_response(
