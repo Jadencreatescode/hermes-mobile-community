@@ -128,7 +128,7 @@ export function evaluateAuditReport(report, lock) {
 }
 
 function run() {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
   const result = spawnSync(
     process.platform === 'win32' ? 'npm.cmd' : 'npm',
     ['audit', '--json', '--audit-level=high'],

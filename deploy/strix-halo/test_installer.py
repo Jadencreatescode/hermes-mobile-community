@@ -76,43 +76,48 @@ def bundle(root: Path, version: str, marker: str = "one") -> Path:
 class ReleaseSecurityWorkflowTests(unittest.TestCase):
     def test_codeql_is_scoped_to_the_mobile_release_surface(self):
         workflow = REPO_ROOT / ".github" / "workflows" / "codeql-mobile.yml"
-        config = REPO_ROOT / ".github" / "codeql" / "mobile-config.yml"
+        configs = {
+            "actions": REPO_ROOT / ".github" / "codeql" / "mobile-actions.yml",
+            "javascript-typescript": REPO_ROOT / ".github" / "codeql" / "mobile-javascript-typescript.yml",
+            "python": REPO_ROOT / ".github" / "codeql" / "mobile-python.yml",
+        }
         self.assertTrue(workflow.is_file())
-        self.assertTrue(config.is_file())
+        self.assertTrue(all(config.is_file() for config in configs.values()))
 
         workflow_text = workflow.read_text(encoding="utf-8")
-        config_text = config.read_text(encoding="utf-8")
+        config_texts = {
+            language: config.read_text(encoding="utf-8")
+            for language, config in configs.items()
+        }
         release_workflow_text = (
             REPO_ROOT / ".github" / "workflows" / "hermes-mobile-release.yml"
         ).read_text(encoding="utf-8")
         for language in ("actions", "javascript-typescript", "python"):
             self.assertIn(f"language: {language}", workflow_text)
+            self.assertIn(f"config: ./.github/codeql/mobile-{language}.yml", workflow_text)
         self.assertNotIn("language: c-cpp", workflow_text)
         self.assertNotIn("language: rust", workflow_text)
         self.assertIn("github/codeql-action/init@", workflow_text)
         self.assertIn("github/codeql-action/analyze@", workflow_text)
 
-        for path in (
-            "apps/desktop",
-            "apps/shared",
-            "deploy/strix-halo",
-            "server",
-            "scripts",
-            "tests-js",
-            ".github",
-        ):
-            self.assertIn(f"- {path}", config_text)
+        self.assertIn("- .github", config_texts["actions"])
+        for path in ("apps/desktop", "apps/shared", "scripts/release-security"):
+            self.assertIn(f"- {path}", config_texts["javascript-typescript"])
+        for path in ("deploy/strix-halo", "server"):
+            self.assertIn(f"- {path}", config_texts["python"])
 
         for ignored_path in (
             'apps/desktop/**/*.test.ts',
             'apps/desktop/**/*.test.tsx',
             'apps/desktop/scripts/perf',
         ):
-            self.assertIn(f'- "{ignored_path}"', config_text)
+            self.assertIn(f'- "{ignored_path}"', config_texts["javascript-typescript"])
 
         for path in (
             ".github/workflows/codeql-mobile.yml",
-            ".github/codeql/mobile-config.yml",
+            ".github/codeql/mobile-actions.yml",
+            ".github/codeql/mobile-javascript-typescript.yml",
+            ".github/codeql/mobile-python.yml",
         ):
             self.assertIn(f'- "{path}"', release_workflow_text)
 

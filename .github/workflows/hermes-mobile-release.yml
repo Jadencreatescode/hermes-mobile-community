@@ -14,13 +14,15 @@ on:
       - "server/test_mobile_relay.py"
       - "package.json"
       - "package-lock.json"
-      - "scripts/npm-audit-policy.*"
+      - "scripts/release-security/npm-audit-policy.*"
       - "tests-js/npm-audit-policy.test.ts"
       - "website/package.json"
       - "website/package-lock.json"
       - ".github/workflows/hermes-mobile-release.yml"
       - ".github/workflows/codeql-mobile.yml"
-      - ".github/codeql/mobile-config.yml"
+      - ".github/codeql/mobile-actions.yml"
+      - ".github/codeql/mobile-javascript-typescript.yml"
+      - ".github/codeql/mobile-python.yml"
   workflow_dispatch:
 
 permissions:

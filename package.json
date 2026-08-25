@@ -17,7 +17,7 @@
     "install:tui": "npm install --workspace ui-tui",
     "install:desktop": "npm install --workspace apps/desktop",
     "audit:root": "npm audit --workspaces=false",
-    "audit:mobile": "node scripts/npm-audit-policy.mjs",
+    "audit:mobile": "node scripts/release-security/npm-audit-policy.mjs",
     "audit:web": "npm audit --workspace web",
     "audit:tui": "npm audit --workspace ui-tui",
     "audit:fix:root": "npm audit fix --workspaces=false",

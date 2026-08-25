@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 
 import { describe, test } from 'vitest'
 
-import { evaluateAuditReport } from '../scripts/npm-audit-policy.mjs'
+import { evaluateAuditReport } from '../scripts/release-security/npm-audit-policy.mjs'
 
 const electronUrl = 'https://github.com/advisories/GHSA-9f4c-93c8-jc8g'
 const protocolUrl = 'https://github.com/advisories/GHSA-r4w5-6pfg-jxp5'
