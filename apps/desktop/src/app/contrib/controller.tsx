@@ -836,7 +836,19 @@ export function ContribController() {
           // painted by <body> is the only thing between the page and the
           // vibrancy material.
           data-contrib-shell=""
-          style={{ '--titlebar-height': '0px' } as CSSProperties}
+          // iOS PWA fix: index.html sets viewport-fit=cover + apple-mobile-web-app
+          // status bar style black-translucent, which lets the page draw under
+          // the status bar/notch — but nothing was padding for it, so the
+          // titlebar rendered flush under the clock/battery/signal cluster on
+          // iPhone home-screen installs. env(safe-area-inset-*) is 0 on every
+          // non-notched browser, so this is a no-op on desktop/Electron.
+          style={
+            {
+              '--titlebar-height': '0px',
+              paddingTop: 'env(safe-area-inset-top)',
+              paddingBottom: 'env(safe-area-inset-bottom)'
+            } as CSSProperties
+          }
         >
           {/* Title bar: fixed chrome outside the grid, composable via slots.
               Layout contract (no contribution can break it):
