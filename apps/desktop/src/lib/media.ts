@@ -105,12 +105,40 @@ export async function resolveMediaPlaybackSrc(path: string): Promise<string> {
   if (window.hermesDesktop && ['audio', 'video'].includes(mediaKind(path))) {
     if (isRemoteGateway() && window.hermesDesktop.gatewayMediaStreamUrl) {
       const conn = $connection.get()
-
-      return window.hermesDesktop.gatewayMediaStreamUrl({
+      const streamUrl = window.hermesDesktop.gatewayMediaStreamUrl({
         connectionId: conn?.connectionId,
         path: filePathFromMediaPath(path),
         profile: conn?.profile
       })
+
+      // Browser/PWA bridge only (Electron's hermes-media:// custom protocol
+      // already carries auth correctly and must keep the bare URL so Range
+      // seeking still works). iOS Safari's <audio>/<video> element resolves
+      // its network fetch through AVFoundation's media pipeline rather than
+      // WebKit's normal fetch stack, which does not reliably forward the
+      // session cookie set by the browser bridge's cookie-based auth — the
+      // same authenticated URL that returns 200 via fetch()/curl returns an
+      // opaque "Error" on the <audio> element on a real iPhone PWA install.
+      // Fetching the bytes ourselves with credentials and handing the
+      // element a blob: URL sidesteps that pipeline difference entirely.
+      // Loses HTTP Range seeking on the object URL (single fetch of the
+      // whole file), which is an acceptable tradeoff for short TTS clips.
+      if (document.documentElement.dataset.hermesBrowser === 'true') {
+        try {
+          const response = await fetch(streamUrl, { credentials: 'include' })
+
+          if (!response.ok) {
+            throw new Error(`Gateway returned HTTP ${response.status}`)
+          }
+
+          return URL.createObjectURL(await response.blob())
+        } catch {
+          // Fall through to the bare URL — better a possibly-broken native
+          // fetch than no source at all if the blob fetch itself fails.
+        }
+      }
+
+      return streamUrl
     }
 
     return isRemoteGateway() ? mediaGatewayStreamUrl(path) : mediaStreamUrl(path)

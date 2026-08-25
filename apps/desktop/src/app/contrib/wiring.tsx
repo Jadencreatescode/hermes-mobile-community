@@ -1057,7 +1057,17 @@ export function ContribWiring({ children }: { children: ReactNode }) {
         style={
           {
             '--titlebar-controls-left': `${controlsPos.left}px`,
-            '--titlebar-controls-top': `${controlsPos.top}px`,
+            // iOS PWA fix: the fixed titlebar tool clusters (sidebar toggle,
+            // settings, etc.) position from this var directly against the
+            // viewport, ignoring any padding on ancestor elements. On an
+            // iPhone home-screen install (viewport-fit=cover +
+            // apple-mobile-web-app-status-bar-style=black-translucent, both
+            // set in index.html) the viewport extends under the notch/status
+            // bar, so the raw px offset put these buttons directly under the
+            // clock/battery/signal cluster. env(safe-area-inset-top) is 0px
+            // on every non-notched browser and in Electron, so this is a
+            // no-op there.
+            '--titlebar-controls-top': `calc(${controlsPos.top}px + env(safe-area-inset-top, 0px))`,
             '--titlebar-controls-y-nudge': titlebarControlsYNudge(titlebarChrome),
             '--titlebar-tools-right': titlebarToolsRight,
             '--titlebar-tools-width': titlebarToolsWidth,
