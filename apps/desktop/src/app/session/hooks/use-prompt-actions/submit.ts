@@ -786,8 +786,22 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         // "session busy" (4009). Don't surface an error bubble/toast — the entry
         // stays queued and the composer's bounded auto-drain retries when idle.
         if (options?.fromQueue && isSessionBusyError(err)) {
+          console.debug('[prompt-submit] queued send deferred: session busy, will auto-retry', {
+            sessionId
+          })
+
           return false
         }
+
+        // Every other submit failure previously surfaced only as a chat
+        // bubble the user might miss/dismiss, with no way to correlate it
+        // against gateway/network state afterward. Logging it here gives a
+        // console trail for "I typed something and nothing happened" reports.
+        console.warn('[prompt-submit] submit failed', {
+          sessionId,
+          fromQueue: Boolean(options?.fromQueue),
+          error: err instanceof Error ? err.message : String(err)
+        })
 
         const message = inlineErrorMessage(err, copy.promptFailed)
         const occurredAt = Date.now() / 1000

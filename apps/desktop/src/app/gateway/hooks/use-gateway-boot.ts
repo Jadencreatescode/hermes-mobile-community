@@ -271,6 +271,16 @@ export function useGatewayBoot({
           reauthNotified = true
           notifyError(err, translateNow('boot.errors.gatewaySignInRequired'))
         }
+
+        // Every reconnect attempt this loop makes was previously silent on
+        // failure — the only visible symptom was the composer staying
+        // disabled/stuck. Log each failed attempt so a stuck session has a
+        // console trail of why (auth vs transport) and how many attempts.
+        console.warn('[gateway-boot] reconnect attempt failed', {
+          attempt: reconnectAttempt,
+          failingSinceMs: reconnectFailingSince === null ? null : Date.now() - reconnectFailingSince,
+          error: err instanceof Error ? err.message : String(err)
+        })
       } finally {
         reconnecting = false
 

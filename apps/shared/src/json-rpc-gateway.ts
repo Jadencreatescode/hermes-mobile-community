@@ -92,6 +92,30 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
 // handshake doesn't land in this window, fail to 'error' so callers can retry.
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000
 
+// Diagnostic logging for the WS lifecycle and message send/receive path.
+//
+// This client previously had zero console output: a dropped socket, a
+// send() that threw, or an unparseable frame from the server all failed
+// completely silently. The only symptom a user saw was "nothing happens"
+// until they refreshed the page and the (already-updated) state loaded
+// fresh. That makes intermittent connection issues nearly impossible to
+// diagnose from a bug report alone — there's no client-side trail at all.
+//
+// console.debug is used for expected/routine transitions (open, clean
+// close) so it stays out of the way at default devtools verbosity, while
+// console.warn/error is used for anything that represents a real gap in
+// delivery (unexpected close, send failure, unparseable frame) so it
+// surfaces even at default verbosity.
+const LOG_PREFIX = '[gateway-ws]'
+
+function logGatewayDebug(message: string, detail?: Record<string, unknown>): void {
+  console.debug(LOG_PREFIX, message, detail ?? '')
+}
+
+function logGatewayWarn(message: string, detail?: Record<string, unknown>): void {
+  console.warn(LOG_PREFIX, message, detail ?? '')
+}
+
 export class JsonRpcGatewayClient {
   private nextId = 0
   private pending = new Map<GatewayRequestId, PendingCall>()
@@ -153,6 +177,7 @@ export class JsonRpcGatewayClient {
 
     const socket = this.options.socketFactory?.(wsUrl) ?? new WebSocket(wsUrl)
     this.socket = socket
+    logGatewayDebug('connecting', { url: wsUrl })
 
     socket.addEventListener('message', message => {
       if (this.socket !== socket) {
@@ -169,6 +194,20 @@ export class JsonRpcGatewayClient {
 
       if (this.options.onSocketClose(event)) {
         return
+      }
+
+      // code 1000 = normal closure (e.g. explicit close() below). Anything
+      // else is the socket dying out from under an open session — exactly
+      // the case a user experiences as "stopped working, needed a refresh".
+      if (event.code === 1000) {
+        logGatewayDebug('closed cleanly', { code: event.code })
+      } else {
+        logGatewayWarn('closed unexpectedly — pending requests will reject', {
+          code: event.code,
+          reason: event.reason || '(no reason given)',
+          wasClean: event.wasClean,
+          pendingRequests: this.pending.size
+        })
       }
 
       this.socket = null
@@ -197,6 +236,7 @@ export class JsonRpcGatewayClient {
         settled = true
         cleanup()
         this.setState('open')
+        logGatewayDebug('open')
         resolve()
       }
 
@@ -208,6 +248,7 @@ export class JsonRpcGatewayClient {
         settled = true
         cleanup()
         this.setState('error')
+        logGatewayWarn('connect error', { url: wsUrl })
         reject(new Error(this.options.connectErrorMessage))
       }
 
@@ -236,6 +277,7 @@ export class JsonRpcGatewayClient {
           }
 
           this.setState('error')
+          logGatewayWarn('connect timed out', { url: wsUrl, timeoutMs: this.options.connectTimeoutMs })
           reject(new Error(this.options.connectErrorMessage))
         }, this.options.connectTimeoutMs)
       }
@@ -369,6 +411,7 @@ export class JsonRpcGatewayClient {
       } catch (error) {
         this.clearPending(id)
         detach()
+        logGatewayWarn('send() threw — request will reject', { method, id, error: String(error) })
         reject(error instanceof Error ? error : new Error(String(error)))
       }
     })
@@ -381,6 +424,8 @@ export class JsonRpcGatewayClient {
     try {
       frame = JSON.parse(text) as JsonRpcFrame
     } catch {
+      logGatewayWarn('received unparseable frame — dropped', { preview: text.slice(0, 200) })
+
       return
     }
 
@@ -388,6 +433,12 @@ export class JsonRpcGatewayClient {
       const call = this.pending.get(frame.id)
 
       if (!call) {
+        // A response to an id we're not tracking — either a duplicate frame,
+        // or (the bug-class this logging exists to catch) a reply that
+        // arrived after this client already gave up on it (timeout fired,
+        // or a reconnect rebuilt `pending` and dropped the original waiter).
+        logGatewayWarn('response for unknown/expired request id — dropped', { id: frame.id })
+
         return
       }
 
