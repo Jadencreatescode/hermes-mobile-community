@@ -35,6 +35,12 @@ data/
 # `data/` pattern above would otherwise swallow it.
 !hermes_cli/data/
 !hermes_cli/data/plugin_index.json
+# Docusaurus user-stories data (tracked source content) — the bare `data/`
+# pattern above would otherwise swallow it too (caused a pre-existing
+# docs-site build break: the component importing this file survived the
+# mobile-edition split but the file didn't, since git silently ignored it).
+!website/src/data/
+!website/src/data/userStories.json
 .pytest_cache/
 test_durations.json
 .pytest-cache/
