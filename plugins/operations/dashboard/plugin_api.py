@@ -52,6 +52,27 @@ MAX_LIST_LIMIT = store_module.MAX_LIST_LIMIT
 MAX_POLICY_TTL_SECONDS = store_module.MAX_POLICY_TTL_SECONDS
 MAX_SESSION_REF_CHARS = store_module.MAX_SESSION_REF_CHARS
 
+
+def _load_meeting_store_module():
+    path = Path(__file__).with_name("meeting_store.py")
+    name = "hermes_operations_meeting_store"
+    existing = sys.modules.get(name)
+    if existing is not None:
+        return existing
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Operations meeting store could not load")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+meeting_store_module = _load_meeting_store_module()
+MeetingStore = meeting_store_module.MeetingStore
+MeetingVersionConflict = meeting_store_module.VersionConflict
+ImmutableMeetingHistory = meeting_store_module.ImmutableMeetingHistory
+
 router = APIRouter()
 
 
@@ -65,6 +86,14 @@ def _db_path() -> Path:
 
 def _store() -> MailroomStore:
     return MailroomStore(_db_path(), clock=_clock)
+
+
+def _meeting_db_path() -> Path:
+    return Path(get_hermes_home()) / "operations" / "meetings.db"
+
+
+def _meeting_store() -> MeetingStore:
+    return MeetingStore(_meeting_db_path(), clock=_clock)
 
 
 def _known_profiles() -> list[str]:
@@ -146,6 +175,11 @@ class CriticalPolicyPut(BaseModel):
     source_profile: str = Field(min_length=1, max_length=64)
     target_profile: str = Field(min_length=1, max_length=64)
     ttl_seconds: int = Field(ge=60, le=MAX_POLICY_TTL_SECONDS)
+
+
+class MeetingPut(BaseModel):
+    record: dict
+    expected_version: int = Field(ge=0)
 
 
 def _dispatch(envelope: dict[str, object]) -> dict[str, object]:
@@ -268,3 +302,30 @@ def put_critical_policy(request: CriticalPolicyPut):
 @router.get("/mailroom/policy-decisions")
 def list_policy_decisions(limit: int = Query(default=50, ge=1, le=MAX_LIST_LIMIT)):
     return {"decisions": _store().list_policy_decisions(limit=limit)}
+
+
+@router.get("/meetings")
+def list_meetings(limit: int = Query(default=50, ge=1, le=meeting_store_module.MAX_LIST_LIMIT)):
+    return {"meetings": _meeting_store().list(limit=limit)}
+
+
+@router.get("/meetings/{meeting_id}")
+def get_meeting(meeting_id: str):
+    try:
+        return _meeting_store().get(meeting_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Meeting not found") from exc
+
+
+@router.put("/meetings/{meeting_id}")
+def put_meeting(meeting_id: str, request: MeetingPut):
+    if request.record.get("id") != meeting_id:
+        raise HTTPException(status_code=400, detail="Meeting id does not match route")
+    try:
+        return _meeting_store().put(request.record, expected_version=request.expected_version)
+    except MeetingVersionConflict as exc:
+        raise HTTPException(status_code=409, detail="Meeting version conflict") from exc
+    except ImmutableMeetingHistory as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

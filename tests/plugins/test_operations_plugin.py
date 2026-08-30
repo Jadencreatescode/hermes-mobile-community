@@ -34,6 +34,16 @@ def load_api():
     return module
 
 
+def load_meeting_store():
+    module_path = DASHBOARD / "meeting_store.py"
+    spec = importlib.util.spec_from_file_location("operations_meeting_store_test", module_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 async def request_json(app: FastAPI, method: str, path: str, payload=None):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -349,3 +359,91 @@ def test_api_requires_explicit_retry_and_hash_free_exact_critical_policy(tmp_pat
         "queued",
         "failed",
     ]
+
+
+def meeting_record(**overrides):
+    record = {
+        "id": "meeting_release_1",
+        "source": {"connection": "local", "profile": "default"},
+        "title": "Release readiness",
+        "agenda": "Review evidence and decide whether to release.",
+        "chair": {"connection": "local", "profile": "reviewer"},
+        "participants": [
+            {"connection": "local", "profile": "reviewer"},
+            {"connection": "local", "profile": "builder"},
+        ],
+        "state": "draft",
+        "max_rounds": 3,
+        "current_round": 0,
+        "contributions": [],
+        "evidence": [],
+        "decisions": [],
+        "dissent": [],
+        "action_items": [],
+    }
+    record.update(overrides)
+    return record
+
+
+def test_meeting_store_is_bounded_compare_and_swap_and_append_only(tmp_path):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db", clock=lambda: 1_800_000_000)
+
+    created = store.put(meeting_record(), expected_version=0)
+    assert created["version"] == 1
+    assert created["meeting"]["state"] == "draft"
+
+    contribution = {
+        "id": "turn_1",
+        "round": 1,
+        "participant": {"connection": "local", "profile": "reviewer"},
+        "kind": "speak",
+        "text": "The tests pass.",
+        "evidence_refs": ["run:tests"],
+    }
+    updated = store.put(
+        meeting_record(state="running", current_round=1, contributions=[contribution]),
+        expected_version=1,
+    )
+    assert updated["version"] == 2
+    assert updated["meeting"]["contributions"] == [contribution]
+
+    with pytest.raises(api.VersionConflict):
+        store.put(meeting_record(state="cancelled"), expected_version=1)
+    with pytest.raises(api.ImmutableMeetingHistory):
+        store.put(
+            meeting_record(state="running", current_round=1, contributions=[]),
+            expected_version=2,
+        )
+    with pytest.raises(ValueError):
+        store.put(meeting_record(participants=[]), expected_version=2)
+
+    assert store.get("meeting_release_1")["version"] == 2
+    assert [row["meeting"]["id"] for row in store.list(limit=10)] == ["meeting_release_1"]
+
+
+def test_meeting_api_persists_versioned_records_and_returns_conflicts(tmp_path, monkeypatch):
+    api = load_api()
+    monkeypatch.setattr(api, "_meeting_db_path", lambda: tmp_path / "meetings.db")
+    app = FastAPI()
+    app.include_router(api.router)
+
+    created = asyncio.run(
+        request_json(app, "PUT", "/meetings/meeting_release_1", {"record": meeting_record(), "expected_version": 0})
+    )
+    assert created.status_code == 200
+    assert created.json()["version"] == 1
+
+    listed = asyncio.run(request_json(app, "GET", "/meetings?limit=10"))
+    assert [row["meeting"]["id"] for row in listed.json()["meetings"]] == ["meeting_release_1"]
+
+    conflict = asyncio.run(
+        request_json(
+            app,
+            "PUT",
+            "/meetings/meeting_release_1",
+            {"record": meeting_record(state="cancelled"), "expected_version": 0},
+        )
+    )
+    assert conflict.status_code == 409
+    assert set(conflict.json()) == {"detail"}
