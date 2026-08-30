@@ -110,6 +110,19 @@ describe('OperationsPage', () => {
     expect((screen.getByLabelText('Mailroom target') as HTMLSelectElement).value).toBe('release')
   })
 
+  it('opens the exact public Agent Workspace surface without exposing takeover controls', async () => {
+    loadOperationsSnapshot.mockResolvedValue(snapshot)
+    loadOperationsRoutines.mockResolvedValue(routines)
+
+    render(<OperationsPage />)
+    await screen.findByText('Release Bot')
+    fireEvent.change(screen.getByLabelText('Operations section'), { target: { value: 'workspace' } })
+
+    expect(await screen.findByRole('heading', { name: 'Agent Workspace' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Open Release Bot workspace' })).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/screen takeover|remote control/i)
+  })
+
   it('keeps the last verified snapshot visible when a later refresh fails', async () => {
     loadOperationsSnapshot.mockResolvedValueOnce(snapshot).mockRejectedValueOnce(new Error('refresh failed'))
     loadOperationsRoutines.mockResolvedValue(routines)

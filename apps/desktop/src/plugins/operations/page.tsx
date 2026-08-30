@@ -6,6 +6,7 @@ import { MailroomView } from './mailroom-view'
 import { OperationsNavigation, type OperationsSection } from './navigation'
 import { OperationsOverview, type OperationsDelegation } from './overview'
 import { loadOperationsRoutines, type OperationsRoutinesSnapshot } from './routines'
+import { WorkspaceView } from './workspace-view'
 
 const REFRESH_MS = 8_000
 
@@ -147,7 +148,7 @@ export function OperationsPage() {
             />
           )}
           {section === 'meetings' && <PendingPanel title="Meetings" />}
-          {section === 'workspace' && <PendingPanel title="Agent Workspace" />}
+          {section === 'workspace' && <WorkspaceView agents={stableSnapshot.agents} />}
           {section === 'training' && <TrainingPanel />}
         </section>
       </div>
