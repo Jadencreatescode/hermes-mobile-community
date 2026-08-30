@@ -14,14 +14,14 @@ concurrency:
 jobs:
   test:
     name: Run tests
-    # One 96-core runner for the whole suite. There is no slicing. Slicing
-    # existed to spread the suite over 4-core runners. It cost a matrix job, a
+    # One standard public runner handles the whole suite. There is no slicing.
+    # The former slicing scheme cost a matrix job, a
     # duration cache, a per-slice artifact and a merge job to do it.
     #
     # The public repository uses a standard hosted runner. Pytest and its
     # configured parallelism still divide the suite within the available cores.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
