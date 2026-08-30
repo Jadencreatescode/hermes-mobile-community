@@ -12,6 +12,16 @@ This public repository contains the shareable Hermes Mobile renderer, relay, tes
 
 The private owner source, Android message access, private node addresses, credentials, deployment state, release branches, and history are not present here. Changes pushed to this repository do not deploy to or modify the private owner application. Owner releases can adopt public changes only through a separate review and manual import.
 
+### iPhone and iPad edition
+
+The public Apple edition is the installable Hermes Mobile web app, not a separate App Store binary. Open the private Hermes Mobile URL in Safari, choose **Add to Home Screen**, and launch it from the new icon.
+
+It uses upstream Hermes for conversations, Messaging, Bot Mode, models, voice, files, browser features, profiles, cron, and updates. The public shell includes the phone and tablet layouts, iOS safe areas, full-height dynamic viewport handling, authenticated audio and video playback, service-worker updates, and the 64 MB upload boundary. Private Owner Operations, private nodes, Android bridges, SMS access, and the phone-brokered Watch implementation are deliberately excluded.
+
+For full feature parity, the Hermes backend and the public mobile renderer should come from the same public release, or the backend should be newer. A tester using an older Hermes installation should update Hermes and restart its gateway before testing the latest mobile renderer. They do not need the private Owner edition.
+
+See [iPhone and iPad testing](docs/iphone-ipad-testing.md) for installation, update, compatibility, and acceptance steps.
+
 Dependency findings and the Electron compatibility exceptions are documented in [the NPM security policy](docs/npm-security-policy.md). The exact shipped archive boundary and release gates are documented in [the mobile release security scope](docs/security/mobile-release-scope.md).
 
 ### About the creator
