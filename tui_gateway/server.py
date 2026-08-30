@@ -2402,6 +2402,9 @@ def _start_agent_build(sid: str, session: dict) -> None:
                         kw["reasoning_config_override"] = reasoning
                     if (tier := current.get("create_service_tier_override")) is not None:
                         kw["service_tier_override"] = tier
+                restrictions = current.get("agent_restrictions")
+                if isinstance(restrictions, dict):
+                    kw.update(restrictions)
                 agent = _make_agent(sid, key, **kw)
             finally:
                 _clear_session_context(tokens)
@@ -7057,6 +7060,10 @@ def _make_agent(
     reasoning_config_override: dict | None = None,
     service_tier_override: str | None = None,
     platform_override: str | None = None,
+    enabled_toolsets_override: list[str] | None = None,
+    skip_background_review: bool = False,
+    skip_context_files: bool = False,
+    skip_memory: bool = False,
 ):
     # AC-4 test seam: dead unless explicitly armed by the isolated certify
     # harness. Both inline and compute-host paths construct through _make_agent,
@@ -7212,7 +7219,11 @@ def _make_agent(
             if service_tier_override is not None
             else _load_service_tier()
         ),
-        enabled_toolsets=_load_enabled_toolsets(_resolve_agent_platform(platform_override)),
+        enabled_toolsets=(
+            enabled_toolsets_override
+            if enabled_toolsets_override is not None
+            else _load_enabled_toolsets(_resolve_agent_platform(platform_override))
+        ),
         # OpenRouter provider-routing prefs (config.yaml `provider_routing`).
         # Mirrors the messaging gateway + CLI so the desktop/TUI honors the same
         # routing instead of letting OpenRouter pick providers at random.
@@ -7228,8 +7239,12 @@ def _make_agent(
         ephemeral_system_prompt=system_prompt or None,
         checkpoints_enabled=is_truthy_value(os.environ.get("HERMES_TUI_CHECKPOINTS")),
         pass_session_id=is_truthy_value(os.environ.get("HERMES_TUI_PASS_SESSION_ID")),
-        skip_context_files=is_truthy_value(os.environ.get("HERMES_IGNORE_RULES")),
-        skip_memory=is_truthy_value(os.environ.get("HERMES_IGNORE_RULES")),
+        skip_context_files=(
+            skip_context_files
+            or is_truthy_value(os.environ.get("HERMES_IGNORE_RULES"))
+        ),
+        skip_memory=(skip_memory or is_truthy_value(os.environ.get("HERMES_IGNORE_RULES"))),
+        skip_background_review=skip_background_review,
         fallback_model=_load_fallback_model(),
         **_agent_cbs(sid),
     )
@@ -8643,6 +8658,7 @@ def _deferred_session_record(
     lazy: bool = False,
     model_override=None,
     resume_runtime_overrides: dict | None = None,
+    agent_restrictions: dict | None = None,
 ) -> dict:
     """A live-session record whose AIAgent is built later (lazy watch / cold
     resume) — _init_session's shape minus the agent."""
@@ -8651,6 +8667,7 @@ def _deferred_session_record(
         "agent": None,
         "agent_error": None,
         "agent_ready": threading.Event(),
+        "agent_restrictions": agent_restrictions,
         "attached_images": [],
         "close_on_disconnect": close_on_disconnect,
         "active_session_lease": lease,
@@ -8681,6 +8698,51 @@ def _deferred_session_record(
         "tool_started_at": {},
         "transport": current_transport() or _stdio_transport,
     }
+
+
+def _session_agent_restrictions(params: dict) -> dict | None:
+    """Translate opt-in RPC controls to `_make_agent` keyword arguments.
+
+    Absence remains the normal-session contract. Restricted internal clients
+    can only remove ambient authority; they do not mutate profile configuration
+    or a persisted conversation row.
+    """
+    restrictions: dict = {}
+    if "enabled_toolsets" in params:
+        toolsets = params.get("enabled_toolsets")
+        if isinstance(toolsets, list) and all(isinstance(item, str) for item in toolsets):
+            restrictions["enabled_toolsets_override"] = list(toolsets)
+    for key in ("skip_background_review", "skip_context_files", "skip_memory"):
+        if is_truthy_value(params.get(key, False)):
+            restrictions[key] = True
+    return restrictions or None
+
+
+def _session_satisfies_agent_restrictions(
+    session: dict, requested: dict | None
+) -> bool:
+    """Whether a live session is no broader than a restrictive resume asks.
+
+    An already-built session cannot be narrowed cache-safely. A restrictive
+    caller must create a fresh session rather than reuse broader live authority.
+    """
+    if not requested:
+        return True
+    actual = session.get("agent_restrictions")
+    if not isinstance(actual, dict):
+        return False
+
+    requested_toolsets = requested.get("enabled_toolsets_override")
+    if requested_toolsets is not None:
+        actual_toolsets = actual.get("enabled_toolsets_override")
+        if not isinstance(actual_toolsets, list):
+            return False
+        if not set(actual_toolsets).issubset(set(requested_toolsets)):
+            return False
+    return all(
+        not requested.get(key) or actual.get(key) is True
+        for key in ("skip_background_review", "skip_context_files", "skip_memory")
+    )
 
 
 def _claim_or_reuse_live(
