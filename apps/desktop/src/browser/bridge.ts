@@ -2,13 +2,13 @@ import type { HermesApiRequest, HermesConnection } from '@/global'
 
 import { createBrowserFileRegistry } from './files'
 import {
+  type BrowserRuntimeDescriptor,
   loadBrowserRuntimeDescriptor,
   nodeBaseUrl,
   nodeRequestUrl,
   parseBrowserRuntimeDescriptor,
   resolveBrowserNode,
-  selectableBrowserNodes,
-  type BrowserRuntimeDescriptor
+  selectableBrowserNodes
 } from './nodes'
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
