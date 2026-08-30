@@ -4,7 +4,7 @@ Hermes Mobile is an installable web app for Safari. It is not an App Store binar
 
 ## Compatibility
 
-Hermes Mobile is a thin client. Conversations, Messaging, Bot Mode, Training Mode, models, voice, files, browser features, profiles, cron, and updates remain owned by the connected Hermes backend.
+Hermes Mobile is a thin client. Conversations, Messaging, Bot Mode, Operations, Training Mode, models, voice, files, browser features, profiles, cron, and updates remain owned by the connected Hermes backend.
 
 For complete feature parity, use the mobile renderer and backend from the same public Hermes Mobile release. Training Mode depends on this public release's authenticated backend plugin until that capability lands upstream. A generic upstream backend by itself may load the shell while Training Mode and other public-release methods remain unavailable.
 
@@ -31,19 +31,23 @@ A tester does not need the private Owner edition or any private Owner credential
 2. Confirm the keyboard shortens the conversation without covering the composer.
 3. Open the Sessions rail, resume a conversation, and send one text turn.
 4. Open Bot Mode, select a bot, and complete one bot conversation.
-5. Open Training Mode and start guided coaching. Confirm its answers populate the semantic task form without contacting the backend, opening a browser, saving a skill, or running the task.
-6. Enter a safe test task, complete all three acknowledgements, and confirm it displays the complete server-generated draft without running the task. Confirm typed values, credentials, cookies, and private browser data are rejected or replaced by a fresh human-input gate.
-7. Confirm Hermes displays the complete server-generated SKILL.md and does not save it until the exact full-hash `SAVE <name> <sha256>` phrase shown by the page is entered.
-8. Open Messaging and confirm the connected platform list loads.
-9. Record and send one short voice message.
-10. Play one returned audio clip and one video clip.
-11. Upload one image and one document within the 64 MB boundary.
-12. Lock and unlock the device, then confirm the active conversation reconnects.
-13. Switch between Wi Fi and cellular service and confirm the conversation recovers.
-14. When an update prompt appears, accept it once and confirm the app reloads into the same private origin.
+5. Open Operations and confirm reachable Bots, source health, delegated workers, Kanban assignments, and routines load without horizontal overflow.
+6. Send one Normal Mailroom message, confirm its durable history, and explicitly retry a simulated failure. Confirm Critical remains disabled until the exact source and target route is approved for one hour.
+7. Create a two participant meeting, start it, run one bounded round, and confirm contributions cannot be rewritten. Convert a completed action item to Kanban once and confirm retry does not duplicate it.
+8. Open one Agent Workspace and confirm Hermes opens the exact source profile and session. Confirm no public screen takeover control is present.
+9. Open Training Mode and start guided coaching. Confirm its answers populate the semantic task form without contacting the backend, opening a browser, saving a skill, or running the task.
+10. Enter a safe test task, complete all three acknowledgements, and confirm it displays the complete server-generated draft without running the task. Confirm typed values, credentials, cookies, and private browser data are rejected or replaced by a fresh human-input gate.
+11. Confirm Hermes displays the complete server-generated SKILL.md and does not save it until the exact full-hash `SAVE <name> <sha256>` phrase shown by the page is entered.
+12. Open Messaging and confirm the connected platform list loads.
+13. Record and send one short voice message.
+14. Play one returned audio clip and one video clip.
+15. Upload one image and one document within the 64 MB boundary.
+16. Lock and unlock the device, then confirm the active conversation reconnects.
+17. Switch between Wi Fi and cellular service and confirm the conversation recovers.
+18. When an update prompt appears, accept it once and confirm the app reloads into the same private origin.
 
 ## Public and private boundaries
 
-The public mobile release includes the shareable renderer, relay, PWA assets, responsive layouts, Bot Mode, Training Mode, Messaging, voice, files, model controls, and update flow.
+The public mobile release includes the shareable renderer, relay, PWA assets, responsive layouts, Bot Mode, the public Operations Pack, Training Mode, Messaging, voice, files, model controls, and update flow.
 
-It excludes private Owner Operations, private node addresses, Android native bridges, SMS access, Watch brokerage, credentials, deployment state, and private release history.
+It excludes private Owner node policy, private node addresses, Android native bridges, SMS access, Watch brokerage, credentials, privileged screen takeover, private browser capture and replay, deployment state, and private release history.

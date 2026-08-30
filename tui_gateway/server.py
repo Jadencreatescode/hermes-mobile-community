@@ -4825,6 +4825,24 @@ def _load_enabled_toolsets(platform: str | None = None) -> list[str] | None:
         return None
 
 
+def _restrict_enabled_toolsets(
+    requested: list[str] | None, ambient: list[str] | None
+) -> list[str] | None:
+    """Intersect an RPC toolset restriction with profile authority.
+
+    ``None`` ambient authority means the profile permits every toolset. An
+    explicit request may therefore narrow it directly. A concrete ambient
+    list is authoritative: caller input can remove entries, never add them.
+    """
+    if requested is None:
+        return ambient
+    unique_requested = list(dict.fromkeys(requested))
+    if ambient is None:
+        return unique_requested
+    allowed = set(ambient)
+    return [name for name in unique_requested if name in allowed]
+
+
 def _session_tool_progress_mode(sid: str) -> str:
     return str(_sessions.get(sid, {}).get("tool_progress_mode", "all") or "all")
 
@@ -7193,6 +7211,11 @@ def _make_agent(
                 raise RuntimeError("Auth fallback resolved without a model")
             model = resolution.selected_model
     _pr = _load_provider_routing()
+    resolved_platform = _resolve_agent_platform(platform_override)
+    enabled_toolsets = _restrict_enabled_toolsets(
+        enabled_toolsets_override,
+        _load_enabled_toolsets(resolved_platform),
+    )
     return AIAgent(
         model=model,
         max_iterations=_cfg_max_turns(cfg, 500),
@@ -7219,11 +7242,7 @@ def _make_agent(
             if service_tier_override is not None
             else _load_service_tier()
         ),
-        enabled_toolsets=(
-            enabled_toolsets_override
-            if enabled_toolsets_override is not None
-            else _load_enabled_toolsets(_resolve_agent_platform(platform_override))
-        ),
+        enabled_toolsets=enabled_toolsets,
         # OpenRouter provider-routing prefs (config.yaml `provider_routing`).
         # Mirrors the messaging gateway + CLI so the desktop/TUI honors the same
         # routing instead of letting OpenRouter pick providers at random.
@@ -7233,7 +7252,7 @@ def _make_agent(
         provider_sort=_pr.get("sort"),
         provider_require_parameters=_pr.get("require_parameters", False),
         provider_data_collection=_pr.get("data_collection"),
-        platform=_resolve_agent_platform(platform_override),
+        platform=resolved_platform,
         session_id=session_id or key,
         session_db=session_db if session_db is not None else _get_db(),
         ephemeral_system_prompt=system_prompt or None,

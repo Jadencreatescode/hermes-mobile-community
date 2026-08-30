@@ -209,6 +209,52 @@ describe('Operations structured meeting client', () => {
     )
     expect(result.pending).toMatchObject({ kind: 'clarify', participant: participants[0] })
     expect(result.meeting.state).toBe('waiting')
+    expect(rest).toHaveBeenCalledWith('/meetings/meeting-1', expect.objectContaining({
+      body: expect.objectContaining({
+        record: expect.objectContaining({ pending: expect.objectContaining({ kind: 'clarify' }) })
+      })
+    }))
+  })
+
+  it('omits cleared pending state when a successful round is persisted', async () => {
+    const running = { ...draft(), currentRound: 1, state: 'running' as const }
+
+    const rest = vi.fn(async (_path: string, options?: { body?: { record?: unknown } }) => ({
+      meeting: options?.body?.record,
+      version: 6
+    }))
+
+    unbind = bindOperationsApi(rest as never)
+    const prompted = new Set<string>()
+
+    const requestProfile = vi.fn(async (route, method: string) => {
+      const key = `${route.connectionId}:${route.profile}`
+
+      if (method === 'session.create') {return { session_id: `runtime-${key}`, stored_session_id: `stored-${key}` }}
+
+      if (method === 'prompt.submit') {
+        prompted.add(key)
+
+        return { ok: true }
+      }
+
+      if (method === 'session.resume') {
+        return prompted.has(key)
+          ? { messages: [{ role: 'assistant', content: '(pass)' }], running: false }
+          : { messages: [], running: false }
+      }
+
+      return {}
+    })
+
+    const result = await runMeetingRound({ requestProfile } as never, running, 5, {
+      vps: 'remote',
+      bridge: 'remote'
+    })
+
+    const put = rest.mock.calls.find(([, options]) => options?.body) as [string, { body: { record: Record<string, unknown> } }]
+    expect(result.meeting.state).toBe('completed')
+    expect(put[1].body.record).not.toHaveProperty('pending')
   })
 
   it('converts completed action items through exact routed duplicate-safe Kanban commands', async () => {

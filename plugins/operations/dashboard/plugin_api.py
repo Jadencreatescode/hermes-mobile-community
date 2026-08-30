@@ -266,6 +266,8 @@ def retry_mailroom(envelope_id: str):
         envelope = _store().retry(envelope_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Mailroom envelope not found") from exc
+    except CriticalPolicyDenied as exc:
+        raise HTTPException(status_code=403, detail="Critical delivery requires an exact live policy") from exc
     except InvalidTransition as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _dispatch(envelope)

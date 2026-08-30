@@ -373,6 +373,12 @@ class MailroomStore:
         )
 
     def retry(self, envelope_id: str) -> dict[str, object]:
+        envelope = self.get_envelope(envelope_id)
+        if envelope["urgency"] == "critical":
+            self._authorize_critical(
+                str(envelope["source_profile"]),
+                str(envelope["target_profile"]),
+            )
         return self._transition(
             envelope_id, expected=frozenset({"failed"}), status="queued"
         )

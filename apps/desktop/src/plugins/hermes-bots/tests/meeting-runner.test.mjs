@@ -119,6 +119,63 @@ test('a bounded timeout waits for owner recovery and never invents a pass', asyn
   assert.equal(result.pending.kind, 'timeout')
 })
 
+test('a prompt without a new assistant reply never reuses an older round response', async () => {
+  let resumes = 0
+  const oldReply = { role: 'assistant', content: 'Old evidence from another round.' }
+  const request = async (_route, method) => {
+    if (method === 'session.create') return { session_id: 'runtime', stored_session_id: 'stored' }
+    if (method === 'session.resume') {
+      resumes += 1
+      return resumes === 1
+        ? { session_id: 'runtime', messages: [oldReply], running: false }
+        : {
+            session_id: 'runtime',
+            messages: [oldReply, { role: 'user', content: 'Current round prompt.' }],
+            running: false
+          }
+    }
+    if (method === 'prompt.submit') return { ok: true }
+    throw new Error(`unexpected ${method}`)
+  }
+
+  const result = await runStructuredMeetingRound(meeting(), {
+    request,
+    sleep: async () => undefined,
+    maxPolls: 1
+  })
+
+  assert.equal(result.meeting.state, 'waiting')
+  assert.equal(result.meeting.contributions.length, 0)
+  assert.equal(result.pending.kind, 'timeout')
+})
+
+
+test('a failed baseline resume waits without submitting or replaying old history', async () => {
+  let submits = 0
+  const request = async (_route, method) => {
+    if (method === 'session.create') return { session_id: 'runtime', stored_session_id: 'stored' }
+    if (method === 'session.resume') throw new Error('temporary resume failure')
+    if (method === 'prompt.submit') {
+      submits += 1
+      return { ok: true }
+    }
+    throw new Error(`unexpected ${method}`)
+  }
+
+  const result = await runStructuredMeetingRound(meeting(), {
+    request,
+    sleep: async () => undefined,
+    maxPolls: 1
+  })
+
+  assert.equal(submits, 0)
+  assert.equal(result.meeting.state, 'waiting')
+  assert.equal(result.meeting.contributions.length, 0)
+  assert.equal(result.pending.kind, 'baseline')
+  assert.equal(result.pending.before, null)
+})
+
+
 test('resume harvests the pending participant and never replays completed seats', async () => {
   let current = meeting()
   current = {

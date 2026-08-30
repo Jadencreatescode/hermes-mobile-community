@@ -1,5 +1,5 @@
 import { Button, Codicon, ErrorState, host, Loader, useValue } from '@hermes/plugin-sdk'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { loadOperationsSnapshot, type OperationsSnapshot } from './data'
 import { MailroomView } from './mailroom-view'
@@ -44,6 +44,8 @@ export function OperationsPage() {
   const [error, setError] = useState<Error | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [section, setSection] = useState<OperationsSection>('overview')
+  const refreshGeneration = useRef(0)
+  const foregroundGeneration = useRef(0)
 
   const delegations = useMemo<OperationsDelegation[]>(
     () => Object.entries(delegatedBySession as Record<string, Array<{ goal?: string; id: string; status?: string }>>)
@@ -54,6 +56,8 @@ export function OperationsPage() {
   const refresh = useCallback(async (quiet = false) => {
     void activeConnectionId
     void activeProfile
+    const generation = ++refreshGeneration.current
+    const foreground = quiet ? 0 : ++foregroundGeneration.current
 
     if (!quiet) {
       setRefreshing(true)
@@ -65,13 +69,19 @@ export function OperationsPage() {
         loadOperationsRoutines(host)
       ])
 
+      if (generation !== refreshGeneration.current) {
+        return
+      }
+
       setSnapshot(nextSnapshot)
       setRoutines(nextRoutines)
       setError(null)
     } catch (cause) {
-      setError(cause instanceof Error ? cause : new Error(String(cause)))
+      if (generation === refreshGeneration.current) {
+        setError(cause instanceof Error ? cause : new Error(String(cause)))
+      }
     } finally {
-      if (!quiet) {
+      if (!quiet && foreground === foregroundGeneration.current) {
         setRefreshing(false)
       }
     }
@@ -136,7 +146,12 @@ export function OperationsPage() {
           {section === 'mailroom' && (
             <MailroomView
               activeProfile={activeProfile}
-              profiles={[activeProfile, ...stableSnapshot.agents.map(agent => agent.profile)]}
+              profiles={[
+                activeProfile,
+                ...stableSnapshot.agents
+                  .filter(agent => agent.sourceId === activeConnectionId)
+                  .map(agent => agent.profile)
+              ]}
             />
           )}
           {section === 'meetings' && <MeetingsView snapshot={stableSnapshot} />}

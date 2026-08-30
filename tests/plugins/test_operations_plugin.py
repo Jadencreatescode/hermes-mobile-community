@@ -195,10 +195,13 @@ def test_critical_requires_exact_unexpired_bounded_policy_and_audits_decisions(t
     }
     critical = store.create_envelope(**request)
     assert critical["urgency"] == "critical"
+    store.record_delivery(critical["id"], delivered=False)
 
     with pytest.raises(api.CriticalPolicyDenied):
         store.create_envelope(**{**request, "target_profile": "reviewer"})
     now[0] += 61
+    with pytest.raises(api.CriticalPolicyDenied):
+        store.retry(critical["id"])
     with pytest.raises(api.CriticalPolicyDenied):
         store.create_envelope(**{**request, "dedupe_key": "after-expiry"})
     with pytest.raises(ValueError, match="expiration"):
@@ -214,6 +217,7 @@ def test_critical_requires_exact_unexpired_bounded_policy_and_audits_decisions(t
         ("allowed", "matched"),
         ("denied", "missing"),
         ("denied", "expired"),
+        ("denied", "expired"),
     ]
     assert all(set(row) == {"source_profile", "target_profile", "decision", "reason", "at"} for row in decisions)
 
@@ -228,7 +232,38 @@ def test_critical_requires_exact_unexpired_bounded_policy_and_audits_decisions(t
         ("allowed", "matched"),
         ("denied", "missing"),
         ("denied", "expired"),
+        ("denied", "expired"),
     ]
+
+
+def test_critical_retry_revalidates_exact_live_policy_without_changing_failed_state(tmp_path):
+    api = load_store()
+    now = [1_800_000_000]
+    db_path = tmp_path / "mailroom.db"
+    store = api.MailroomStore(db_path, clock=lambda: now[0])
+    store.set_critical_policy(
+        source_profile="planner",
+        target_profile="builder",
+        expires_at=now[0] + 60,
+    )
+    envelope = store.create_envelope(
+        source_profile="planner",
+        target_profile="builder",
+        body="Checkpoint safely.",
+        urgency="critical",
+    )
+    store.record_delivery(envelope["id"], delivered=False)
+
+    assert store.retry(envelope["id"])["status"] == "queued"
+    store.record_delivery(envelope["id"], delivered=False)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("DELETE FROM mailroom_critical_policies")
+
+    with pytest.raises(api.CriticalPolicyDenied):
+        store.retry(envelope["id"])
+
+    assert store.get_envelope(envelope["id"])["status"] == "failed"
+    assert store.list_policy_decisions(limit=10)[-1]["reason"] == "missing"
 
 
 def test_status_history_requires_explicit_retry_and_never_forces_cancellation(tmp_path):
@@ -373,6 +408,17 @@ def test_api_requires_explicit_retry_and_hash_free_exact_critical_policy(tmp_pat
         "failed",
     ]
 
+    now[0] += 61
+    expired_retry = asyncio.run(request_json(app, "POST", f"/mailroom/{envelope_id}/retry"))
+    assert expired_retry.status_code == 403
+    unchanged = asyncio.run(request_json(app, "GET", f"/mailroom/{envelope_id}"))
+    assert [event["status"] for event in unchanged.json()["envelope"]["history"]] == [
+        "queued",
+        "failed",
+        "queued",
+        "failed",
+    ]
+
 
 def meeting_record(**overrides):
     record = {
@@ -412,7 +458,7 @@ def test_meeting_store_is_bounded_compare_and_swap_and_append_only(tmp_path):
         "participant": {"connection": "local", "profile": "reviewer"},
         "kind": "speak",
         "text": "The tests pass.",
-        "evidence_refs": ["run:tests"],
+        "evidenceRefs": ["run:tests"],
     }
     updated = store.put(
         meeting_record(state="running", current_round=1, contributions=[contribution]),
@@ -433,6 +479,96 @@ def test_meeting_store_is_bounded_compare_and_swap_and_append_only(tmp_path):
 
     assert store.get("meeting_release_1")["version"] == 2
     assert [row["meeting"]["id"] for row in store.list(limit=10)] == ["meeting_release_1"]
+
+
+def test_meeting_store_rejects_semantically_malformed_history(tmp_path):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+    reviewer = {"connection": "local", "profile": "reviewer"}
+    stranger = {"connection": "remote", "profile": "stranger"}
+    bad_records = [
+        meeting_record(contributions=[{}]),
+        meeting_record(state="running", current_round=3),
+        meeting_record(
+            state="running",
+            current_round=1,
+            contributions=[
+                {
+                    "id": "reviewer_pass",
+                    "round": 1,
+                    "participant": reviewer,
+                    "kind": "pass",
+                    "text": "",
+                    "evidenceRefs": [],
+                },
+                {
+                    "id": "builder_pass",
+                    "round": 1,
+                    "participant": {"connection": "local", "profile": "builder"},
+                    "kind": "pass",
+                    "text": "",
+                    "evidenceRefs": [],
+                },
+            ],
+        ),
+        meeting_record(
+            state="running",
+            current_round=1,
+            contributions=[{
+                "id": "bad_round",
+                "round": 2,
+                "participant": reviewer,
+                "kind": "pass",
+                "text": "",
+                "evidenceRefs": [],
+            }],
+        ),
+        meeting_record(
+            state="running",
+            current_round=1,
+            contributions=[{
+                "id": "bad_participant",
+                "round": 1,
+                "participant": stranger,
+                "kind": "speak",
+                "text": "Not invited.",
+                "evidenceRefs": [],
+            }],
+        ),
+        meeting_record(decisions=[{}]),
+        meeting_record(dissent=[{"participant": stranger, "text": "No.", "evidenceRefs": []}]),
+        meeting_record(action_items=[{}]),
+    ]
+
+    for record in bad_records:
+        with pytest.raises(ValueError):
+            store.put(record, expected_version=0)
+
+
+def test_meeting_store_accepts_semantically_complete_conclusion(tmp_path):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+    reviewer = {"connection": "local", "profile": "reviewer"}
+    completed = meeting_record(
+        state="completed",
+        current_round=1,
+        decisions=[{"id": "release", "text": "Release.", "evidenceRefs": ["run:tests"]}],
+        dissent=[{"participant": reviewer, "text": "Monitor rollout.", "evidenceRefs": []}],
+        action_items=[{
+            "id": "publish",
+            "ownerRoute": reviewer,
+            "title": "Publish release",
+            "acceptanceCriteria": "Verified archive is available.",
+            "priority": "high",
+            "dueIntent": "After CI passes.",
+            "dedupeKey": "meeting:meeting_release_1:action:publish",
+        }],
+    )
+
+    stored = store.put(completed, expected_version=0)
+
+    assert stored["meeting"]["decisions"][0]["id"] == "release"
+    assert stored["meeting"]["action_items"][0]["dedupeKey"].endswith(":publish")
 
 
 def test_meeting_api_persists_versioned_records_and_returns_conflicts(tmp_path, monkeypatch):

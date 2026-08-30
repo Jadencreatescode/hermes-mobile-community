@@ -12,7 +12,7 @@ export const MEETING_LIMITS = Object.freeze({
   maxSerializedBytes: 256_000,
   minParticipants: 2,
   maxParticipants: 6,
-  maxRounds: 12
+  maxRounds: 5
 })
 
 export class MeetingValidationError extends Error {

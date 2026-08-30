@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { loadOperationsRoutines, loadOperationsSnapshot, navigate } = vi.hoisted(() => ({
@@ -49,6 +49,7 @@ import { OperationsPage } from './page'
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  vi.useRealTimers()
 })
 
 const snapshot = {
@@ -98,8 +99,22 @@ describe('OperationsPage', () => {
     expect(screen.getByText(/does not run or schedule the task/i)).toBeTruthy()
   })
 
-  it('renders the touch-safe Mailroom for the active and reachable Bot profiles', async () => {
-    loadOperationsSnapshot.mockResolvedValue(snapshot)
+  it('renders the touch-safe Mailroom only for profiles local to its authenticated API host', async () => {
+    loadOperationsSnapshot.mockResolvedValue({
+      ...snapshot,
+      agents: [
+        ...snapshot.agents,
+        {
+          ...snapshot.agents[0],
+          displayName: 'Remote Bot',
+          id: 'remote::remote-only',
+          profile: 'remote-only',
+          sourceId: 'remote',
+          sourceKind: 'remote',
+          sourceLabel: 'Remote Hermes'
+        }
+      ]
+    })
     loadOperationsRoutines.mockResolvedValue(routines)
 
     render(<OperationsPage />)
@@ -108,6 +123,7 @@ describe('OperationsPage', () => {
 
     expect(await screen.findByText('Durable, ordered Bot correspondence')).toBeTruthy()
     expect((screen.getByLabelText('Mailroom target') as HTMLSelectElement).value).toBe('release')
+    expect(screen.queryByRole('option', { name: 'remote-only' })).toBeNull()
   })
 
   it('opens the exact public Agent Workspace surface without exposing takeover controls', async () => {
@@ -157,5 +173,41 @@ describe('OperationsPage', () => {
 
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('refresh failed'))
     expect(screen.getByText('Release Bot')).toBeTruthy()
+  })
+
+  it('never lets an older overlapping refresh replace newer source state', async () => {
+    vi.useFakeTimers()
+    let resolveOlder: (value: typeof snapshot) => void = () => undefined
+    const older = new Promise<typeof snapshot>(resolve => { resolveOlder = resolve })
+
+    const newest = {
+      ...snapshot,
+      agents: [{ ...snapshot.agents[0], displayName: 'Newest Bot', profile: 'newest' }]
+    }
+
+    const stale = {
+      ...snapshot,
+      agents: [{ ...snapshot.agents[0], displayName: 'Stale Bot', profile: 'stale' }]
+    }
+
+    loadOperationsSnapshot
+      .mockResolvedValueOnce(snapshot)
+      .mockReturnValueOnce(older)
+      .mockResolvedValueOnce(newest)
+    loadOperationsRoutines.mockResolvedValue(routines)
+
+    render(<OperationsPage />)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(screen.getByText('Release Bot')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Operations' }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000)
+      await Promise.resolve()
+    })
+    expect(screen.getByText('Newest Bot')).toBeTruthy()
+    await act(async () => { resolveOlder(stale); await Promise.resolve() })
+
+    expect(screen.getByText('Newest Bot')).toBeTruthy()
+    expect(screen.queryByText('Stale Bot')).toBeNull()
   })
 })

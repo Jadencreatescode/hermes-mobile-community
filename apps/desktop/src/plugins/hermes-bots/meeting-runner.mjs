@@ -122,7 +122,17 @@ async function participantTurn(meeting, participant, sessions, options) {
     const pending = pendingInput(state, participant, stored || runtime, before)
     if (pending) return { kind: 'waiting', text: '', pending }
   } catch {
-    before = 0
+    return {
+      kind: 'waiting',
+      text: '',
+      pending: {
+        kind: 'baseline',
+        participant,
+        session: stored || runtime,
+        before: null,
+        reason: 'Participant history baseline could not be verified.'
+      }
+    }
   }
 
   await request(participant, 'prompt.submit', {
@@ -146,7 +156,7 @@ async function participantTurn(meeting, participant, sessions, options) {
     const messages = Array.isArray(state?.messages) ? state.messages : []
     if (state?.inflight || state?.running) continue
     if (messages.length <= before) continue
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
+    for (let index = messages.length - 1; index >= before; index -= 1) {
       const text = assistantText(messages[index])
       if (messages[index]?.role === 'assistant') {
         return isPass(text)

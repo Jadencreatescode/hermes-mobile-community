@@ -15,6 +15,8 @@ MAX_ID_CHARS = 128
 MAX_ROUTE_CHARS = 128
 MAX_TITLE_CHARS = 200
 MAX_AGENDA_CHARS = 8_000
+MAX_CONTRIBUTION_CHARS = 8_000
+MAX_EVIDENCE_REF_CHARS = 2_048
 MAX_PARTICIPANTS = 6
 MIN_PARTICIPANTS = 2
 MAX_ROUNDS = 5
@@ -33,6 +35,7 @@ _ALLOWED_TRANSITIONS = {
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _ROUTE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_PRIORITIES = frozenset({"low", "normal", "high", "critical"})
 
 
 class VersionConflict(ValueError):
@@ -83,6 +86,168 @@ def _bounded_list(value: object, field: str, maximum: int = MAX_HISTORY_ITEMS) -
     return value
 
 
+def _bounded_identifier(value: object, field: str) -> str:
+    result = _bounded_text(value, field, MAX_ID_CHARS)
+    if any(character.isspace() for character in result):
+        raise ValueError(f"{field} is invalid")
+    return result
+
+
+def _evidence_refs(value: object, field: str) -> list[str]:
+    rows = _bounded_list(value, field, 32)
+    return [
+        _bounded_text(reference, f"{field}[{index}]", MAX_EVIDENCE_REF_CHARS)
+        for index, reference in enumerate(rows)
+    ]
+
+
+def _history_value(row: Mapping[str, Any], camel: str, snake: str, default: object) -> object:
+    if camel in row and snake in row:
+        raise ValueError(f"{camel} is duplicated")
+    return row.get(camel, row.get(snake, default))
+
+
+def _contributions(
+    value: object,
+    participants: list[dict[str, str]],
+    max_rounds: int,
+) -> tuple[list[dict[str, Any]], int, bool]:
+    rows = _bounded_list(value, "contributions", max_rounds * len(participants))
+    participant_keys = {_route_key(participant) for participant in participants}
+    expected_round = 1
+    round_participants: set[tuple[str, str]] = set()
+    round_kinds: list[str] = []
+    normalized: list[dict[str, Any]] = []
+    terminal_round = False
+    for index, value_row in enumerate(rows):
+        if terminal_round:
+            raise ValueError("contribution follows a terminal round")
+        row = _record(value_row, f"contributions[{index}]")
+        allowed = {"id", "round", "participant", "kind", "text", "evidenceRefs", "evidence_refs"}
+        if not set(row).issubset(allowed):
+            raise ValueError(f"contributions[{index}] contains unsupported fields")
+        round_number = row.get("round")
+        if isinstance(round_number, bool) or not isinstance(round_number, int) or round_number != expected_round:
+            raise ValueError("contribution round is invalid")
+        participant = _route(row.get("participant"), f"contributions[{index}].participant")
+        participant_key = _route_key(participant)
+        if participant_key not in participant_keys or participant_key in round_participants:
+            raise ValueError("contributor must be a unique meeting participant for the round")
+        kind = row.get("kind")
+        if kind not in {"speak", "pass"}:
+            raise ValueError("contribution kind is invalid")
+        text = row.get("text", "")
+        if kind == "speak":
+            text = _bounded_text(text, f"contributions[{index}].text", MAX_CONTRIBUTION_CHARS)
+        elif text != "":
+            raise ValueError("pass contribution text must be empty")
+        evidence = _evidence_refs(
+            _history_value(row, "evidenceRefs", "evidence_refs", []),
+            f"contributions[{index}].evidenceRefs",
+        )
+        normalized.append({
+            "id": _bounded_identifier(row.get("id"), f"contributions[{index}].id"),
+            "round": round_number,
+            "participant": participant,
+            "kind": kind,
+            "text": text,
+            "evidenceRefs": evidence,
+        })
+        round_participants.add(participant_key)
+        round_kinds.append(kind)
+        if len(round_participants) == len(participants):
+            terminal_round = all(item == "pass" for item in round_kinds) or expected_round >= max_rounds
+            if not terminal_round:
+                expected_round += 1
+                round_participants.clear()
+                round_kinds.clear()
+    return normalized, expected_round, terminal_round
+
+
+def _decisions(value: object) -> list[dict[str, Any]]:
+    rows = _bounded_list(value, "decisions", 32)
+    normalized = []
+    for index, value_row in enumerate(rows):
+        row = _record(value_row, f"decisions[{index}]")
+        if not set(row).issubset({"id", "text", "evidenceRefs", "evidence_refs"}):
+            raise ValueError(f"decisions[{index}] contains unsupported fields")
+        normalized.append({
+            "id": _bounded_identifier(row.get("id"), f"decisions[{index}].id"),
+            "text": _bounded_text(row.get("text"), f"decisions[{index}].text", MAX_CONTRIBUTION_CHARS),
+            "evidenceRefs": _evidence_refs(
+                _history_value(row, "evidenceRefs", "evidence_refs", []),
+                f"decisions[{index}].evidenceRefs",
+            ),
+        })
+    return normalized
+
+
+def _dissent(value: object, participant_keys: set[tuple[str, str]]) -> list[dict[str, Any]]:
+    rows = _bounded_list(value, "dissent", 32)
+    normalized = []
+    for index, value_row in enumerate(rows):
+        row = _record(value_row, f"dissent[{index}]")
+        if not set(row).issubset({"participant", "text", "evidenceRefs", "evidence_refs"}):
+            raise ValueError(f"dissent[{index}] contains unsupported fields")
+        participant = _route(row.get("participant"), f"dissent[{index}].participant")
+        if _route_key(participant) not in participant_keys:
+            raise ValueError("dissent participant must be in the meeting")
+        normalized.append({
+            "participant": participant,
+            "text": _bounded_text(row.get("text"), f"dissent[{index}].text", MAX_CONTRIBUTION_CHARS),
+            "evidenceRefs": _evidence_refs(
+                _history_value(row, "evidenceRefs", "evidence_refs", []),
+                f"dissent[{index}].evidenceRefs",
+            ),
+        })
+    return normalized
+
+
+def _action_items(
+    value: object,
+    meeting_id: str,
+    participant_keys: set[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    rows = _bounded_list(value, "action_items", 64)
+    normalized = []
+    for index, value_row in enumerate(rows):
+        row = _record(value_row, f"action_items[{index}]")
+        item_id = _bounded_identifier(row.get("id"), f"action_items[{index}].id")
+        owner = _route(
+            _history_value(row, "ownerRoute", "owner_route", None),
+            f"action_items[{index}].ownerRoute",
+        )
+        if _route_key(owner) not in participant_keys:
+            raise ValueError("action item owner must be in the meeting")
+        priority = row.get("priority")
+        if priority not in _PRIORITIES:
+            raise ValueError("action item priority is invalid")
+        acceptance = _history_value(row, "acceptanceCriteria", "acceptance_criteria", None)
+        due_intent = _history_value(row, "dueIntent", "due_intent", None)
+        dedupe = _history_value(row, "dedupeKey", "dedupe_key", None)
+        expected_dedupe = f"meeting:{meeting_id}:action:{item_id}"
+        if dedupe != expected_dedupe:
+            raise ValueError("action item dedupe key is invalid")
+        normalized.append({
+            "id": item_id,
+            "ownerRoute": owner,
+            "title": _bounded_text(row.get("title"), f"action_items[{index}].title", MAX_TITLE_CHARS),
+            "acceptanceCriteria": _bounded_text(
+                acceptance,
+                f"action_items[{index}].acceptanceCriteria",
+                MAX_AGENDA_CHARS,
+            ),
+            "priority": priority,
+            "dueIntent": _bounded_text(
+                due_intent,
+                f"action_items[{index}].dueIntent",
+                MAX_CONTRIBUTION_CHARS,
+            ),
+            "dedupeKey": expected_dedupe,
+        })
+    return normalized
+
+
 def validate_meeting(value: object) -> dict[str, Any]:
     row = _record(value, "meeting")
     required = {
@@ -117,6 +282,47 @@ def validate_meeting(value: object) -> dict[str, Any]:
     if isinstance(current_round, bool) or not isinstance(current_round, int) or not 0 <= current_round <= max_rounds:
         raise ValueError("current_round is invalid")
 
+    participant_keys = set(keys)
+    contributions, history_round, terminal_round = _contributions(
+        row["contributions"], participants, max_rounds
+    )
+    evidence = _evidence_refs(row["evidence"], "evidence")
+    decisions = _decisions(row["decisions"])
+    dissent = _dissent(row["dissent"], participant_keys)
+    action_items = _action_items(row["action_items"], meeting_id, participant_keys)
+    if state == "draft" and (current_round != 0 or contributions):
+        raise ValueError("draft meeting history is invalid")
+    if state in {"running", "waiting", "completed"} and current_round != history_round:
+        raise ValueError("meeting current_round does not match contribution history")
+    if state in {"cancelled", "failed"}:
+        allowed_rounds = {history_round}
+        if not contributions:
+            allowed_rounds.add(0)
+        if current_round not in allowed_rounds:
+            raise ValueError("terminal meeting current_round is invalid")
+    if terminal_round and state != "completed":
+        raise ValueError("terminal contribution round requires completed state")
+    if state != "completed" and (decisions or dissent or action_items):
+        raise ValueError("meeting conclusions require completed state")
+
+    pending = None
+    if "pending" in row:
+        if state != "waiting":
+            raise ValueError("pending input requires waiting state")
+        pending = _record(row["pending"], "pending")
+        _bounded_list([pending], "pending", 1)
+
+    runner_sessions = None
+    if "runner_sessions" in row:
+        raw_sessions = _record(row["runner_sessions"], "runner_sessions")
+        runner_sessions = {}
+        for key, value in raw_sessions.items():
+            runner_sessions[_bounded_text(key, "runner_sessions key", 256)] = _bounded_text(
+                value,
+                f"runner_sessions[{key}]",
+                256,
+            )
+
     normalized = {
         "id": meeting_id,
         "source": source,
@@ -127,13 +333,13 @@ def validate_meeting(value: object) -> dict[str, Any]:
         "state": state,
         "max_rounds": max_rounds,
         "current_round": current_round,
-        "contributions": _bounded_list(row["contributions"], "contributions"),
-        "evidence": _bounded_list(row["evidence"], "evidence", 32),
-        "decisions": _bounded_list(row["decisions"], "decisions", 32),
-        "dissent": _bounded_list(row["dissent"], "dissent", 32),
-        "action_items": _bounded_list(row["action_items"], "action_items", 64),
-        **({"pending": row["pending"]} if "pending" in row else {}),
-        **({"runner_sessions": _record(row["runner_sessions"], "runner_sessions")} if "runner_sessions" in row else {}),
+        "contributions": contributions,
+        "evidence": evidence,
+        "decisions": decisions,
+        "dissent": dissent,
+        "action_items": action_items,
+        **({"pending": pending} if pending is not None else {}),
+        **({"runner_sessions": runner_sessions} if runner_sessions is not None else {}),
     }
     encoded = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     if len(encoded) > MAX_RECORD_BYTES:

@@ -305,9 +305,12 @@ export async function runMeetingRound(
       )
   })
 
+  const { pending: discardedPending, ...meetingWithoutPending } = result.meeting
+  void discardedPending
+
   const next = Object.freeze({
-    ...result.meeting,
-    pending: result.pending,
+    ...meetingWithoutPending,
+    ...(result.pending == null ? {} : { pending: result.pending }),
     runnerSessions: Object.freeze({ ...result.sessions })
   }) as MeetingRecord
 

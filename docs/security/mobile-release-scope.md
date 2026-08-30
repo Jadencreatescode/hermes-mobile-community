@@ -11,6 +11,8 @@ The archive contains only:
 3. The transactional Strix Halo installer, lifecycle wrappers, and operator guide under `deploy/strix-halo`.
 4. Version, source commit, and SHA 256 manifest evidence.
 
+The public Operations and Training backend plugins are runtime companions in the public repository, not members of the standalone Strix Halo relay archive. Full Operations or Training behavior therefore requires a compatible public Hermes checkout or installation that includes those authenticated plugin backends. The relay archive never writes into `HERMES_HOME` and does not silently install backend authority.
+
 The verifier rejects unexpected archive members, symlinks, invalid modes, manifest drift, version drift, and source commit drift.
 
 ## Security gates
@@ -22,7 +24,8 @@ Every mobile release change must pass:
 3. The website dependency audit.
 4. Desktop type checking and renderer build.
 5. Installer and relay tests.
-6. Two byte identical candidate builds followed by exact archive verification.
+6. Public Operations backend, renderer, meeting isolation, and mobile route tests when those runtime companions change.
+7. Two byte identical candidate builds followed by exact archive verification.
 
 The CodeQL configuration intentionally follows the release inputs listed above. Test fixtures, performance harnesses, generated output, dependency folders, and unrelated upstream Hermes components do not determine whether the mobile archive is releasable.
 

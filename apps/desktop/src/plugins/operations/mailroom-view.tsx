@@ -34,6 +34,9 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
   const [error, setError] = useState('')
   const [criticalConfirmed, setCriticalConfirmed] = useState(false)
   const [criticalExpiry, setCriticalExpiry] = useState(0)
+  const [criticalNow, setCriticalNow] = useState(() => Date.now() / 1000)
+  const criticalExpired = criticalExpiry > 0 && criticalExpiry <= criticalNow
+  const criticalLive = criticalExpiry > criticalNow
 
   useEffect(() => {
     if (!target || target === activeProfile || !uniqueProfiles.includes(target)) {
@@ -45,6 +48,18 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
     setCriticalConfirmed(false)
     setCriticalExpiry(0)
   }, [activeProfile, target])
+
+  useEffect(() => {
+    setCriticalNow(Date.now() / 1000)
+
+    if (criticalExpiry <= 0) {
+      return
+    }
+
+    const timer = window.setInterval(() => setCriticalNow(Date.now() / 1000), 1_000)
+
+    return () => window.clearInterval(timer)
+  }, [criticalExpiry])
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -74,6 +89,7 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
     try {
       const policy = await putCriticalPolicy(activeProfile, target, 3_600)
       setCriticalExpiry(policy.expiresAt)
+      setCriticalNow(Date.now() / 1000)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -82,7 +98,7 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
   }
 
   const send = async () => {
-    if (!target || !message.trim() || busy || (urgency === 'critical' && criticalExpiry <= Date.now() / 1000)) {
+    if (!target || !message.trim() || busy || (urgency === 'critical' && !criticalLive)) {
       return
     }
 
@@ -193,12 +209,17 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
               >
                 Approve Critical route for one hour
               </Button>
-              {criticalExpiry > 0 && <p>Critical route approved until {new Date(criticalExpiry * 1000).toLocaleTimeString()}.</p>}
+              {criticalExpiry > 0 && !criticalExpired && (
+                <p>Critical route approved until {new Date(criticalExpiry * 1000).toLocaleTimeString()}.</p>
+              )}
+              {criticalExpired && (
+                <p role="status">Critical route approval expired. Approve this exact route again.</p>
+              )}
             </div>
           )}
           <Button
             className="min-h-11 w-full"
-            disabled={!target || !message.trim() || busy || (urgency === 'critical' && criticalExpiry <= Date.now() / 1000)}
+            disabled={!target || !message.trim() || busy || (urgency === 'critical' && !criticalLive)}
             onClick={() => void send()}
           >
             Send through Mailroom

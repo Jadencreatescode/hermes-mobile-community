@@ -26,6 +26,15 @@ def _clean_sessions():
             server._sessions.pop(sid, None)
 
 
+def test_toolset_restrictions_can_only_remove_ambient_authority():
+    restrict = server._restrict_enabled_toolsets
+
+    assert restrict(None, ["file", "terminal"]) == ["file", "terminal"]
+    assert restrict(["clarify"], None) == ["clarify"]
+    assert restrict(["clarify", "terminal"], ["clarify", "file"]) == ["clarify"]
+    assert restrict(["terminal"], ["clarify", "file"]) == []
+
+
 def test_session_create_threads_meeting_restrictions_into_agent_build(monkeypatch, tmp_path):
     captured = {}
 

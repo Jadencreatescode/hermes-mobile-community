@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { bindOperationsApi } from './api'
@@ -25,6 +25,7 @@ afterEach(() => {
   cleanup()
   unbind?.()
   unbind = undefined
+  vi.useRealTimers()
 })
 
 describe('MailroomView', () => {
@@ -58,6 +59,9 @@ describe('MailroomView', () => {
   })
 
   it('keeps Critical unavailable until the exact route policy is explicitly approved', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    vi.setSystemTime(10_000)
+
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/mailroom?')) {
         return { envelopes: [] }
@@ -84,6 +88,14 @@ describe('MailroomView', () => {
 
     await waitFor(() => expect(rest).toHaveBeenCalledWith('/mailroom/critical-policy', expect.objectContaining({ method: 'PUT' })))
     expect(await screen.findByText(/Critical route approved until/i)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Mailroom message'), { target: { value: 'Please checkpoint.' } })
+    const send = screen.getByRole('button', { name: 'Send through Mailroom' }) as HTMLButtonElement
+    expect(send.disabled).toBe(false)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(61_000) })
+
+    expect(screen.getByRole('status').textContent).toMatch(/Critical route approval expired/i)
+    expect(send.disabled).toBe(true)
   })
 
   it('shows backend failures visibly instead of collapsing to an empty state', async () => {
