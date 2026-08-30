@@ -191,6 +191,7 @@ export async function loadOperationsSnapshot(
       const canonical = profile?.canonical_session || undefined
       const related = live.find(session => session.status === 'waiting' || session.status === 'working')
       const fallback = profile?.last_session || undefined
+
       const ownerSessionIds = new Set(
         [
           canonical?.id,
@@ -199,6 +200,7 @@ export async function loadOperationsSnapshot(
           ...live.flatMap(session => [session.id, session.session_key])
         ].filter((id): id is string => Boolean(id))
       )
+
       const activeDelegation = [...ownerSessionIds].some(sessionId =>
         options.delegatedBySession?.[sessionId]?.some(item => item.status === 'queued' || item.status === 'running')
       )

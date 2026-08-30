@@ -8,6 +8,7 @@ describe('loadOperationsRoutines', () => {
       { connectionId: 'vps-id', mode: 'remote' as const, profile: 'ops-alias', targetProfile: 'remote-ops' },
       { connectionId: 'bridge-id', mode: 'remote' as const, profile: 'default', targetProfile: 'default' }
     ]
+
     const host = {
       connections: vi.fn().mockResolvedValue([
         { id: 'vps-id', kind: 'remote', label: 'VPS' },
@@ -47,6 +48,7 @@ describe('loadOperationsRoutines', () => {
       { connectionId: 'vps-id', mode: 'remote' as const, profile: 'ops', targetProfile: 'ops' },
       { connectionId: 'bridge-id', mode: 'remote' as const, profile: 'default', targetProfile: 'default' }
     ]
+
     const host = {
       connections: vi.fn().mockResolvedValue([
         { id: 'vps-id', kind: 'remote', label: 'VPS' },

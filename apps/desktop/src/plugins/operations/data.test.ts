@@ -78,6 +78,7 @@ describe('loadOperationsSnapshot', () => {
         if (method === 'profiles.list') {
           return { profiles: [{ name: 'ops' }] }
         }
+
         if (method === 'session.active_list') {
           return { sessions: [{ id: 'runtime-owner', status: 'idle' }] }
         }

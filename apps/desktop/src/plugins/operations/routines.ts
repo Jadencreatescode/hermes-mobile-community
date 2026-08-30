@@ -73,6 +73,7 @@ export async function loadOperationsRoutines(host: OperationsRoutinesHost): Prom
   const [connections, routes] = await Promise.all([host.connections(), host.profileRoutes()])
   const connectionById = new Map(connections.map(connection => [connection.id, connection]))
   const routedConnections = new Set(routes.map(route => route.connectionId))
+
   const failures: OperationsRoutineFailure[] = connections
     .filter(connection => !routedConnections.has(connection.id))
     .map(connection => ({
@@ -80,6 +81,7 @@ export async function loadOperationsRoutines(host: OperationsRoutinesHost): Prom
       connectionLabel: connection.label,
       error: 'Profile inventory unavailable'
     }))
+
   const routines: OperationsRoutineModel[] = []
   let successfulSources = 0
 
@@ -101,6 +103,7 @@ export async function loadOperationsRoutines(host: OperationsRoutinesHost): Prom
         profile: route.profile,
         targetProfile: route.targetProfile
       })
+
       continue
     }
 

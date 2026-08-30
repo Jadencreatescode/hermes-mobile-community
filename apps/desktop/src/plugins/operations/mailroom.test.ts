@@ -39,14 +39,18 @@ describe('Operations Mailroom client', () => {
       if (path.startsWith('/mailroom?')) {
         return { envelopes: [wire] }
       }
+
       if (path === '/mailroom/mail_1') {
         return { envelope: wire }
       }
+
       if (path === '/mailroom/critical-policy') {
         return { source_profile: 'planner', target_profile: 'builder', created_at: 10, expires_at: 70 }
       }
+
       return { envelope: wire, delivery: { status: 'started', to: 'builder', process_id: 'strip-me' } }
     })
+
     unbind = bindOperationsApi(rest as never)
 
     expect(await listMail({ status: 'queued', limit: 10 })).toHaveLength(1)

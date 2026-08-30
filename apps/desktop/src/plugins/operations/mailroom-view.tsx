@@ -1,4 +1,4 @@
-import { Button, Input, Loader, Textarea } from '@hermes/plugin-sdk'
+import { Button, Loader, Textarea } from '@hermes/plugin-sdk'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import type { MailEnvelope, MailStatus, MailUrgency } from './contracts'
@@ -49,6 +49,7 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
   const refresh = useCallback(async () => {
     setLoading(true)
     setError('')
+
     try {
       setRows(await listMail({ limit: 100, ...(status ? { status } : {}) }))
     } catch (cause) {
@@ -66,8 +67,10 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
     if (!criticalConfirmed || !target || busy) {
       return
     }
+
     setBusy(true)
     setError('')
+
     try {
       const policy = await putCriticalPolicy(activeProfile, target, 3_600)
       setCriticalExpiry(policy.expiresAt)
@@ -82,8 +85,10 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
     if (!target || !message.trim() || busy || (urgency === 'critical' && criticalExpiry <= Date.now() / 1000)) {
       return
     }
+
     setBusy(true)
     setError('')
+
     try {
       await sendMail({
         sourceProfile: activeProfile,
@@ -103,6 +108,7 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
   const transition = async (row: MailEnvelope, action: 'acknowledge' | 'cancel' | 'retry') => {
     setBusy(true)
     setError('')
+
     try {
       if (action === 'acknowledge') {
         await acknowledgeMail(row.id)
@@ -111,6 +117,7 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
       } else {
         await retryMail(row.id)
       }
+
       await refresh()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))

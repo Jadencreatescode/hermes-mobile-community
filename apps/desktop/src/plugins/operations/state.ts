@@ -34,6 +34,7 @@ export function mapOperationsAgentState(evidence: OperationsAgentEvidence): Oper
   }
 
   const assignments = evidence.assignments ?? []
+
   const blocked = assignments.some(
     assignment =>
       assignment.status === 'blocked' ||
@@ -50,6 +51,7 @@ export function mapOperationsAgentState(evidence: OperationsAgentEvidence): Oper
 
   const nowMs = evidence.nowMs ?? Date.now()
   const heartbeatMs = Number(evidence.workerHeartbeatAt || 0) * 1000
+
   const freshWorker =
     heartbeatMs > 0 && nowMs >= heartbeatMs && nowMs - heartbeatMs < OPERATIONS_WORKER_ACTIVE_WINDOW_MS
 

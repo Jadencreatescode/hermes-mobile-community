@@ -33,17 +33,21 @@ function record(value: unknown): Record<string, unknown> {
 
 function required(value: unknown, label: string, pattern: RegExp): string {
   const result = typeof value === 'string' ? value : ''
+
   if (!pattern.test(result)) {
     throw new Error(`${label} is invalid`)
   }
+
   return result
 }
 
 function boundedBody(value: unknown): string {
   const body = typeof value === 'string' ? value : ''
+
   if (!body || body.length > 4_000) {
     throw new Error('Mailroom body is invalid')
   }
+
   return body
 }
 
@@ -55,6 +59,7 @@ function optionalReference(value: unknown): string | undefined {
   if (typeof value !== 'string' || !value || value.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value)) {
     return undefined
   }
+
   return value
 }
 
@@ -69,12 +74,15 @@ export function normalizeMailEnvelope(value: unknown): MailEnvelope {
   const history = rawHistory.flatMap<MailHistoryEvent>(entry => {
     const event = record(entry)
     const eventStatus = STATUSES.has(event.status as MailStatus) ? event.status as MailStatus : null
+
     const sequence = typeof event.sequence === 'number' && Number.isInteger(event.sequence) && event.sequence > 0
       ? event.sequence
       : 0
+
     if (!eventStatus || sequence === 0) {
       return []
     }
+
     return [{ at: finiteTimestamp(event.at), sequence, status: eventStatus }]
   })
 

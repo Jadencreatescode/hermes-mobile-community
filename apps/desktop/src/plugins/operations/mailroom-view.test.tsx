@@ -33,11 +33,14 @@ describe('MailroomView', () => {
       if (path.startsWith('/mailroom?')) {
         return { envelopes: [wire] }
       }
+
       if (path === '/mailroom') {
         return { envelope: wire, delivery: { status: 'started', to: 'builder' } }
       }
+
       return { envelope: wire }
     })
+
     unbind = bindOperationsApi(rest as never)
 
     const { container } = render(<MailroomView activeProfile="default" profiles={['default', 'builder']} />)
@@ -59,11 +62,14 @@ describe('MailroomView', () => {
       if (path.startsWith('/mailroom?')) {
         return { envelopes: [] }
       }
+
       if (path === '/mailroom/critical-policy') {
         return { source_profile: 'default', target_profile: 'builder', created_at: 10, expires_at: 70 }
       }
+
       return { envelope: wire, delivery: { status: 'started', to: 'builder' } }
     })
+
     unbind = bindOperationsApi(rest as never)
 
     render(<MailroomView activeProfile="default" profiles={['default', 'builder']} />)
