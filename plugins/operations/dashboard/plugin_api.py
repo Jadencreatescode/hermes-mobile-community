@@ -220,6 +220,11 @@ def list_mailroom(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/mailroom/policy-decisions")
+def list_policy_decisions(limit: int = Query(default=50, ge=1, le=MAX_LIST_LIMIT)):
+    return {"decisions": _store().list_policy_decisions(limit=limit)}
+
+
 @router.get("/mailroom/{envelope_id}")
 def get_mailroom(envelope_id: str):
     try:
@@ -297,11 +302,6 @@ def put_critical_policy(request: CriticalPolicyPut):
         target_profile=target,
         expires_at=int(_clock()) + request.ttl_seconds,
     )
-
-
-@router.get("/mailroom/policy-decisions")
-def list_policy_decisions(limit: int = Query(default=50, ge=1, le=MAX_LIST_LIMIT)):
-    return {"decisions": _store().list_policy_decisions(limit=limit)}
 
 
 @router.get("/meetings")

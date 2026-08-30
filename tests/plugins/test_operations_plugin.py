@@ -168,7 +168,7 @@ def test_queued_mail_is_bounded_and_priority_only_changes_queue_order(tmp_path):
         store.list_envelopes(limit=api.MAX_LIST_LIMIT + 1)
 
 
-def test_critical_requires_exact_unexpired_bounded_policy_and_audits_decisions(tmp_path):
+def test_critical_requires_exact_unexpired_bounded_policy_and_audits_decisions(tmp_path, monkeypatch):
     api = load_store()
     now = [1_800_000_000]
     store = api.MailroomStore(tmp_path / "mailroom.db", clock=lambda: now[0])
@@ -216,6 +216,19 @@ def test_critical_requires_exact_unexpired_bounded_policy_and_audits_decisions(t
         ("denied", "expired"),
     ]
     assert all(set(row) == {"source_profile", "target_profile", "decision", "reason", "at"} for row in decisions)
+
+    api_module = load_api()
+    monkeypatch.setattr(api_module, "_db_path", lambda: tmp_path / "mailroom.db")
+    app = FastAPI()
+    app.include_router(api_module.router)
+    response = asyncio.run(request_json(app, "GET", "/mailroom/policy-decisions?limit=10"))
+    assert response.status_code == 200
+    assert [(row["decision"], row["reason"]) for row in response.json()["decisions"]] == [
+        ("denied", "missing"),
+        ("allowed", "matched"),
+        ("denied", "missing"),
+        ("denied", "expired"),
+    ]
 
 
 def test_status_history_requires_explicit_retry_and_never_forces_cancellation(tmp_path):
