@@ -98,6 +98,18 @@ describe('OperationsPage', () => {
     expect(screen.getByText(/does not run or schedule the task/i)).toBeTruthy()
   })
 
+  it('renders the touch-safe Mailroom for the active and reachable Bot profiles', async () => {
+    loadOperationsSnapshot.mockResolvedValue(snapshot)
+    loadOperationsRoutines.mockResolvedValue(routines)
+
+    render(<OperationsPage />)
+    await screen.findByText('Release Bot')
+    fireEvent.change(screen.getByLabelText('Operations section'), { target: { value: 'mailroom' } })
+
+    expect(await screen.findByText('Durable, ordered Bot correspondence')).toBeTruthy()
+    expect((screen.getByLabelText('Mailroom target') as HTMLSelectElement).value).toBe('release')
+  })
+
   it('keeps the last verified snapshot visible when a later refresh fails', async () => {
     loadOperationsSnapshot.mockResolvedValueOnce(snapshot).mockRejectedValueOnce(new Error('refresh failed'))
     loadOperationsRoutines.mockResolvedValue(routines)

@@ -2,6 +2,7 @@ import { Button, Codicon, ErrorState, host, Loader, useValue } from '@hermes/plu
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { loadOperationsSnapshot, type OperationsSnapshot } from './data'
+import { MailroomView } from './mailroom-view'
 import { OperationsNavigation, type OperationsSection } from './navigation'
 import { OperationsOverview, type OperationsDelegation } from './overview'
 import { loadOperationsRoutines, type OperationsRoutinesSnapshot } from './routines'
@@ -139,7 +140,12 @@ export function OperationsPage() {
           {section === 'overview' && (
             <OperationsOverview delegations={delegations} routines={routines} snapshot={stableSnapshot} />
           )}
-          {section === 'mailroom' && <PendingPanel title="Mailroom" />}
+          {section === 'mailroom' && (
+            <MailroomView
+              activeProfile={activeProfile}
+              profiles={[activeProfile, ...stableSnapshot.agents.map(agent => agent.profile)]}
+            />
+          )}
           {section === 'meetings' && <PendingPanel title="Meetings" />}
           {section === 'workspace' && <PendingPanel title="Agent Workspace" />}
           {section === 'training' && <TrainingPanel />}
