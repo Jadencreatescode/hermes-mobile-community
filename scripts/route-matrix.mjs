@@ -29,6 +29,8 @@ const routes = [
   { id: 'cron', hash: '#/cron' },
   { id: 'profiles', hash: '#/profiles' },
   { id: 'agents', hash: '#/agents' },
+  { id: 'operations', hash: '#/operations' },
+  { id: 'training', hash: '#/training' },
   { id: 'starmap', hash: '#/starmap' }
 ]
 

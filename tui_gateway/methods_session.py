@@ -33,6 +33,7 @@ def _(rid, params: dict) -> dict:
         explicit_cwd = False
     resolved_cwd = _completion_cwd(params)
     source = _resolve_session_source(str(params.get("source") or "").strip() or None)
+    agent_restrictions = _session_agent_restrictions(params)
     _enable_gateway_prompts()
 
     # ``profile`` (app-global remote mode): a new chat started under a non-launch
@@ -79,6 +80,7 @@ def _(rid, params: dict) -> dict:
             "agent": None,
             "agent_error": None,
             "agent_ready": ready,
+            "agent_restrictions": agent_restrictions,
             "attached_images": [],
             "close_on_disconnect": is_truthy_value(params.get("close_on_disconnect", False)),
             "active_session_lease": lease,
@@ -371,6 +373,7 @@ def _(rid, params: dict) -> dict:
     # route in parallel. Suppress the duplicate WebSocket transcript only when
     # the caller explicitly requests it; other clients keep upstream behavior.
     omit_messages = is_truthy_value(params.get("omit_messages", False))
+    agent_restrictions = _session_agent_restrictions(params)
 
     # In a profile scope this opens a DEDICATED handle we own until the agent
     # takes it (see the ownership transfer at _init_session below); every path
@@ -488,10 +491,23 @@ def _(rid, params: dict) -> dict:
                 payload["status"] = "streaming"
             return payload
 
+        def _live_restriction_error(live: tuple[str, dict] | None) -> dict | None:
+            if live is not None and not _session_satisfies_agent_restrictions(
+                live[1], agent_restrictions
+            ):
+                return _err(
+                    rid,
+                    4033,
+                    "cannot reuse live session with broader authority; create a fresh restricted session",
+                )
+            return None
+
         # Fast path: if the session is already live, reuse it under the lock.
         with _session_resume_lock:
             live = _find_live_session_by_key(target)
             if live is not None:
+                if restriction_error := _live_restriction_error(live):
+                    return restriction_error
                 return _ok(rid, _reuse_live_payload(*live))
 
         # Lazy/watch resume: register the live session WITHOUT building an agent.
@@ -531,8 +547,11 @@ def _(rid, params: dict) -> dict:
                 close_on_disconnect=is_truthy_value(params.get("close_on_disconnect", False)),
                 profile_home=profile_home,
                 lazy=True,
+                agent_restrictions=agent_restrictions,
             )
             if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
+                if restriction_error := _live_restriction_error(live):
+                    return restriction_error
                 return _ok(rid, _reuse_live_payload(*live))
             # A delegated child mid-run emits no session events of its own — report
             # its liveness from the relay registry so the window shows a busy turn.
@@ -599,11 +618,14 @@ def _(rid, params: dict) -> dict:
                 profile_home=profile_home,
                 model_override=overrides.get("model_override"),
                 resume_runtime_overrides=overrides or None,
+                agent_restrictions=agent_restrictions,
             )
             record["resume_history_ready"] = threading.Event()
             record["resume_hydrating"] = True
             record["resume_message_count"] = int(found.get("message_count") or 0)
             if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
+                if restriction_error := _live_restriction_error(live):
+                    return restriction_error
                 return _ok(rid, _reuse_live_payload(*live))
 
             _schedule_resume_hydration(sid, target, db, close_db=owns_db)
@@ -695,8 +717,11 @@ def _(rid, params: dict) -> dict:
                 profile_home=profile_home,
                 model_override=overrides.get("model_override"),
                 resume_runtime_overrides=overrides or None,
+                agent_restrictions=agent_restrictions,
             )
             if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
+                if restriction_error := _live_restriction_error(live):
+                    return restriction_error
                 return _ok(rid, _reuse_live_payload(*live))
 
             _schedule_agent_build(sid)
@@ -780,6 +805,7 @@ def _(rid, params: dict) -> dict:
                     session_id=target,
                     session_db=db,
                     platform_override=source,
+                    **(agent_restrictions or {}),
                     **stored_runtime_overrides,
                 )
             finally:
@@ -807,6 +833,8 @@ def _(rid, params: dict) -> dict:
                     pass
                 if lease is not None:
                     lease.release()
+                if restriction_error := _live_restriction_error(live):
+                    return restriction_error
                 other_sid, other_session = live
                 payload = _live_session_payload(
                     other_sid,
@@ -886,6 +914,7 @@ def _(rid, params: dict) -> dict:
                     # skills — must resolve to the resumed profile too).
                     if profile_home is not None:
                         _sessions[sid]["profile_home"] = str(profile_home)
+                    _sessions[sid]["agent_restrictions"] = agent_restrictions
                     _sessions[sid]["active_session_lease"] = lease
             except Exception as e:
                 # _init_session registers _sessions[sid] BEFORE its first read

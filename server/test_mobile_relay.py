@@ -25,6 +25,11 @@ class MobileRelayTests(unittest.IsolatedAsyncioTestCase):
             payload = await request.read()
             return web.json_response({"received": len(payload)})
 
+        async def operations(request: web.Request):
+            self.upstream_paths.append(request.path_qs)
+            await request.read()
+            return web.json_response({"method": request.method, "path": request.path})
+
         async def websocket(request: web.Request):
             ws = web.WebSocketResponse()
             await ws.prepare(request)
@@ -35,6 +40,7 @@ class MobileRelayTests(unittest.IsolatedAsyncioTestCase):
 
         upstream.router.add_get("/api/status", status)
         upstream.router.add_post("/api/upload", upload)
+        upstream.router.add_route("*", "/api/plugins/operations/{path:.*}", operations)
         upstream.router.add_get("/api/ws", websocket)
         self.upstream_server = TestServer(upstream)
         await self.upstream_server.start_server()
@@ -142,6 +148,19 @@ class MobileRelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await response.json(), {"ok": True, "node": "vps"})
         self.assertEqual(self.upstream_paths, ["/api/status?detail=1"])
         self.assertEqual(response.cookies["hermes_session_at"].value, "opaque")
+
+    async def test_proxies_public_operations_plugin_paths_without_widening_the_relay(self):
+        response = await self.client.post(
+            "/api/plugins/operations/mailroom",
+            json={"source_profile": "default", "target_profile": "builder", "body": "Review."},
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(
+            await response.json(),
+            {"method": "POST", "path": "/api/plugins/operations/mailroom"},
+        )
+        self.assertEqual(self.upstream_paths, ["/api/plugins/operations/mailroom"])
 
     async def test_proxies_normal_phone_uploads_larger_than_one_megabyte(self):
         payload = b"p" * (2 * 1024 * 1024)

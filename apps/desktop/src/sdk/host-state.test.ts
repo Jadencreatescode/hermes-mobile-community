@@ -179,6 +179,24 @@ describe('host.state.focusedSessionProfile', () => {
   })
 })
 
+describe('host.state.subagents', () => {
+  it('exposes the existing delegated agent progress as a readonly atom', async () => {
+    const { host } = await import('@/sdk/index')
+    const subagents = await import('@/store/subagents')
+
+    subagents.$subagentsBySession.set({
+      'runtime-operations': [
+        { id: 'worker-1', goal: 'Review release', status: 'running' }
+      ] as never
+    })
+
+    expect(host.state.subagents.get()).toEqual(subagents.$subagentsBySession.get())
+    expect(typeof host.state.subagents.listen).toBe('function')
+
+    subagents.$subagentsBySession.set({})
+  })
+})
+
 describe('host.state busy vs gateway', () => {
   afterEach(() => {
     $sessionStates.set({})

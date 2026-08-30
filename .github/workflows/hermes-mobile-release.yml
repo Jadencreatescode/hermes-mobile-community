@@ -9,12 +9,19 @@ on:
   pull_request:
     paths:
       - "apps/desktop/**"
+      - "plugins/operations/**"
+      - "tests/plugins/test_operations_plugin.py"
+      - "tests/tui_gateway/test_meeting_session_restrictions.py"
+      - "tui_gateway/methods_session.py"
+      - "tui_gateway/server.py"
       - "deploy/strix-halo/**"
       - "server/mobile_relay.py"
       - "server/test_mobile_relay.py"
       - "package.json"
       - "package-lock.json"
       - "scripts/release-security/npm-audit-policy.*"
+      - "scripts/operations-mobile-contract.mjs"
+      - "scripts/route-matrix.mjs"
       - "tests-js/npm-audit-policy.test.ts"
       - "website/package.json"
       - "website/package-lock.json"
@@ -43,6 +50,8 @@ jobs:
         run: python3 -W error::ResourceWarning -m unittest deploy.strix-halo.test_installer
       - name: Test mobile relay and large uploads
         run: uv run --with aiohttp==3.14.3 python -W error::ResourceWarning -m unittest server.test_mobile_relay
+      - name: Test public Operations backend and meeting isolation
+        run: uv run --with pytest --with fastapi --with httpx pytest -q tests/plugins/test_operations_plugin.py tests/tui_gateway/test_meeting_session_restrictions.py
       - name: Install desktop dependencies
         run: npm ci
       - name: Audit shipped dependencies for high severity advisories
@@ -52,6 +61,15 @@ jobs:
       - name: Type check desktop
         working-directory: apps/desktop
         run: npm run typecheck
+      - name: Test public Operations renderer and meeting engine
+        working-directory: apps/desktop
+        run: |
+          npx vitest run --project ui src/plugins/operations src/sdk/host-state.test.ts
+          node --test src/plugins/hermes-bots/tests/meeting-model.test.mjs src/plugins/hermes-bots/tests/meeting-runner.test.mjs
+      - name: Verify mobile acceptance scripts
+        run: |
+          node --check scripts/operations-mobile-contract.mjs
+          node --check scripts/route-matrix.mjs
       - name: Build mobile renderer
         working-directory: apps/desktop
         run: npm run build

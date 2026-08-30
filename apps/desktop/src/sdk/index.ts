@@ -76,6 +76,7 @@ import {
   $focusedStoredSessionId,
   $sessionStates
 } from '@/store/session-states'
+import { $subagentsBySession } from '@/store/subagents'
 import { runGatewayRestart } from '@/store/system-actions'
 import type { UsageStats } from '@/types/hermes'
 
@@ -423,6 +424,8 @@ export const host = {
     model: readonlyAtom<string>($currentModel),
     /** Profile the live gateway is routed to. */
     profile: readonlyAtom<string>($activeGatewayProfile),
+    /** Existing delegated-agent progress grouped by its parent runtime session. */
+    subagents: readonlyAtom($subagentsBySession),
     /** Window geometry ({ width, height, narrow }). */
     viewport: readonlyAtom<ViewportRect>($viewport)
   },
