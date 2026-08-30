@@ -3,8 +3,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { loadOperationsSnapshot, type OperationsSnapshot } from './data'
 import { MailroomView } from './mailroom-view'
+import { MeetingsView } from './meetings-view'
 import { OperationsNavigation, type OperationsSection } from './navigation'
-import { OperationsOverview, type OperationsDelegation } from './overview'
+import { type OperationsDelegation, OperationsOverview } from './overview'
 import { loadOperationsRoutines, type OperationsRoutinesSnapshot } from './routines'
 import { WorkspaceView } from './workspace-view'
 
@@ -29,15 +30,6 @@ function TrainingPanel() {
       <Button className="min-h-11 w-full sm:w-auto" onClick={() => host.navigate('/training')}>
         Open Training Mode
       </Button>
-    </section>
-  )
-}
-
-function PendingPanel({ title }: { title: string }) {
-  return (
-    <section className="mx-auto max-w-2xl rounded-xl border border-(--ui-stroke-secondary) p-4">
-      <h2 className="text-base font-semibold">{title}</h2>
-      <p className="mt-2 text-sm text-(--ui-text-secondary)">This section is connecting to its authenticated Operations service.</p>
     </section>
   )
 }
@@ -147,7 +139,7 @@ export function OperationsPage() {
               profiles={[activeProfile, ...stableSnapshot.agents.map(agent => agent.profile)]}
             />
           )}
-          {section === 'meetings' && <PendingPanel title="Meetings" />}
+          {section === 'meetings' && <MeetingsView snapshot={stableSnapshot} />}
           {section === 'workspace' && <WorkspaceView agents={stableSnapshot.agents} />}
           {section === 'training' && <TrainingPanel />}
         </section>

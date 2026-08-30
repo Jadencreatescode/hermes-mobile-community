@@ -114,13 +114,37 @@ describe('OperationsPage', () => {
     loadOperationsSnapshot.mockResolvedValue(snapshot)
     loadOperationsRoutines.mockResolvedValue(routines)
 
-    render(<OperationsPage />)
+    const { container } = render(<OperationsPage />)
     await screen.findByText('Release Bot')
     fireEvent.change(screen.getByLabelText('Operations section'), { target: { value: 'workspace' } })
 
     expect(await screen.findByRole('heading', { name: 'Agent Workspace' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Open Release Bot workspace' })).toBeTruthy()
-    expect(document.body.textContent).not.toMatch(/screen takeover|remote control/i)
+    expect(container.textContent).not.toMatch(/screen takeover|remote control/i)
+  })
+
+  it('renders bounded structured meetings over the existing public Bot roster', async () => {
+    loadOperationsSnapshot.mockResolvedValue({
+      ...snapshot,
+      agents: [
+        ...snapshot.agents,
+        {
+          ...snapshot.agents[0],
+          displayName: 'Builder Bot',
+          id: 'local::builder',
+          profile: 'builder'
+        }
+      ]
+    })
+    loadOperationsRoutines.mockResolvedValue(routines)
+
+    render(<OperationsPage />)
+    await screen.findByText('Release Bot')
+    fireEvent.change(screen.getByLabelText('Operations section'), { target: { value: 'meetings' } })
+
+    expect(await screen.findByRole('heading', { name: 'New specialist meeting' })).toBeTruthy()
+    expect(screen.getByLabelText('Select Release Bot as a meeting participant')).toBeTruthy()
+    expect(screen.getByLabelText('Select Builder Bot as a meeting participant')).toBeTruthy()
   })
 
   it('keeps the last verified snapshot visible when a later refresh fails', async () => {
