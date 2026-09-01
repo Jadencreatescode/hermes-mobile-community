@@ -1107,6 +1107,19 @@ export const $narrowViewport = atom(Boolean(narrowQuery?.matches))
 
 narrowQuery?.addEventListener('change', event => $narrowViewport.set(event.matches))
 
+// A pointer that cannot hover (a finger on touch, or a trackpad with hover
+// disabled). The close ✕ is hover-revealed on a real pointer, so a touch user
+// would otherwise never see it — `hover: none` is the reliable signal that the
+// ✕ must stay always-visible, independent of viewport width (an iPad in
+// landscape, a phone in split-screen, a PWA at a wide standalone viewport all
+// sit above the 768px collapse breakpoint yet are still finger-driven).
+const hoverNoneQuery =
+  typeof window !== 'undefined' ? window.matchMedia?.('(hover: none)') : undefined
+
+export const $hoverNone = atom(Boolean(hoverNoneQuery?.matches))
+
+hoverNoneQuery?.addEventListener('change', event => $hoverNone.set(event.matches))
+
 /** The titlebar flip toggle (⌘\): mirror the whole layout left↔right. */
 export function mirrorLayoutTree() {
   const tree = $layoutTree.get()

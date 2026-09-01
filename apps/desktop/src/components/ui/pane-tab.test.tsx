@@ -156,7 +156,7 @@ describe('PaneTab always-visible close (narrow / touch viewport)', () => {
   it('shows the ✕ without hovering when alwaysClose is set', () => {
     const onClose = vi.fn()
     render(
-      <PaneTab onClose={onClose} alwaysClose>
+      <PaneTab alwaysClose onClose={onClose}>
         <PaneTabLabel>tab</PaneTabLabel>
       </PaneTab>
     )
@@ -167,7 +167,7 @@ describe('PaneTab always-visible close (narrow / touch viewport)', () => {
   it('tapping the always-visible ✕ closes the tab', () => {
     const onClose = vi.fn()
     render(
-      <PaneTab onClose={onClose} alwaysClose>
+      <PaneTab alwaysClose onClose={onClose}>
         <PaneTabLabel>tab</PaneTabLabel>
       </PaneTab>
     )
@@ -195,7 +195,7 @@ describe('PaneTab always-visible close (narrow / touch viewport)', () => {
   it('shows the ✕ at full opacity without a pointer when alwaysClose is set', () => {
     const onClose = vi.fn()
     render(
-      <PaneTab onClose={onClose} alwaysClose>
+      <PaneTab alwaysClose onClose={onClose}>
         <PaneTabLabel>tab</PaneTabLabel>
       </PaneTab>
     )
@@ -205,5 +205,20 @@ describe('PaneTab always-visible close (narrow / touch viewport)', () => {
     expect(wrap.className).toContain('opacity-100')
     expect(wrap.className).not.toContain('opacity-0')
     expect(wrap.className).not.toContain('group-hover/tab')
+  })
+})
+
+describe('PaneTabLabel reserveClose padding', () => {
+  it('does not pad the right edge by default (hover-revealed ✕ keeps full label width)', () => {
+    const { container } = render(<PaneTabLabel>long-filename</PaneTabLabel>)
+
+    // The outer Comp is the first span in the tree.
+    expect(container.querySelector('span')!.className).not.toContain('pr-6')
+  })
+
+  it('pads the right edge to reserve room for the always-visible ✕', () => {
+    const { container } = render(<PaneTabLabel reserveClose>long-filename</PaneTabLabel>)
+
+    expect(container.querySelector('span')!.className).toContain('pr-6')
   })
 })

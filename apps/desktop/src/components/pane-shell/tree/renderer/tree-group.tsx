@@ -39,6 +39,7 @@ import type { DropPosition, GroupNode } from '../model'
 import {
   $dropHint,
   $hiddenTreePanes,
+  $hoverNone,
   $narrowViewport,
   $newSessionTabAction,
   $panesWithCloser,
@@ -228,6 +229,7 @@ export function TreeGroup({
 
   const hiddenPanes = useStore($hiddenTreePanes)
   const narrow = useStore($narrowViewport)
+  const noHover = useStore($hoverNone)
   const newSessionTabAction = useStore($newSessionTabAction)
   const panesWithCloser = useStore($panesWithCloser)
   // Multi-tab selection (⌥/Ctrl-click, Shift-click) — null for every zone but
@@ -467,10 +469,12 @@ export function TreeGroup({
               const title = paneFor(paneId)?.title ?? paneId
               const isSelected = tabSelection?.groupId === node.id && tabSelection.ids.has(paneId)
 
+              const alwaysClose = narrow || noHover
+
               const tab = (
                 <PaneTab
                   active={isActive}
-                  alwaysClose={narrow}
+                  alwaysClose={alwaysClose}
                   aria-selected={isActive}
                   data-tree-tab={paneId}
                   key={paneId}
@@ -562,7 +566,7 @@ export function TreeGroup({
                   {chrome.tabLead ? (
                     <span className="ml-2 -mr-1 flex shrink-0 items-center">{chrome.tabLead()}</span>
                   ) : null}
-                  <PaneTabLabel>{tabLabel(paneId)}</PaneTabLabel>
+                  <PaneTabLabel reserveClose={alwaysClose}>{tabLabel(paneId)}</PaneTabLabel>
                 </PaneTab>
               )
 

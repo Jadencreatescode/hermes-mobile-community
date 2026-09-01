@@ -233,19 +233,26 @@ interface PaneTabLabelProps extends React.ComponentProps<'button'> {
   /** `button` when the label is the activation target (preview rail);
    *  default `span` defers to the shell (zone drag/activate). */
   as?: 'button' | 'span'
+  /** The ✕ is always visible (touch / narrow), so pad the right edge to
+   *  reserve room for it — otherwise a long filename runs under the close
+   *  glyph. No-op on a hover-revealed ✕, where the label keeps full width. */
+  reserveClose?: boolean
 }
 
 /** Truncating label inside a `PaneTab`. `className` merges into the text span
  *  (e.g. `normal-case tracking-normal` for filenames). */
 export const PaneTabLabel = React.forwardRef<HTMLElement, PaneTabLabelProps>(function PaneTabLabel(
-  { as = 'span', className, children, ...props },
+  { as = 'span', className, reserveClose = false, children, ...props },
   ref
 ) {
   const Comp = as as React.ElementType
 
   return (
     <Comp
-      className="flex h-full min-w-0 max-w-full items-center overflow-hidden px-2 text-left outline-none group-data-[vertical]/tab:h-auto group-data-[vertical]/tab:w-full group-data-[vertical]/tab:justify-center group-data-[vertical]/tab:py-2"
+      className={cn(
+        'flex h-full min-w-0 max-w-full items-center overflow-hidden px-2 text-left outline-none group-data-[vertical]/tab:h-auto group-data-[vertical]/tab:w-full group-data-[vertical]/tab:justify-center group-data-[vertical]/tab:py-2',
+        reserveClose && 'pr-6'
+      )}
       ref={ref}
       {...props}
     >
