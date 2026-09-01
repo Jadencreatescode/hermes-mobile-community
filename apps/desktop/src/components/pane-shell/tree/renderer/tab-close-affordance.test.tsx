@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { registry } from '@/contrib/registry'
 
 import { allPaneIds, group, split } from '../model'
-import { $layoutTree } from '../store'
+import { $layoutTree, $narrowViewport } from '../store'
 
 import { TreeGroup } from './tree-group'
 
@@ -95,6 +95,19 @@ function middleClickCloses(paneId: string): boolean {
   return !allPaneIds($layoutTree.get()!).includes(paneId)
 }
 
+/** Does tapping the ✕ actually close this tab? Same tree observation — the
+ *  pane must actually leave the tree, not just fire a close callback. */
+function tapCloses(paneId: string): boolean {
+  const close = tabEl(paneId)?.querySelector('button[aria-label]')
+  if (!close) {
+    return false
+  }
+
+  fireEvent.click(close)
+
+  return !allPaneIds($layoutTree.get()!).includes(paneId)
+}
+
 describe('a tab advertises exactly the close gesture it honors', () => {
   for (const [paneId] of PANES) {
     it(`${paneId}: ✕ presence matches middle-click`, () => {
@@ -105,6 +118,31 @@ describe('a tab advertises exactly the close gesture it honors', () => {
       const advertised = hasCloseButton(paneId)
 
       expect(advertised).toBe(middleClickCloses(paneId))
+    })
+  }
+})
+
+// On a touch viewport there is no hover to reveal the ✕, so the strip must
+// keep it visible the whole time — otherwise a closeable tab (a preview, a
+// file, a session tile) would be un-closable on a phone. This renders the
+// same strip with the narrow viewport flag set and asserts the ✕ is visible
+// and actually removes the tab.
+describe('a closeable tab keeps its ✕ visible on the narrow (touch) viewport', () => {
+  for (const [paneId, chrome] of PANES) {
+    // The uncloseable workspace and the hide-only sessions tab never advertise
+    // a ✕ of any kind — on touch or not.
+    if (chrome.uncloseable || chrome.hideOnly) {
+      continue
+    }
+
+    it(`${paneId}: ✕ visible and closes on tap when narrow`, () => {
+      $narrowViewport.set(true)
+      renderOneStrip()
+
+      expect(hasCloseButton(paneId)).toBe(true)
+      expect(tapCloses(paneId)).toBe(true)
+
+      $narrowViewport.set(false)
     })
   }
 })

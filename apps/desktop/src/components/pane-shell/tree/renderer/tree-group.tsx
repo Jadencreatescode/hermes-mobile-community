@@ -470,6 +470,7 @@ export function TreeGroup({
               const tab = (
                 <PaneTab
                   active={isActive}
+                  alwaysClose={narrow}
                   aria-selected={isActive}
                   data-tree-tab={paneId}
                   key={paneId}
