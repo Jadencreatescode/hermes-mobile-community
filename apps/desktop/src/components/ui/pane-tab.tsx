@@ -56,6 +56,19 @@ interface PaneTabProps extends React.ComponentProps<'div'> {
    *  and stay the only gestures on vertical rails (no room for a chip ✕).
    *  There is no way to take the ✕ off a tab that HAS this verb: the chip and
    *  the pointer gestures are one affordance, so a closeable tab always says
+   *  so. Omit `onClose` to make a tab uncloseable.
+   *
+   *  `alwaysClose` drops the hover-reveal so the ✕ stays visible without a
+   *  pointer — the narrow (touch) viewport has no hover to key off, so a
+   *  closeable tab would otherwise be invisible. The ✕ is still gated on
+   *  `onClose`, so uncloseable tabs (main workspace, hide-only chrome) keep
+   *  showing nothing. */
+  alwaysClose?: boolean
+  /** Close verb. Horizontal tabs reveal a hover ✕ on the right (a `--tab-face`
+   *  gradient fades it over the label); middle-click and ⌘-click always work,
+   *  and stay the only gestures on vertical rails (no room for a chip ✕).
+   *  There is no way to take the ✕ off a tab that HAS this verb: the chip and
+   *  the pointer gestures are one affordance, so a closeable tab always says
    *  so. Omit `onClose` to make a tab uncloseable. */
   onClose?: () => void
   /** Part of a multi-tab selection (⌥/Ctrl-click, Shift-click) — an accent
@@ -78,6 +91,7 @@ export const PaneTab = React.forwardRef<HTMLDivElement, PaneTabProps>(function P
   {
     active = false,
     dirty = false,
+    alwaysClose = false,
     onClose,
     onMouseDown,
     onPointerDown,
@@ -169,7 +183,18 @@ export const PaneTab = React.forwardRef<HTMLDivElement, PaneTabProps>(function P
         // tab's effective surface instead of hard-clipping the text under it.
         // Rendered after the dirty dot: on hover the ✕ takes the dot's spot,
         // VS Code-style.
-        <span className="pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity group-hover/tab:pointer-events-auto group-hover/tab:opacity-100">
+        //
+        // On a pointer (desktop) the ✕ is hover-revealed — hidden until the
+        // user aims at the tab, then the gradient fades it in. On touch there
+        // is no hover, so `alwaysClose` (narrow viewport) drops the reveal and
+        // keeps the ✕ visible the whole time. Either way the ✕ is still gated
+        // on `onClose`, so an uncloseable tab shows nothing.
+        <span
+          className={cn(
+            'pointer-events-none absolute inset-y-0 right-0 flex items-stretch',
+            alwaysClose ? 'opacity-100' : 'opacity-0 transition-opacity group-hover/tab:pointer-events-auto group-hover/tab:opacity-100'
+          )}
+        >
           {/* Both pieces re-draw the active underline: they paint over the
               tab's own last-pixel row, so without it the ✕ would bite a
               notch out of the accent line on the active tab. */}

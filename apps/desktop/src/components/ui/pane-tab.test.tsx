@@ -151,3 +151,59 @@ describe('PaneTab hover close button', () => {
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
   })
 })
+
+describe('PaneTab always-visible close (narrow / touch viewport)', () => {
+  it('shows the ✕ without hovering when alwaysClose is set', () => {
+    const onClose = vi.fn()
+    render(
+      <PaneTab onClose={onClose} alwaysClose>
+        <PaneTabLabel>tab</PaneTabLabel>
+      </PaneTab>
+    )
+
+    expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy()
+  })
+
+  it('tapping the always-visible ✕ closes the tab', () => {
+    const onClose = vi.fn()
+    render(
+      <PaneTab onClose={onClose} alwaysClose>
+        <PaneTabLabel>tab</PaneTabLabel>
+      </PaneTab>
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the ✕ hidden without a pointer when alwaysClose is not set', () => {
+    const onClose = vi.fn()
+    render(
+      <PaneTab onClose={onClose}>
+        <PaneTabLabel>tab</PaneTabLabel>
+      </PaneTab>
+    )
+
+    // The ✕ is always in the DOM — the desktop reveal is a CSS opacity toggle,
+    // so it sits at opacity-0 (hidden) until the tab is hovered.
+    const close = screen.getByRole('button', { name: 'Close' })
+    const wrap = close.closest('span')!
+    expect(wrap.className).toContain('opacity-0')
+    expect(wrap.className).toContain('group-hover/tab:pointer-events-auto')
+  })
+
+  it('shows the ✕ at full opacity without a pointer when alwaysClose is set', () => {
+    const onClose = vi.fn()
+    render(
+      <PaneTab onClose={onClose} alwaysClose>
+        <PaneTabLabel>tab</PaneTabLabel>
+      </PaneTab>
+    )
+
+    const close = screen.getByRole('button', { name: 'Close' })
+    const wrap = close.closest('span')!
+    expect(wrap.className).toContain('opacity-100')
+    expect(wrap.className).not.toContain('opacity-0')
+    expect(wrap.className).not.toContain('group-hover/tab')
+  })
+})
