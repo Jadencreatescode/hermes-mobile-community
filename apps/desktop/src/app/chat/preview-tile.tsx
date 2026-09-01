@@ -10,10 +10,26 @@
  * one bar instead of two.
  */
 
+import type * as React from 'react'
+
+import {
+  ActionsContextMenu,
+  CONTEXT_KIT,
+  type MenuKit
+} from '@/components/ui/actions-menu'
+import { paneTabCloseItems } from '@/components/ui/pane-tab'
 import { findGroup } from '@/components/pane-shell/tree/model'
+import {
+  closeAllTreeTabs,
+  closeOtherTreeTabs,
+  closeTreeTabsToRight,
+  closeTabPane,
+  treeTabCloseTargets
+} from '@/components/pane-shell/tree/store'
 import { $activeTreeGroup, $layoutTree, revealTreePane } from '@/components/pane-shell/tree/store'
 import { FileTypeIcon } from '@/components/ui/file-type-icon'
 import { ToolIcon } from '@/components/ui/tool-icon'
+import { translateNow } from '@/i18n'
 import { $rightRailActiveTabId, type RightRailTabId, selectRightRailTab } from '@/store/layout'
 import { $previewTabs, closeRightRailTab, type PreviewTarget } from '@/store/preview'
 
@@ -71,6 +87,30 @@ function PreviewTabLead({ tabId }: { tabId: string }) {
 }
 
 const PREVIEW_TILE_PREFIX = 'preview-tile'
+
+/** A preview tab's context menu: Close / Close Others / Close to Right / Close
+ *  All — the same verbs every other tab offers. Session tiles get the full
+ *  session verb set through `SessionTabMenu`; preview tabs (files, URLs,
+ *  artifacts) get the generic close verbs so a long-press on touch (or
+ *  right-click on desktop) can close them without aiming for the ✕. */
+function PreviewTabMenu({ paneId, children }: { paneId: string; children: React.ReactElement }) {
+  const counts = treeTabCloseTargets(paneId)
+
+  const items = (kit: MenuKit) =>
+    paneTabCloseItems(kit, {
+      counts,
+      onClose: () => closeTabPane(paneId),
+      onCloseAll: () => closeAllTreeTabs(paneId),
+      onCloseOthers: () => closeOtherTreeTabs(paneId),
+      onCloseToRight: () => closeTreeTabsToRight(paneId)
+    })
+
+  return (
+    <ActionsContextMenu ariaLabel={translateNow('common.close')} contentClassName="w-44" items={items}>
+      {children}
+    </ActionsContextMenu>
+  )
+}
 
 /** Keep pane contributions mirroring `$previewTabs`, keep the store's selection
  *  and the tree's active pane agreeing, and front a tile when its tab is
@@ -133,6 +173,13 @@ const watchPreviewTileMirror = paneMirror<{ id: string }>({
   title: previewTitle,
   tabLead: tabId => <PreviewTabLead tabId={tabId} />,
   render: tabId => <PreviewTilePane tabId={tabId} />,
+  tabWrap: (tabId, tab) => {
+    const paneId = `${PREVIEW_TILE_PREFIX}:${tabId}`
+
+    return (
+      <PreviewTabMenu paneId={paneId}>{tab}</PreviewTabMenu>
+    )
+  },
   close: tabId => {
     forgetPreviewConsole(tabId)
     closeRightRailTab(tabId)
