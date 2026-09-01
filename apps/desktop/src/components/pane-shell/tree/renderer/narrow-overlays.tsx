@@ -169,6 +169,7 @@ export function NarrowOverlays() {
               {zonePanes.map(pane => (
                 <PaneTab
                   active={pane.id === revealed.id}
+                  alwaysClose
                   aria-selected={pane.id === revealed.id}
                   data-narrow-overlay-tab={pane.id}
                   key={pane.id}
@@ -179,7 +180,7 @@ export function NarrowOverlays() {
                     }
                   }}
                 >
-                  <PaneTabLabel>{pane.title ?? pane.id}</PaneTabLabel>
+                  <PaneTabLabel reserveClose>{pane.title ?? pane.id}</PaneTabLabel>
                 </PaneTab>
               ))}
             </PaneTabStrip>
