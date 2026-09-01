@@ -21,7 +21,6 @@ export function toggleStatusbarVisible() {
 export const STATUSBAR_HIDDEN_BY_DEFAULT: readonly string[] = [
   'agents',
   'approval-mode',
-  'context-usage',
   'cron',
   'running-timer',
   'session-timer',

@@ -192,7 +192,9 @@ export const PaneTab = React.forwardRef<HTMLDivElement, PaneTabProps>(function P
         <span
           className={cn(
             'pointer-events-none absolute inset-y-0 right-0 flex items-stretch',
-            alwaysClose ? 'opacity-100' : 'opacity-0 transition-opacity group-hover/tab:pointer-events-auto group-hover/tab:opacity-100'
+            alwaysClose
+            ? 'pointer-events-auto opacity-100'
+            : 'pointer-events-none opacity-0 transition-opacity group-hover/tab:pointer-events-auto group-hover/tab:opacity-100'
           )}
         >
           {/* Both pieces re-draw the active underline: they paint over the
