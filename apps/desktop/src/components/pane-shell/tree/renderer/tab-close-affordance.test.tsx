@@ -59,6 +59,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanup()
+  $narrowViewport.set(false)
   disposers.splice(0).forEach(dispose => dispose())
 })
 
@@ -99,6 +100,7 @@ function middleClickCloses(paneId: string): boolean {
  *  pane must actually leave the tree, not just fire a close callback. */
 function tapCloses(paneId: string): boolean {
   const close = tabEl(paneId)?.querySelector('button[aria-label]')
+
   if (!close) {
     return false
   }

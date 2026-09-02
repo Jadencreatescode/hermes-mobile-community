@@ -51,18 +51,9 @@ const TAB_SELECTED =
 interface PaneTabProps extends React.ComponentProps<'div'> {
   active?: boolean
   dirty?: boolean
-  /** Close verb. Horizontal tabs reveal a hover ✕ on the right (a `--tab-face`
-   *  gradient fades it over the label); middle-click and ⌘-click always work,
-   *  and stay the only gestures on vertical rails (no room for a chip ✕).
-   *  There is no way to take the ✕ off a tab that HAS this verb: the chip and
-   *  the pointer gestures are one affordance, so a closeable tab always says
-   *  so. Omit `onClose` to make a tab uncloseable.
-   *
-   *  `alwaysClose` drops the hover-reveal so the ✕ stays visible without a
-   *  pointer — the narrow (touch) viewport has no hover to key off, so a
-   *  closeable tab would otherwise be invisible. The ✕ is still gated on
-   *  `onClose`, so uncloseable tabs (main workspace, hide-only chrome) keep
-   *  showing nothing. */
+  /** Keeps the horizontal close button visible without hover for touch
+   *  pointers. The button still requires `onClose`, so uncloseable and
+   *  hide-only tabs continue to show no close control. */
   alwaysClose?: boolean
   /** Close verb. Horizontal tabs reveal a hover ✕ on the right (a `--tab-face`
    *  gradient fades it over the label); middle-click and ⌘-click always work,
