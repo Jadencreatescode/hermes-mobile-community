@@ -1,12 +1,19 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { PANE_TOGGLE_REVEAL_EVENT } from '@/components/pane-shell'
 import { registry } from '@/contrib/registry'
+import { toggleFileBrowserOpen } from '@/store/layout'
 import { stubResizeObserver } from '@/test/jsdom'
 
-import { group, split } from '../model'
-import { $hiddenTreePanes, $layoutTree, $narrowViewport, declareDefaultTree } from '../store'
+import { allPaneIds, group, split } from '../model'
+import {
+  $dismissedPanes,
+  $hiddenTreePanes,
+  $layoutTree,
+  $narrowViewport,
+  declareDefaultTree
+} from '../store'
 
 import { NarrowOverlays } from './narrow-overlays'
 
@@ -36,6 +43,7 @@ const registerPane = (id: string, title: string, data: Record<string, unknown>, 
 
 beforeEach(() => {
   window.localStorage.clear()
+  $dismissedPanes.set(new Set())
   $hiddenTreePanes.set(new Set())
 
   registerPane('sessions', 'sessions', { collapsible: true, placement: 'left', width: '237px' }, 'session rows')
@@ -90,5 +98,50 @@ describe('narrow overlay of a stacked zone', () => {
 
     expect(getByTestId('sessions-body')).toBeTruthy()
     expect(overlayTab('sessions')).toBeNull()
+  })
+
+  it('reveals an absent-from-tree collapsible as a narrow overlay without adopting it back', () => {
+    const originalMatchMedia = window.matchMedia
+
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: true }))
+    })
+
+    try {
+      registerPane(
+        'files',
+        'files',
+        {
+          collapsible: true,
+          dock: { pane: 'workspace', pos: 'right' },
+          placement: 'right',
+          revealAliases: ['file-browser'],
+          width: '237px'
+        },
+        'file browser'
+      )
+      // The pane is registered but absent from the tree (the portrait regression
+      // scenario: the user dismissed the right sidebar, or it was never opened).
+      $layoutTree.set(group(['workspace']))
+
+      expect(allPaneIds($layoutTree.get()!)).not.toContain('files')
+
+      const { getByTestId, queryByTestId } = render(<NarrowOverlays />)
+
+      expect(queryByTestId('files-body')).toBeNull()
+
+      // Tapping the right sidebar toggle in portrait must show the overlay — the
+      // button must not be unresponsive just because the pane is absent from the
+      // tree.
+      act(() => toggleFileBrowserOpen())
+      expect(getByTestId('files-body')).toBeTruthy()
+
+      // A second tap closes it.
+      act(() => toggleFileBrowserOpen())
+      expect(queryByTestId('files-body')).toBeNull()
+    } finally {
+      Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia })
+    }
   })
 })
