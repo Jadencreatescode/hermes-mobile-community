@@ -7,13 +7,12 @@ on:
 jobs:
   check:
     name: JS & TS checks
-    # One 32-core job replaces a 14-leg matrix. The matrix spread about 612s
-    # of check payload over 4-core runners. It paid about 371s of repeated
-    # setup to do it: 14 checkouts, 14 node installs, 14 node_modules
-    # restores.
-    #
-    # One standard public runner installs one time. Vitest, tsc, and eslint
-    # each size their worker pool within the available cores.
+    # One standard public runner installs one time. The heaviest units, most
+    # notably Desktop Vitest, create their own worker pools. Running every unit
+    # in parallel on a four-core public runner has repeatedly ended the UI suite
+    # mid-output without a failed assertion or summary. Run one top-level unit
+    # at a time so each child worker pool owns the runner while it executes. The
+    # serialized payload remains below the thirty minute job timeout.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -80,4 +79,4 @@ jobs:
       # not an empty run, because an empty run reports green after it checks
       # nothing.
       - name: Run all workspace checks
-        run: node .github/scripts/run-workspace-checks.mjs
+        run: node .github/scripts/run-workspace-checks.mjs --concurrency 1
