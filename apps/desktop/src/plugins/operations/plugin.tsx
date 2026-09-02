@@ -23,7 +23,7 @@ const LOCALES = {
 const plugin: HermesPlugin = {
   id: 'operations',
   name: 'Operations',
-  description: 'Public control room for Hermes Bots, active work, Mailroom, meetings, workspaces, and Training.',
+  description: 'Public control room for Hermes Bots, active work, Mailroom, meetings, workspaces, Forge, and Training.',
   defaultEnabled: true,
   register(ctx) {
     ctx.i18n.register(LOCALES)
@@ -48,7 +48,7 @@ const plugin: HermesPlugin = {
         data: {
           id: 'operations.open',
           label: 'Operations: Open control room',
-          keywords: ['operations', 'agents', 'bots', 'work', 'mailroom', 'meetings'],
+          keywords: ['operations', 'agents', 'bots', 'work', 'mailroom', 'meetings', 'forge', 'kanban'],
           run: () => host.navigate('/operations')
         } satisfies PaletteContribution
       }

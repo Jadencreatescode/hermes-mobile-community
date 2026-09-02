@@ -69,6 +69,14 @@ The workspace binds one exact connection, profile, and session or task. It opens
 
 The first public release does not ship private Owner screen takeover. Computer input remains behind the ordinary Hermes approval and computer use surfaces.
 
+### Forge
+
+Forge is a read-only Kanban board view inside Operations. It surfaces the active Hermes Forge pipeline (the `hermes-forge` board) as a responsive grid of columns — triage, todo, ready, running, blocked, review, and done — each holding a stack of cards.
+
+Forge reuses the existing Kanban REST API (`/api/plugins/kanban/*`) through the operations plugin's own REST door, so it works whether or not the standalone Kanban plugin is enabled. It does not add a new public route: Forge is a section within `/operations`, not a route of its own. Each card shows the task title, status icon, assignee, priority, and a truncated summary. The board auto-refreshes every 8 seconds.
+
+Forge is read-only by design. It has no drag-and-drop, no create or edit, and no board switcher. Full board interaction — moving cards, creating tasks, and the task drawer — lives on the standalone `/kanban` route, which Forge links toward when the user needs it.
+
 ### Training
 
 Operations links to the existing public Training Mode. Training Mode creates a reviewed, deterministic skill draft and saves it only after hash bound approval. It does not run or schedule the task.
@@ -109,6 +117,7 @@ Required widths are 344, 360, 390, 412, 768, 1024, and 1440 CSS pixels.
 6. Detail dialogs trap focus, make the background inert, and restore focus.
 7. Loading, empty, partial source failure, offline, reconnecting, conflict, expired policy, and permission denied states are explicit.
 8. The last verified snapshot remains visible during a refresh failure.
+9. The responsive audit exercises every Operations section — Overview, Mailroom, Meetings, Agent Workspace, Forge, and Training — at every required width.
 
 ## Release gates
 
@@ -117,6 +126,7 @@ Required widths are 344, 360, 390, 412, 768, 1024, and 1440 CSS pixels.
 3. Mobile audit policy and website audit pass.
 4. Privacy scans find no Owner identifiers, credentials, private routes, node addresses, or secret shaped values.
 5. Browser acceptance exercises every required width and every Operations section with zero overflow and zero console or page errors.
-6. A fresh clone of the exact candidate reproduces tests and build.
-7. Independent specification, code quality, security, and privacy reviews pass.
-8. Merge occurs only through a pull request after required GitHub checks pass.
+6. The Forge section renders its read-only board at every width without overflow, and its 8-second refresh cycle produces no console or page errors.
+7. A fresh clone of the exact candidate reproduces tests and build.
+8. Independent specification, code quality, security, and privacy reviews pass.
+9. Merge occurs only through a pull request after required GitHub checks pass.
