@@ -24,6 +24,7 @@ const sections = [
   { id: 'mailroom', marker: 'Durable, ordered Bot correspondence' },
   { id: 'meetings', marker: 'New specialist meeting' },
   { id: 'workspace', marker: 'Agent Workspace' },
+  { id: 'forge', marker: 'Forge' },
   { id: 'training', marker: 'Open Training Mode' }
 ]
 
