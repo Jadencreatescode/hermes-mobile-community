@@ -12,22 +12,21 @@
 
 import type * as React from 'react'
 
-import {
-  ActionsContextMenu,
-  CONTEXT_KIT,
-  type MenuKit
-} from '@/components/ui/actions-menu'
-import { paneTabCloseItems } from '@/components/ui/pane-tab'
 import { findGroup } from '@/components/pane-shell/tree/model'
 import {
   closeAllTreeTabs,
   closeOtherTreeTabs,
-  closeTreeTabsToRight,
   closeTabPane,
+  closeTreeTabsToRight,
   treeTabCloseTargets
 } from '@/components/pane-shell/tree/store'
 import { $activeTreeGroup, $layoutTree, revealTreePane } from '@/components/pane-shell/tree/store'
+import {
+  ActionsContextMenu,
+  type MenuKit
+} from '@/components/ui/actions-menu'
 import { FileTypeIcon } from '@/components/ui/file-type-icon'
+import { paneTabCloseItems } from '@/components/ui/pane-tab'
 import { ToolIcon } from '@/components/ui/tool-icon'
 import { translateNow } from '@/i18n'
 import { $rightRailActiveTabId, type RightRailTabId, selectRightRailTab } from '@/store/layout'
