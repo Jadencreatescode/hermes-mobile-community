@@ -97,6 +97,7 @@ export const UserEditComposer: FC<UserEditComposerProps> = ({ cwd, gateway, sess
   const draftRef = useRef(draft)
   const composingRef = useRef(false)
   const dragDepthRef = useRef(0)
+  const timeoutIdsRef = useRef(new Set<number>())
   const [dragActive, setDragActive] = useState(false)
   const [trigger, setTrigger] = useState<TriggerState | null>(null)
   const [triggerActive, setTriggerActive] = useState(0)
@@ -118,12 +119,28 @@ export const UserEditComposer: FC<UserEditComposerProps> = ({ cwd, gateway, sess
   const slash = useSlashCompletions({ gateway })
   const emoji = useEmojiCompletions()
 
-  // This is the one composer that routinely unmounts, so it is where the focus
-  // bus leaks: confirming or cancelling an edit tears the composer down while
-  // `'edit'` is still the active target. Release it alongside the thread-scroll
-  // cleanup so keyboard routing falls back to the visible chat composer.
+  const scheduleTimeout = useCallback((callback: () => void, delay: number) => {
+    const id = window.setTimeout(() => {
+      timeoutIdsRef.current.delete(id)
+      callback()
+    }, delay)
+
+    timeoutIdsRef.current.add(id)
+
+    return id
+  }, [])
+
+  // This is the one composer that routinely unmounts. Confirming or cancelling
+  // an edit must cancel every delayed callback before the DOM disappears and
+  // release the active focus target so keyboard routing falls back to chat.
   useEffect(
     () => () => {
+      for (const id of timeoutIdsRef.current) {
+        window.clearTimeout(id)
+      }
+
+      timeoutIdsRef.current.clear()
+
       notifyThreadEditClose()
       releaseActiveComposer('edit')
     },
@@ -341,7 +358,7 @@ export const UserEditComposer: FC<UserEditComposerProps> = ({ cwd, gateway, sess
         draftRef.current = composerPlainText(editor)
         aui.composer().setText(draftRef.current)
         requestEditFocus()
-        starter ? window.setTimeout(refreshTrigger, 0) : closeTrigger()
+        starter ? scheduleTimeout(refreshTrigger, 0) : closeTrigger()
       }
 
       // In place first, spanning Chromium's split text nodes (see
@@ -360,7 +377,7 @@ export const UserEditComposer: FC<UserEditComposerProps> = ({ cwd, gateway, sess
 
       finish()
     },
-    [aui, closeTrigger, recordUndoPoint, refreshTrigger, rememberInitialDraft, requestEditFocus, trigger]
+    [aui, closeTrigger, recordUndoPoint, refreshTrigger, rememberInitialDraft, requestEditFocus, scheduleTimeout, trigger]
   )
 
   const insertRefStrings = useCallback(
@@ -526,11 +543,11 @@ export const UserEditComposer: FC<UserEditComposerProps> = ({ cwd, gateway, sess
 
       rememberInitialDraft()
       const nextDraft = syncDraftFromEditor(editor)
-      window.setTimeout(refreshTrigger, 0)
+      scheduleTimeout(refreshTrigger, 0)
 
       return nextDraft
     },
-    [refreshTrigger, rememberInitialDraft, syncDraftFromEditor]
+    [refreshTrigger, rememberInitialDraft, scheduleTimeout, syncDraftFromEditor]
   )
 
   const handleInput = (event: FormEvent<HTMLDivElement>) => {
@@ -602,7 +619,7 @@ export const UserEditComposer: FC<UserEditComposerProps> = ({ cwd, gateway, sess
       // Clear latch after cooldown to allow re-submission. This prevents rapid
       // double-Enter but doesn't require tracking when onEdit settles (which may
       // be synchronous or async, and whose promise we don't have access to).
-      window.setTimeout(() => {
+      scheduleTimeout(() => {
         setSubmitting(false)
       }, 200)
     } catch {
@@ -618,7 +635,7 @@ export const UserEditComposer: FC<UserEditComposerProps> = ({ cwd, gateway, sess
         return
       }
 
-      window.setTimeout(() => {
+      scheduleTimeout(() => {
         const root = rootRef.current
         const active = document.activeElement
 
@@ -653,7 +670,7 @@ export const UserEditComposer: FC<UserEditComposerProps> = ({ cwd, gateway, sess
         }
       }, 80)
     },
-    [aui, closeTrigger, submitting, syncDraftFromEditor]
+    [aui, closeTrigger, scheduleTimeout, submitting, syncDraftFromEditor]
   )
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -810,7 +827,7 @@ export const UserEditComposer: FC<UserEditComposerProps> = ({ cwd, gateway, sess
               data-placeholder={copy.editMessage}
               data-slot={RICH_INPUT_SLOT}
               onBeforeInput={handleBeforeInput}
-              onBlur={() => window.setTimeout(closeTrigger, 80)}
+              onBlur={() => scheduleTimeout(closeTrigger, 80)}
               onCompositionEnd={event => {
                 composingRef.current = false
                 flushEditorToDraft(event.currentTarget)
