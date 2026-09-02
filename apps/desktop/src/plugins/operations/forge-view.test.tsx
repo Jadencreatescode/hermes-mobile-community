@@ -106,6 +106,16 @@ describe('ForgeView', () => {
     expect(first).toBeLessThan(last)
   })
 
+  it('shows a loading indicator before the board resolves', () => {
+    state.phase = 'loading'
+
+    render(<ForgeView />)
+
+    expect(screen.getByRole('status', { name: 'Loading Forge' })).toBeTruthy()
+    expect(screen.queryByText('Forge board could not load')).toBeNull()
+    expect(screen.queryByText('Triage this')).toBeNull()
+  })
+
   it('renders an empty state per empty column', () => {
     state.board = boardWith([{ name: 'triage', tasks: [] }])
     render(<ForgeView />)
