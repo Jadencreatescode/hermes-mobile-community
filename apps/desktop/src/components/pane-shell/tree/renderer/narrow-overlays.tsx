@@ -36,13 +36,15 @@ export function NarrowOverlays() {
 
   const inTree = useMemo(() => new Set(tree ? allPaneIds(tree) : []), [tree])
 
-  const collapsibles = useMemo(
-    () => panes.filter(p => paneChrome(p).collapsible && inTree.has(p.id) && !hiddenPanes.has(p.id)),
-    [panes, inTree, hiddenPanes]
+  const revealables = useMemo(
+    () => panes.filter(p => paneChrome(p).collapsible && !hiddenPanes.has(p.id)),
+    [panes, hiddenPanes]
   )
 
-  const collapsiblesRef = useRef(collapsibles)
-  collapsiblesRef.current = collapsibles
+  const collapsibles = useMemo(() => revealables.filter(p => inTree.has(p.id)), [revealables, inTree])
+
+  const revealablesRef = useRef(revealables)
+  revealablesRef.current = revealables
 
   // ⌘B / ⌘G's narrow branch dispatches the app's toggle-reveal event with the
   // REAL pane id — accept those via each contribution's revealAliases.
@@ -61,7 +63,7 @@ export function NarrowOverlays() {
         return
       }
 
-      const match = collapsiblesRef.current.find(p => p.id === id || paneChrome(p).revealAliases?.includes(id))
+      const match = revealablesRef.current.find(p => p.id === id || paneChrome(p).revealAliases?.includes(id))
 
       if (!match) {
         return
@@ -101,12 +103,13 @@ export function NarrowOverlays() {
     }
   }, [narrow])
 
-  if (!narrow || collapsibles.length === 0) {
+  const revealed = reveal ? revealables.find(p => p.id === reveal.id) : undefined
+
+  if (!narrow || (collapsibles.length === 0 && !revealed)) {
     return null
   }
 
   const sideOf = (c: Contribution) => (paneChrome(c).placement === 'left' ? 'left' : 'right')
-  const revealed = reveal ? collapsibles.find(p => p.id === reveal.id) : undefined
   const sides = [...new Set(collapsibles.map(sideOf))]
 
   // The revealed pane's ZONE-mates that also left the grid (the sessions zone
