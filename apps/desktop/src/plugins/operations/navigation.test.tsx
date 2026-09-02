@@ -15,6 +15,7 @@ describe('Operations responsive navigation', () => {
       'mailroom',
       'meetings',
       'workspace',
+      'forge',
       'training'
     ])
 
