@@ -118,6 +118,39 @@ describe('click-to-edit user message', () => {
     )
   })
 
+  it('clears the submit cooldown timer when the edit composer unmounts', async () => {
+    const onEdit = vi.fn(async (_message: AppendMessage) => {})
+    const setTimeoutSpy = vi.spyOn(window, 'setTimeout')
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout')
+    const view = render(<IncrementalHarness onEdit={onEdit} />)
+
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit message' }))
+
+      const editor = await screen.findByRole('textbox', { name: 'Edit message' })
+      const callsBeforeSubmit = setTimeoutSpy.mock.calls.length
+      editor.textContent = 'submitted edit'
+      fireEvent.input(editor)
+      fireEvent.keyDown(editor, { key: 'Enter' })
+
+      await waitFor(() => expect(onEdit).toHaveBeenCalledTimes(1))
+
+      const cooldownCall = setTimeoutSpy.mock.calls.findIndex(
+        ([, delay], index) => index >= callsBeforeSubmit && delay === 200
+      )
+
+      expect(cooldownCall).toBeGreaterThanOrEqual(0)
+
+      const cooldownId = setTimeoutSpy.mock.results[cooldownCall]?.value
+      view.unmount()
+
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(cooldownId)
+    } finally {
+      setTimeoutSpy.mockRestore()
+      clearTimeoutSpy.mockRestore()
+    }
+  })
+
   it('keeps a dirty inline edit open when focus leaves the composer', async () => {
     const { container } = render(<IncrementalHarness onEdit={async () => {}} />)
 
