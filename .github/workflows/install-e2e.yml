@@ -9,6 +9,8 @@ name: Install & Update E2E
 #
 # The starting versions are chosen at runtime from the repo's release tags
 # (scripts/sandbox/pick-release-tags.sh): newest, oldest, and a spread between.
+# A repository with no public release tags yet reports a clean no-op; the route
+# matrices start automatically as soon as the first release tag exists.
 # A hardcoded list would stop covering the newest release the day after it
 # ships, and would pin an "oldest" that nobody still runs.
 #
@@ -62,6 +64,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       tags: ${{ steps.pick.outputs.tags }}
+      has_releases: ${{ steps.pick.outputs.has_releases }}
     steps:
       # This job only reads tag names and runs one script, so take the cheap
       # checkout: no blobs (filter), no other files (sparse), but DO fetch tags
@@ -73,15 +76,61 @@ jobs:
           sparse-checkout: scripts/sandbox/pick-release-tags.sh
           sparse-checkout-cone-mode: false
       - id: pick
+        env:
+          TAG_COUNT: ${{ inputs.tag-count || '5' }}
         run: |
           set -euo pipefail
-          tags="$(scripts/sandbox/pick-release-tags.sh --count '${{ inputs.tag-count || 5 }}')"
+          case "$TAG_COUNT" in
+            ''|*[!0-9]*)
+              echo "error: tag-count must be a positive integer" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$TAG_COUNT" -lt 1 ]; then
+            echo "error: tag-count must be at least 1" >&2
+            exit 1
+          fi
+
+          if ! local_refs="$(git tag --list 'v*')"; then
+            echo "error: unable to inspect release tags in the checkout" >&2
+            exit 1
+          fi
+          local_release_tags=''
+          while IFS= read -r tag; do
+            if [[ "$tag" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+              local_release_tags+="$tag"$'\n'
+            fi
+          done <<< "$local_refs"
+
+          if [ -n "$local_release_tags" ]; then
+            tags="$(scripts/sandbox/pick-release-tags.sh --count "$TAG_COUNT")"
+            echo "has_releases=true" >> "$GITHUB_OUTPUT"
+          else
+            if ! remote_refs="$(git ls-remote --tags origin 'refs/tags/v*')"; then
+              echo "error: unable to verify whether the remote contains release tags" >&2
+              exit 1
+            fi
+            remote_release_tags=''
+            while IFS=$'\t' read -r _ ref; do
+              ref="${ref#refs/tags/}"
+              if [[ "$ref" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+                remote_release_tags+="$ref"$'\n'
+              fi
+            done <<< "$remote_refs"
+            if [ -n "$remote_release_tags" ]; then
+              echo "error: release tags exist on origin but are missing from the checkout" >&2
+              exit 1
+            fi
+            echo "::notice::No public release tags exist yet; install/update E2E will start automatically after the first release tag."
+            tags='[]'
+            echo "has_releases=false" >> "$GITHUB_OUTPUT"
+          fi
           echo "Testing updates from: $tags"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
   # `hermes update` -- the route most users take.
   update:
-    if: github.event_name != 'workflow_dispatch' || inputs.route != 'installer'
+    if: needs.pick-releases.outputs.has_releases == 'true' && (github.event_name != 'workflow_dispatch' || inputs.route != 'installer')
     needs: pick-releases
     strategy:
       # One release breaking is worth knowing about even if another already
@@ -97,7 +146,7 @@ jobs:
   # Re-running the curl one-liner over an existing checkout: autostash + pull
   # rather than the updater's own git handling.
   installer:
-    if: github.event_name != 'workflow_dispatch' || inputs.route != 'update'
+    if: needs.pick-releases.outputs.has_releases == 'true' && (github.event_name != 'workflow_dispatch' || inputs.route != 'update')
     needs: pick-releases
     strategy:
       fail-fast: false
