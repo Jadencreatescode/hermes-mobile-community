@@ -31,6 +31,10 @@ const gatewayMocks = vi.hoisted(() => {
   };
 });
 
+const pickerMocks = vi.hoisted(() => ({
+  submit: null as ((cmd: string) => void) | null,
+}));
+
 const reloadMocks = vi.hoisted(() => ({
   maybeReloadForLoopbackWsAuthFailure: vi.fn(() => true),
 }));
@@ -53,13 +57,25 @@ vi.mock("@/lib/gatewayClient", () => ({
   },
 }));
 vi.mock("@/components/ModelPickerDialog", () => ({
-  ModelPickerDialog: () => null,
+  ModelPickerDialog: ({ onSubmit }: { onSubmit?(cmd: string): void }) => {
+    // Record the live onSubmit callback so the test can invoke it
+    // exactly as the real picker would (it fires onSubmit with the
+    // ``/model <id> --provider <slug>`` string).
+    pickerMocks.submit = onSubmit ?? null;
+    return null;
+  },
 }));
 vi.mock("@/components/ReasoningPicker", () => ({
   ReasoningPicker: () => null,
 }));
 vi.mock("@nous-research/ui/ui/components/button", () => ({
-  Button: ({ children }: { children?: ReactNode }) => <button>{children}</button>,
+  Button: ({
+    children,
+    onClick,
+  }: {
+    children?: ReactNode;
+    onClick?: () => void;
+  }) => <button onClick={onClick}>{children}</button>,
 }));
 vi.mock("@nous-research/ui/ui/components/badge", () => ({
   Badge: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
@@ -117,6 +133,7 @@ beforeEach(() => {
     "ws://localhost/api/events?channel=chat-1",
   );
   reloadMocks.maybeReloadForLoopbackWsAuthFailure.mockReturnValue(true);
+  pickerMocks.submit = null;
   vi.stubGlobal("WebSocket", FakeWebSocket);
 });
 
@@ -448,5 +465,82 @@ describe("ChatSidebar event socket reconnect", () => {
 
     await advance(60_000);
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+});
+
+describe("ChatSidebar model switch", () => {
+  it("calls onModelSwitch with /model <id> --provider <slug> when the picker submits", async () => {
+    const { ChatSidebar } = await import("./ChatSidebar");
+
+    const onModelSwitch = vi.fn();
+    await render(
+      <ChatSidebar channel="chat-1" onModelSwitch={onModelSwitch} />,
+    );
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+
+    // Wait for the REST model badge to populate (test/model → label "model")
+    // and find the model-picker button. It's the only button when no error
+    // banner is shown.
+    const modelButton = await vi.waitFor(() => {
+      const btn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent?.includes("model"),
+      );
+      return btn ?? undefined;
+    });
+    expect(modelButton).toBeTruthy();
+
+    // Opening the dialog mounts the mocked ModelPickerDialog, which
+    // records the onSubmit callback it received from ChatSidebar.
+    await act(async () => {
+      modelButton!.click();
+    });
+
+    expect(pickerMocks.submit).not.toBeNull();
+    // Fire onSubmit exactly as the real picker does after a selection.
+    const switchCommand = "/model new-model --provider openrouter";
+    await act(async () => {
+      pickerMocks.submit!(switchCommand);
+    });
+
+    expect(onModelSwitch).toHaveBeenCalledOnce();
+    expect(onModelSwitch).toHaveBeenCalledWith(
+      "/model new-model --provider openrouter",
+    );
+
+    // The badge reflects the picked model immediately (last path segment).
+    expect(container.textContent).toContain("new-model");
+  });
+});
+
+describe("ChatSidebar session.info badge reconciliation", () => {
+  it("updates the badge (effectiveModel) from a session.info event carrying a model field", async () => {
+    const { ChatSidebar } = await import("./ChatSidebar");
+
+    await render(<ChatSidebar channel="chat-1" />);
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+
+    // Initial badge shows the REST model (test/model from the api mock).
+    expect(container.textContent).toContain("model");
+
+    // The events feed broadcasts the PTY session's live model via a
+    // session.info event (rebroadcast by /api/pub + /api/events).
+    // Delivery is a WebSocket message with an event-RPC envelope.
+    await act(async () => {
+      FakeWebSocket.instances[0].emit("message", {
+        data: JSON.stringify({
+          method: "event",
+          params: {
+            type: "session.info",
+            payload: {
+              model: "anthropic/claude-sonnet-4-5",
+              title: "Demo chat",
+            },
+          },
+        }),
+      });
+    });
+
+    // The badge shows the last path segment of the live model.
+    expect(container.textContent).toContain("claude-sonnet-4-5");
   });
 });
