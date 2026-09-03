@@ -55,9 +55,6 @@ vi.mock("@/lib/gatewayClient", () => ({
 vi.mock("@/components/ModelPickerDialog", () => ({
   ModelPickerDialog: () => null,
 }));
-vi.mock("@/components/ModelReloadConfirm", () => ({
-  ModelReloadConfirm: () => null,
-}));
 vi.mock("@/components/ReasoningPicker", () => ({
   ReasoningPicker: () => null,
 }));
