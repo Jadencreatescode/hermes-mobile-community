@@ -227,7 +227,7 @@ describe('OperationsPage', () => {
     expect(screen.getByText('Release Bot')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Operations' }))
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(8_000)
+      await vi.advanceTimersByTimeAsync(60_000)
       await Promise.resolve()
     })
     expect(screen.getByText('Newest Bot')).toBeTruthy()

@@ -1,7 +1,7 @@
 import { cleanup } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { FORGE_BOARD_SLUG, fetchForgeBoard } from './forge-data'
+import { fetchForgeBoard, FORGE_BOARD_SLUG } from './forge-data'
 
 afterEach(cleanup)
 
