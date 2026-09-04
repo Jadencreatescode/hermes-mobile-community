@@ -166,21 +166,17 @@ export async function loadOperationsSnapshot(
         const [profilesResult, sessionsResult, tasksResult, diagnosticsResult] = await Promise.all([
           host.requestProfile<{ profiles?: ProfileSummary[] }>(route, 'profiles.list', { include_sessions: true }),
           host.requestProfile<{ sessions?: LiveSession[] }>(route, 'session.active_list', {}),
-          host.requestProfile<CliResult>(route, 'cli.exec', { argv: ['kanban', 'list', '--json'], timeout: 30 }),
-          host.requestProfile<CliResult>(route, 'cli.exec', { argv: ['kanban', 'diagnostics', '--json'], timeout: 30 })
+          host.requestProfile<{ tasks?: KanbanTask[]; count?: number }>(route, 'kanban.board', { assignee: agent.profile }),
+          host.requestProfile<{ diagnostics?: Array<{ task_id?: string; diagnostics?: Array<{ resolved?: boolean; severity?: string }> }>; count?: number }>(route, 'kanban.diagnostics', {})
         ])
 
         profile = profilesResult.profiles?.find(row => row.name === agent.profile)
         live = sessionsResult.sessions ?? []
-        tasks = parseCliList<KanbanTask>(tasksResult).filter(task => task.assignee === agent.profile)
+        tasks = (tasksResult.tasks ?? []).filter(task => task.assignee === agent.profile)
 
-        const diagnostics = parseCliList<{
-          assignee?: string
-          diagnostics?: Array<{ resolved?: boolean; severity?: string }>
-          task_id?: string
-        }>(diagnosticsResult)
+        const diagnosticsRows = diagnosticsResult.diagnostics ?? []
 
-        const byTask = new Map(diagnostics.map(row => [row.task_id, row.diagnostics ?? []]))
+        const byTask = new Map(diagnosticsRows.map(row => [row.task_id, row.diagnostics ?? []]))
         tasks = tasks.map(task => ({ ...task, diagnostics: byTask.get(task.id) ?? task.diagnostics }))
       } catch (error) {
         detailsReachable = false

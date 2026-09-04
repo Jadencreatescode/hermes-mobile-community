@@ -505,6 +505,21 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     termRef.current?.focus();
   };
 
+  // Deliver a session-scoped /model switch into the running PTY chat. The
+  // dashboard chat rides a `hermes --tui` PTY, so the switch is typed into
+  // that PTY (session-scoped) rather than written to the profile default.
+  // Mirrors handleCopyLast's burst-then-Return timing so Ink tokenizes the
+  // line instead of coalescing it into a paste.
+  const handleModelSwitch = useCallback((switchCommand: string) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(switchCommand);
+    setTimeout(() => {
+      const s = wsRef.current;
+      if (s && s.readyState === WebSocket.OPEN) s.send("\r");
+    }, 100);
+  }, []);
+
   useEffect(() => {
     // Don't spawn the chat PTY (and the TUI/agent bootstrap it triggers)
     // until the chat tab has been activated. Prevents the persistently
@@ -1755,6 +1770,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
                 profile={scopedProfile}
                 onDashboardNewSessionRequest={startFreshDashboardChat}
                 onSessionTitleChange={handleSessionTitleChange}
+                onModelSwitch={handleModelSwitch}
               />
             </div>
             <ChatSessionList
@@ -1927,6 +1943,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
                 profile={scopedProfile}
                 onDashboardNewSessionRequest={startFreshDashboardChat}
                 onSessionTitleChange={handleSessionTitleChange}
+                onModelSwitch={handleModelSwitch}
               />
             </div>
 

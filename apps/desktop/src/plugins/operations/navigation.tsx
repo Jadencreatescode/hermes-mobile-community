@@ -5,6 +5,7 @@ export const OPERATIONS_SECTIONS = [
   { id: 'mailroom', label: 'Mailroom' },
   { id: 'meetings', label: 'Meetings' },
   { id: 'workspace', label: 'Agent Workspace' },
+  { id: 'forge', label: 'Forge' },
   { id: 'training', label: 'Training' }
 ] as const
 

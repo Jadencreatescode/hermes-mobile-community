@@ -7,9 +7,22 @@ const { loadOperationsRoutines, loadOperationsSnapshot, navigate } = vi.hoisted(
   navigate: vi.fn()
 }))
 
+const forgeBoard = vi.hoisted(() => ({
+  columns: [
+    { name: 'ready', tasks: [{ id: 't_forge01', title: 'Ship the forge panel', status: 'ready' }] }
+  ],
+  assignees: [],
+  tenants: []
+}))
+
 vi.mock('./data', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadOperationsSnapshot
+}))
+
+vi.mock('./forge-data', () => ({
+  FORGE_BOARD_SLUG: 'hermes-forge',
+  fetchForgeBoard: vi.fn(async () => forgeBoard)
 }))
 
 vi.mock('./routines', async importOriginal => ({
@@ -40,7 +53,8 @@ vi.mock('@hermes/plugin-sdk', async importOriginal => {
         subagents: atom({})
       },
       status: vi.fn()
-    }
+    },
+    useQuery: () => ({ data: forgeBoard, error: null, isLoading: false })
   }
 })
 
@@ -139,6 +153,18 @@ describe('OperationsPage', () => {
     expect(container.textContent).not.toMatch(/screen takeover|remote control/i)
   })
 
+  it('routes the forge section to the read-only Forge Kanban view', async () => {
+    loadOperationsSnapshot.mockResolvedValue(snapshot)
+    loadOperationsRoutines.mockResolvedValue(routines)
+
+    render(<OperationsPage />)
+    await screen.findByText('Release Bot')
+    fireEvent.change(screen.getByLabelText('Operations section'), { target: { value: 'forge' } })
+
+    expect(await screen.findByRole('heading', { name: 'Forge' })).toBeTruthy()
+    expect(await screen.findByText('Ship the forge panel')).toBeTruthy()
+  })
+
   it('renders bounded structured meetings over the existing public Bot roster', async () => {
     loadOperationsSnapshot.mockResolvedValue({
       ...snapshot,
@@ -201,7 +227,7 @@ describe('OperationsPage', () => {
     expect(screen.getByText('Release Bot')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Operations' }))
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(8_000)
+      await vi.advanceTimersByTimeAsync(60_000)
       await Promise.resolve()
     })
     expect(screen.getByText('Newest Bot')).toBeTruthy()
