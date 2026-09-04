@@ -10,7 +10,7 @@ import { type OperationsDelegation, OperationsOverview } from './overview'
 import { loadOperationsRoutines, type OperationsRoutinesSnapshot } from './routines'
 import { WorkspaceView } from './workspace-view'
 
-const REFRESH_MS = 8_000
+const REFRESH_MS = 60_000
 
 const EMPTY_ROUTINES: OperationsRoutinesSnapshot = {
   failures: [],

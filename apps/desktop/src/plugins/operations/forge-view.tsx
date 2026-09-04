@@ -156,7 +156,7 @@ export function ForgeView() {
   const { data, error, isLoading } = useQuery({
     queryFn: fetchForgeBoard,
     queryKey: ['operations', 'forge', FORGE_BOARD_SLUG],
-    refetchInterval: 8_000
+    refetchInterval: 60_000
   })
 
   const columns = useMemo(() => {
