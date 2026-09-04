@@ -88,6 +88,13 @@ interface Props {
   title?: string;
   /** If true, hides "Persist globally" checkbox — always saves to config.yaml. */
   alwaysGlobal?: boolean;
+  /**
+   * If true, the picker is scoped to the current chat: the "Persist globally"
+   * checkbox is hidden and the switch never carries `--global`, so it applies
+   * to this session only and never touches the profile default. Used by the
+   * dashboard chat sidebar, where the profile default is set from Settings.
+   */
+  sessionScoped?: boolean;
 }
 
 export function ModelPickerDialog(props: Props) {
@@ -100,6 +107,7 @@ export function ModelPickerDialog(props: Props) {
     onClose,
     title = "Switch Model",
     alwaysGlobal = false,
+    sessionScoped = false,
   } = props;
   const standalone = !!loader && !!onApply;
 
@@ -111,7 +119,12 @@ export function ModelPickerDialog(props: Props) {
   const [selectedSlug, setSelectedSlug] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   const [query, setQuery] = useState("");
-  const [persistGlobal, setPersistGlobal] = useState(alwaysGlobal);
+  // A session-scoped picker is per-chat only: pin persistGlobal off so the
+  // emitted switch never carries `--global` and never writes the profile
+  // default. `alwaysGlobal` (standalone config paths) still pins it on.
+  const [persistGlobal, setPersistGlobal] = useState(
+    sessionScoped ? false : alwaysGlobal,
+  );
   const [applying, setApplying] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [pendingConfirm, setPendingConfirm] =
@@ -429,11 +442,13 @@ export function ModelPickerDialog(props: Props) {
         </div>
 
         <footer className="border-t border-border p-3 flex items-center justify-between gap-3 flex-wrap">
-          {alwaysGlobal ? (
-            <span className="text-xs text-muted-foreground">
-              Saves to config.yaml — applies to new sessions.
-            </span>
-          ) : (
+        {alwaysGlobal || sessionScoped ? (
+          <span className="text-xs text-muted-foreground">
+            {sessionScoped
+              ? "Applies to this chat only."
+              : "Saves to config.yaml — applies to new sessions."}
+          </span>
+        ) : (
             <div className="flex items-center gap-2">
               <Checkbox
                 checked={persistGlobal}
