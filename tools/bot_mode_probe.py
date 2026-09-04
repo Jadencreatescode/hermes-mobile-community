@@ -139,14 +139,37 @@ def _profile_role(profile_dir: Path) -> str:
 
 
 def _roster_lines(root: Path, me: str) -> list[str]:
-    """One '- `@handle` — role' line per teammate (excluding ``me``)."""
+    """One '- `@handle` — role' line per teammate (excluding ``me``).
+
+    Includes both local Bot-Mode-managed profiles and verified connected
+    agents from the AgentRegistry (tools/connected_agent_import.py).
+    """
     lines = []
+    # Local profiles
     for name, profile_dir in _roster(root):
         if name == me:
             continue
         role = _profile_role(profile_dir)
         handle = _handle(name)
         lines.append(f"- `@{handle}`" + (f" — {role}" if role else ""))
+
+    # Verified connected agents
+    try:
+        from tools.connected_agent_bot_integration import BotRoster
+
+        roster = BotRoster(hermes_home=root)
+        for entry in roster.list_entries(root, me):
+            if entry.provider == "local":
+                continue  # already listed above
+            role = entry.role
+            provider_tag = f" ({entry.provider})" if entry.provider else ""
+            lines.append(
+                f"- `@{entry.handle}`{provider_tag}"
+                + (f" — {role}" if role else "")
+            )
+    except Exception:
+        pass
+
     return lines
 
 
@@ -329,6 +352,17 @@ def capability_fingerprint(home: str | os.PathLike | None = None) -> str:
         )
     except Exception:
         surface["roster"] = []
+    try:
+        # Connected agents are part of the messaging surface: adding or
+        # removing a verified connected agent must refresh Bot Chat prompts.
+        from tools.connected_agent_bot_integration import BotRoster
+
+        connected = BotRoster(hermes_home=_hermes_root(resolved)).list_entries(_hermes_root(resolved), "default")
+        surface["connected_agents"] = sorted(
+            f"{e.agent_id}:{e.handle}:{e.provider}:{e.role}" for e in connected if e.provider != "local"
+        )
+    except Exception:
+        surface["connected_agents"] = []
     # Protocol-text version salt: bumping this refreshes every eternal Bot
     # Chat prompt ONCE so existing bots adopt a new protocol section (e.g.
     # the v2 message_agent tool replacing the shellout instructions).
