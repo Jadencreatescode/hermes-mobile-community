@@ -1,7 +1,7 @@
 import { Button, Codicon, ErrorState, host, Loader, useValue } from '@hermes/plugin-sdk'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { loadOperationsSnapshot, type OperationsSnapshot } from './data'
+import { loadConnectedAgents, loadOperationsSnapshot, type OperationsSnapshot } from './data'
 import { ForgeView } from './forge-view'
 import { MailroomView } from './mailroom-view'
 import { MeetingsView } from './meetings-view'
@@ -10,7 +10,7 @@ import { type OperationsDelegation, OperationsOverview } from './overview'
 import { loadOperationsRoutines, type OperationsRoutinesSnapshot } from './routines'
 import { WorkspaceView } from './workspace-view'
 
-const REFRESH_MS = 60_000
+const REFRESH_MS = 8_000
 
 const EMPTY_ROUTINES: OperationsRoutinesSnapshot = {
   failures: [],
@@ -65,8 +65,10 @@ export function OperationsPage() {
     }
 
     try {
+      const connectedAgents = await loadConnectedAgents()
+
       const [nextSnapshot, nextRoutines] = await Promise.all([
-        loadOperationsSnapshot(host, { delegatedBySession: delegatedBySession as never }),
+        loadOperationsSnapshot(host, { connectedAgents, delegatedBySession: delegatedBySession as never }),
         loadOperationsRoutines(host)
       ])
 

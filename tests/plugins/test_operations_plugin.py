@@ -596,3 +596,67 @@ def test_meeting_api_persists_versioned_records_and_returns_conflicts(tmp_path, 
     )
     assert conflict.status_code == 409
     assert set(conflict.json()) == {"detail"}
+
+
+def test_connected_agents_endpoint_returns_verified_only_and_hides_local(tmp_path, monkeypatch):
+    import sys
+    fake_module = type(sys)('tools.connected_agent_bot_integration')
+
+    class FakeEntry:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    class FakeRoster:
+        def __init__(self, **kwargs):
+            pass
+        def list_entries(self, home, profile):
+            return [
+                FakeEntry(agent_id="a1", capabilities=["chat"], display_name="Alpha", handle="alpha", provider="hermes", role="builder", stale=False, verified=True),
+                FakeEntry(agent_id="a2", capabilities=[], display_name="Beta", handle="beta", provider="claude-code", role="reviewer", stale=True, verified=True),
+                FakeEntry(agent_id="a3", capabilities=[], display_name="Gamma", handle="gamma", provider="local", role="local", stale=False, verified=True),
+                FakeEntry(agent_id="a4", capabilities=[], display_name="Delta", handle="delta", provider="opencode", role="coder", stale=False, verified=False),
+            ]
+
+    fake_module.BotRoster = FakeRoster
+    sys.modules['tools.connected_agent_bot_integration'] = fake_module
+
+    api = load_api()
+    monkeypatch.setattr(api, "get_hermes_home", lambda: str(tmp_path))
+    app = FastAPI()
+    app.include_router(api.router)
+
+    response = asyncio.run(request_json(app, "GET", "/connected-agents"))
+    assert response.status_code == 200
+    agents = response.json()["agents"]
+    handles = [a["handle"] for a in agents]
+    assert "alpha" in handles
+    assert "beta" in handles
+    assert "gamma" not in handles  # local provider is filtered out
+    assert "delta" not in handles  # unverified is filtered out
+    assert all(a["verified"] for a in agents)
+    assert agents[1]["stale"] is True
+
+    del sys.modules['tools.connected_agent_bot_integration']
+
+
+def test_connected_agents_endpoint_gracefully_returns_empty_on_import_failure(tmp_path, monkeypatch):
+    import sys
+    fake_module = type(sys)('tools.connected_agent_bot_integration')
+
+    def broken_import(*args, **kwargs):
+        raise ImportError("No connected agent module")
+
+    fake_module.BotRoster = broken_import
+    sys.modules['tools.connected_agent_bot_integration'] = fake_module
+
+    api = load_api()
+    monkeypatch.setattr(api, "get_hermes_home", lambda: str(tmp_path))
+    app = FastAPI()
+    app.include_router(api.router)
+
+    response = asyncio.run(request_json(app, "GET", "/connected-agents"))
+    assert response.status_code == 200
+    assert response.json()["agents"] == []
+
+    del sys.modules['tools.connected_agent_bot_integration']

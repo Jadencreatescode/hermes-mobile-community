@@ -1,3 +1,4 @@
+import { operationsApi } from './api'
 import { mapOperationsAgentState, type OperationsAgentState, type OperationsAssignmentEvidence } from './state'
 
 interface RosterAgent {
@@ -6,6 +7,17 @@ interface RosterAgent {
   connectionLabel: string
   handle: string
   profile: string
+}
+
+interface ConnectedAgent {
+  agent_id: string | null
+  capabilities: string[]
+  display_name: string
+  handle: string
+  provider: string
+  role: string
+  stale: boolean
+  verified: boolean
 }
 
 interface RosterSource {
@@ -131,9 +143,36 @@ function routeFor(agent: RosterAgent) {
   }
 }
 
+export async function loadConnectedAgents(): Promise<ConnectedAgent[]> {
+  try {
+    const result = await operationsApi()<{ agents?: ConnectedAgent[] }>('/connected-agents')
+
+    return result.agents ?? []
+  } catch {
+    return []
+  }
+}
+
+function connectedAgentToModel(agent: ConnectedAgent): OperationsAgentModel {
+  const provider = agent.provider || 'unknown'
+
+  return {
+    assignments: [],
+    displayName: agent.display_name || agent.handle,
+    id: `connected::${agent.handle}`,
+    profile: agent.handle,
+    sourceId: provider,
+    sourceKind: 'connected',
+    sourceLabel: provider.charAt(0).toUpperCase() + provider.slice(1),
+    state: agent.stale ? 'unknown' : 'idle',
+    workSummary: agent.role || 'Connected agent'
+  }
+}
+
 export async function loadOperationsSnapshot(
   host: OperationsHost,
   options: {
+    connectedAgents?: ConnectedAgent[]
     delegatedBySession?: Record<string, DelegatedAgentEvidence[]>
     nowMs?: number
   } = {}
@@ -241,6 +280,8 @@ export async function loadOperationsSnapshot(
     })
   )
 
+  const connectedModels = (options.connectedAgents ?? []).map(connectedAgentToModel)
+
   const sources = roster.sources.map(source => ({
     error: source.error,
     id: source.connectionId,
@@ -253,5 +294,9 @@ export async function loadOperationsSnapshot(
       | 'online'
   }))
 
-  return { agents, partialFailures: [...new Set(partialFailures)], sources }
+  return {
+    agents: [...agents, ...connectedModels],
+    partialFailures: [...new Set(partialFailures)],
+    sources
+  }
 }

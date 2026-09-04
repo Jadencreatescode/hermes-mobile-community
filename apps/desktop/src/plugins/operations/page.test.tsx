@@ -1,7 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { loadOperationsRoutines, loadOperationsSnapshot, navigate } = vi.hoisted(() => ({
+const { loadConnectedAgents, loadOperationsRoutines, loadOperationsSnapshot, navigate } = vi.hoisted(() => ({
+  loadConnectedAgents: vi.fn(),
   loadOperationsRoutines: vi.fn(),
   loadOperationsSnapshot: vi.fn(),
   navigate: vi.fn()
@@ -17,6 +18,7 @@ const forgeBoard = vi.hoisted(() => ({
 
 vi.mock('./data', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
+  loadConnectedAgents,
   loadOperationsSnapshot
 }))
 
@@ -88,6 +90,7 @@ const routines = { failures: [], routines: [], successfulSources: 1 }
 
 describe('OperationsPage', () => {
   it('loads the existing Hermes authorities and renders the verified overview', async () => {
+    loadConnectedAgents.mockResolvedValue([])
     loadOperationsSnapshot.mockResolvedValue(snapshot)
     loadOperationsRoutines.mockResolvedValue(routines)
 
@@ -101,6 +104,7 @@ describe('OperationsPage', () => {
   })
 
   it('links Training to the existing public Training Mode rather than a private capture implementation', async () => {
+    loadConnectedAgents.mockResolvedValue([])
     loadOperationsSnapshot.mockResolvedValue(snapshot)
     loadOperationsRoutines.mockResolvedValue(routines)
 
@@ -114,6 +118,7 @@ describe('OperationsPage', () => {
   })
 
   it('renders the touch-safe Mailroom only for profiles local to its authenticated API host', async () => {
+    loadConnectedAgents.mockResolvedValue([])
     loadOperationsSnapshot.mockResolvedValue({
       ...snapshot,
       agents: [
@@ -141,6 +146,7 @@ describe('OperationsPage', () => {
   })
 
   it('opens the exact public Agent Workspace surface without exposing takeover controls', async () => {
+    loadConnectedAgents.mockResolvedValue([])
     loadOperationsSnapshot.mockResolvedValue(snapshot)
     loadOperationsRoutines.mockResolvedValue(routines)
 
@@ -154,6 +160,7 @@ describe('OperationsPage', () => {
   })
 
   it('routes the forge section to the read-only Forge Kanban view', async () => {
+    loadConnectedAgents.mockResolvedValue([])
     loadOperationsSnapshot.mockResolvedValue(snapshot)
     loadOperationsRoutines.mockResolvedValue(routines)
 
@@ -166,6 +173,7 @@ describe('OperationsPage', () => {
   })
 
   it('renders bounded structured meetings over the existing public Bot roster', async () => {
+    loadConnectedAgents.mockResolvedValue([])
     loadOperationsSnapshot.mockResolvedValue({
       ...snapshot,
       agents: [
@@ -190,6 +198,7 @@ describe('OperationsPage', () => {
   })
 
   it('keeps the last verified snapshot visible when a later refresh fails', async () => {
+    loadConnectedAgents.mockResolvedValue([])
     loadOperationsSnapshot.mockResolvedValueOnce(snapshot).mockRejectedValueOnce(new Error('refresh failed'))
     loadOperationsRoutines.mockResolvedValue(routines)
 
@@ -216,6 +225,7 @@ describe('OperationsPage', () => {
       agents: [{ ...snapshot.agents[0], displayName: 'Stale Bot', profile: 'stale' }]
     }
 
+    loadConnectedAgents.mockResolvedValue([])
     loadOperationsSnapshot
       .mockResolvedValueOnce(snapshot)
       .mockReturnValueOnce(older)
@@ -227,7 +237,7 @@ describe('OperationsPage', () => {
     expect(screen.getByText('Release Bot')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Operations' }))
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000)
+      await vi.advanceTimersByTimeAsync(8_010)
       await Promise.resolve()
     })
     expect(screen.getByText('Newest Bot')).toBeTruthy()
