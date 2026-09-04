@@ -2574,6 +2574,103 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 5003, str(e))
 
 
+# ---------------------------------------------------------------------------
+# Kanban board + diagnostics — direct in-process reads so the Operations
+# plugin doesn't have to shell out cli.exec (which cold-starts Python per
+# tick, one per profile).  These are the architectural fix for issue #34.
+# ---------------------------------------------------------------------------
+
+@method("kanban.board")
+def _(rid, params: dict) -> dict:
+    """Return the full Kanban board grouped by status column.
+
+    Params (all optional):
+      board      - board slug (omit for current/default)
+      tenant     - filter to one tenant
+      assignee   - filter to one assignee
+      include_archived - bool (default false)
+    """
+    try:
+        from hermes_cli import kanban_db as kb
+
+        board_slug = params.get("board") or None
+        tenant = params.get("tenant") or None
+        assignee = params.get("assignee") or None
+        include_archived = bool(params.get("include_archived", False))
+
+        with kb.connect_closing(board=board_slug) as conn:
+            kb.recompute_ready(conn)
+            tasks = kb.list_tasks(
+                conn,
+                tenant=tenant,
+                assignee=assignee,
+                include_archived=include_archived,
+            )
+            # Batch-fetch latest run summaries in one query.
+            summary_map = kb.latest_summaries(conn, [t.id for t in tasks])
+            task_list = [
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "status": t.status,
+                    "assignee": t.assignee,
+                    "priority": t.priority,
+                    "latest_summary": summary_map.get(t.id),
+                }
+                for t in tasks
+            ]
+
+        return _ok(rid, {"tasks": task_list, "count": len(task_list)})
+    except Exception as e:
+        return _err(rid, 5060, str(e))
+
+
+@method("kanban.diagnostics")
+def _(rid, params: dict) -> dict:
+    """Return active diagnostics for every task on the board.
+
+    Params (all optional):
+      board    - board slug (omit for current/default)
+      severity - filter: warning | error | critical
+    """
+    try:
+        from hermes_cli import kanban_db as kb
+        from hermes_cli import kanban_diagnostics as kd
+        from hermes_cli.config import load_config
+
+        board_slug = params.get("board") or None
+        severity = params.get("severity") or None
+        diag_config = kd.config_from_runtime_config(load_config())
+
+        with kb.connect_closing(board=board_slug) as conn:
+            tasks = kb.list_tasks(conn, include_archived=False)
+            out = []
+            for task in tasks:
+                events = kb.list_events(conn, task.id)
+                runs = kb.list_runs(conn, task.id)
+                graph = kb.task_graph_context(conn, task.id)
+                diags = kd.compute_task_diagnostics(
+                    task, events, runs, graph=graph, config=diag_config
+                )
+                if not diags:
+                    continue
+                if severity:
+                    diags = [d for d in diags if kd.severity_at_or_above(d.severity, severity)]
+                if not diags:
+                    continue
+                out.append({
+                    "task_id": task.id,
+                    "task_title": task.title,
+                    "task_status": task.status,
+                    "task_assignee": task.assignee,
+                    "diagnostics": [d.to_dict() for d in diags],
+                })
+
+        return _ok(rid, {"diagnostics": out, "count": sum(len(r["diagnostics"]) for r in out)})
+    except Exception as e:
+        return _err(rid, 5061, str(e))
+
+
 def register(server) -> None:
     """Bind this module's handlers onto ``server``'s globals and registry."""
     _registry.install(server)

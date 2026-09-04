@@ -329,6 +329,13 @@ _LONG_HANDLERS = frozenset(
         "shell.exec",
         "skills.manage",
         "slash.exec",
+        # kanban.board reads the kanban SQLite DB (disk I/O + recompute_ready
+        # logic); kanban.diagnostics iterates every task running the rule
+        # engine.  Both can take hundreds of milliseconds on a busy board.
+        # Keep them off the WS reader thread so a slow disk can't stall
+        # prompt.submit / session.interrupt queued behind them.
+        "kanban.board",
+        "kanban.diagnostics",
     }
 )
 
