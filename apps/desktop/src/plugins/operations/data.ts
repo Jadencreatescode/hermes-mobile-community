@@ -1,4 +1,5 @@
 import { operationsApi } from './api'
+import { record } from './contracts'
 import { mapOperationsAgentState, type OperationsAgentState, type OperationsAssignmentEvidence } from './state'
 
 interface RosterAgent {
@@ -299,4 +300,90 @@ export async function loadOperationsSnapshot(
     partialFailures: [...new Set(partialFailures)],
     sources
   }
+}
+
+// ── A2A harness agent types ─────────────────────────────────────────────────
+
+export type A2AConnectionStatus = 'pending' | 'verified' | 'degraded'
+
+export interface HarnessAgent {
+  agentId: string
+  name: string
+  status: A2AConnectionStatus
+  capabilities: string[]
+}
+
+export interface AgentCard {
+  url: string
+  name: string
+  description?: string
+}
+
+// ── A2A harness agent reads ─────────────────────────────────────────────────
+
+export async function listA2AAgents(): Promise<HarnessAgent[]> {
+  const response = await operationsApi()<{ agents?: unknown[] }>('/agents/a2a')
+
+  return (response.agents ?? []).map(normalizeHarnessAgent)
+}
+
+export async function getA2AAgentStatus(agentId: string): Promise<HarnessAgent> {
+  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/status`)
+
+  return normalizeHarnessAgent(response)
+}
+
+// ── A2A harness agent writes ────────────────────────────────────────────────
+
+export async function registerA2AAgent(url: string, confirm = false): Promise<HarnessAgent> {
+  const normalized = url.trim()
+
+  if (!normalized || normalized.length > 2048) {
+    throw new Error('A2A URL is invalid')
+  }
+
+  try {
+    const parsed = new URL(normalized)
+
+    if (parsed.protocol !== 'https:') {
+      throw new Error('A2A URL is invalid')
+    }
+  } catch {
+    throw new Error('A2A URL is invalid')
+  }
+
+  const response = await operationsApi()<unknown>('/agents/a2a/register', {
+    method: 'POST',
+    body: { url: normalized, confirm }
+  })
+
+  return normalizeHarnessAgent(response)
+}
+
+export async function removeA2AAgent(agentId: string): Promise<{ agentId: string; deleted: boolean }> {
+  const response = await operationsApi()<{ agent_id?: unknown; deleted?: unknown }>(
+    `/agents/a2a/${encodeURIComponent(agentId)}`,
+    { method: 'DELETE' }
+  )
+
+  return {
+    agentId: typeof response.agent_id === 'string' ? response.agent_id : agentId,
+    deleted: response.deleted === true
+  }
+}
+
+// ── normalization ───────────────────────────────────────────────────────────
+
+function normalizeHarnessAgent(value: unknown): HarnessAgent {
+  const row = record(value)
+  const agentId = typeof row.agent_id === 'string' ? row.agent_id : ''
+  const name = typeof row.name === 'string' ? row.name : ''
+  const rawStatus = typeof row.status === 'string' ? row.status : ''
+  const status: A2AConnectionStatus = ['pending', 'verified', 'degraded'].includes(rawStatus)
+    ? (rawStatus as A2AConnectionStatus)
+    : 'degraded'
+  const rawCapabilities = Array.isArray(row.capabilities) ? row.capabilities : []
+  const capabilities = rawCapabilities.filter((c: unknown): c is string => typeof c === 'string')
+
+  return { agentId, name, status, capabilities }
 }
