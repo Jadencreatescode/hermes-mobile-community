@@ -106,4 +106,44 @@ describe('ControlRoomView', () => {
 
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Could not load A2A agents'))
   })
+
+  it('shows status counts for verified pending and degraded', async () => {
+    listA2AAgents.mockResolvedValue([
+      { agentId: 'a2a:one', name: 'Agent One', status: 'verified', capabilities: ['chat'] },
+      { agentId: 'a2a:two', name: 'Agent Two', status: 'pending', capabilities: [] },
+      { agentId: 'a2a:three', name: 'Agent Three', status: 'degraded', capabilities: [] }
+    ])
+
+    render(<ControlRoomView />)
+
+    await waitFor(() => expect(screen.getByText('Agent One')).toBeTruthy())
+    // Status counts visible in the count grid
+    const counts = screen.getAllByText('1')
+    expect(counts.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('shows agent capabilities as comma-separated text', async () => {
+    listA2AAgents.mockResolvedValue([
+      { agentId: 'a2a:multi', name: 'Multi', status: 'verified', capabilities: ['chat.send', 'agent.view', 'run.assign'] }
+    ])
+
+    render(<ControlRoomView />)
+
+    await waitFor(() => expect(screen.getByText('Multi')).toBeTruthy())
+    expect(screen.getByText(/chat.send/)).toBeTruthy()
+    expect(screen.getByText(/agent.view/)).toBeTruthy()
+  })
+
+  it('removes agent from list after successful delete', async () => {
+    listA2AAgents.mockResolvedValue([
+      { agentId: 'a2a:one', name: 'Agent One', status: 'verified', capabilities: [] }
+    ])
+    removeA2AAgent.mockResolvedValue({ agentId: 'a2a:one', deleted: true })
+
+    render(<ControlRoomView />)
+    await waitFor(() => expect(screen.getByText('Agent One')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /Remove Agent One/i }))
+
+    await waitFor(() => expect(screen.queryByText('Agent One')).toBeNull())
+  })
 })

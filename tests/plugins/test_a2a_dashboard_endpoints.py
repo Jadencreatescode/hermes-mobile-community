@@ -339,3 +339,191 @@ class TestA2ARateLimiting:
         resp = asyncio.run(request_json(app, "GET", "/agents/a2a"))
         assert resp.status_code == 429
         assert resp.json()["detail"] == "a2a_rate_limited"
+
+
+class TestA2ARegisterEdgeCases:
+    def test_register_rejects_non_https_url(self, api_module):
+        app = FastAPI()
+        app.include_router(api_module.router)
+
+        resp = asyncio.run(
+            request_json(
+                app,
+                "POST",
+                "/agents/a2a/register",
+                {"url": "http://example.com/agent"},
+            )
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "a2a_destination_not_allowed"
+
+    def test_register_rejects_url_with_credentials(self, api_module):
+        app = FastAPI()
+        app.include_router(api_module.router)
+
+        resp = asyncio.run(
+            request_json(
+                app,
+                "POST",
+                "/agents/a2a/register",
+                {"url": "https://user:pass@example.com/agent"},
+            )
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "a2a_destination_not_allowed"
+
+    def test_register_rejects_localhost(self, api_module):
+        app = FastAPI()
+        app.include_router(api_module.router)
+
+        resp = asyncio.run(
+            request_json(
+                app,
+                "POST",
+                "/agents/a2a/register",
+                {"url": "https://127.0.0.1/agent"},
+            )
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "a2a_destination_not_allowed"
+
+    def test_register_rejects_blocked_ipv6(self, api_module):
+        app = FastAPI()
+        app.include_router(api_module.router)
+
+        resp = asyncio.run(
+            request_json(
+                app,
+                "POST",
+                "/agents/a2a/register",
+                {"url": "https://[::1]/agent"},
+            )
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "a2a_destination_not_allowed"
+
+    def test_register_rejects_malformed_url(self, api_module):
+        app = FastAPI()
+        app.include_router(api_module.router)
+
+        resp = asyncio.run(
+            request_json(
+                app,
+                "POST",
+                "/agents/a2a/register",
+                {"url": "not-a-url"},
+            )
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "a2a_destination_not_allowed"
+
+
+class TestA2AListEdgeCases:
+    def test_list_empty_returns_empty_array(self, api_module):
+        app = FastAPI()
+        app.include_router(api_module.router)
+
+        resp = asyncio.run(request_json(app, "GET", "/agents/a2a"))
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["agents"] == []
+
+
+class TestA2AStatusExtended:
+    def test_status_includes_capabilities_when_verified(self, api_module, tmp_path):
+        app = FastAPI()
+        app.include_router(api_module.router)
+
+        from plugins.harness_agents.registry import HarnessRegistry
+
+        reg = HarnessRegistry(tmp_path / "harness_agents.db")
+        reg.create_agent(
+            {
+                "id": "a2a:status-verified",
+                "name": "Verified Agent",
+                "handle": "verified-agent",
+                "description": "",
+                "harness": "generic_a2a",
+                "host_id": "example.com",
+                "host_label": "example.com",
+                "connector_url": "https://example.com/agent",
+                "auth_env": "",
+                "team_id": "",
+            }
+        )
+        reg.mark_verified(
+            "a2a:status-verified",
+            native_agent_id="n1",
+            native_session_id="s1",
+            mirror_session_id="m1",
+            capabilities=["agent.view", "chat.send"],
+        )
+        reg.close()
+
+        resp = asyncio.run(request_json(app, "GET", "/agents/a2a/a2a:status-verified/status"))
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["status"] == "verified"
+        assert "agent.view" in payload["capabilities"]
+
+    def test_status_omits_connector_url(self, api_module, tmp_path):
+        app = FastAPI()
+        app.include_router(api_module.router)
+
+        from plugins.harness_agents.registry import HarnessRegistry
+
+        reg = HarnessRegistry(tmp_path / "harness_agents.db")
+        reg.create_agent(
+            {
+                "id": "a2a:status-safe",
+                "name": "Safe Agent",
+                "handle": "safe-agent",
+                "description": "",
+                "harness": "generic_a2a",
+                "host_id": "example.com",
+                "host_label": "example.com",
+                "connector_url": "https://example.com/agent",
+                "auth_env": "",
+                "team_id": "",
+            }
+        )
+        reg.close()
+
+        resp = asyncio.run(request_json(app, "GET", "/agents/a2a/a2a:status-safe/status"))
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert "connector_url" not in json.dumps(payload)
+        assert "auth_env" not in json.dumps(payload)
+
+
+class TestA2ADeleteExtended:
+    def test_delete_already_deleted_returns_404(self, api_module, tmp_path):
+        app = FastAPI()
+        app.include_router(api_module.router)
+
+        from plugins.harness_agents.registry import HarnessRegistry
+
+        reg = HarnessRegistry(tmp_path / "harness_agents.db")
+        reg.create_agent(
+            {
+                "id": "a2a:del-twice",
+                "name": "Del Twice",
+                "handle": "del-twice",
+                "description": "",
+                "harness": "generic_a2a",
+                "host_id": "example.com",
+                "host_label": "example.com",
+                "connector_url": "https://example.com/agent",
+                "auth_env": "",
+                "team_id": "",
+            }
+        )
+        reg.close()
+
+        resp1 = asyncio.run(request_json(app, "DELETE", "/agents/a2a/a2a:del-twice"))
+        assert resp1.status_code == 200
+        assert resp1.json()["deleted"] is True
+
+        resp2 = asyncio.run(request_json(app, "DELETE", "/agents/a2a/a2a:del-twice"))
+        assert resp2.status_code == 404
+        assert resp2.json()["detail"] == "a2a_agent_not_found"

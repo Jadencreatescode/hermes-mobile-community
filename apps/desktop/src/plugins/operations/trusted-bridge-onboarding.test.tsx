@@ -98,4 +98,27 @@ describe('TrustedBridgeOnboarding', () => {
 
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
+
+  it('disables confirm when no agent has been reviewed', async () => {
+    render(<TrustedBridgeOnboarding onOpenChange={vi.fn()} open />)
+
+    fireEvent.change(screen.getByLabelText('Agent card URL'), { target: { value: 'https://example.com/agent' } })
+    // Do NOT click review — confirm should remain disabled or hidden
+    expect(screen.queryByRole('button', { name: 'Confirm and connect' })).toBeNull()
+  })
+
+  it('handles network error during confirm', async () => {
+    registerA2AAgent
+      .mockResolvedValueOnce({ agentId: 'a2a:err', name: 'Err', status: 'pending', capabilities: [] })
+      .mockRejectedValueOnce(new Error('Confirm failed'))
+
+    render(<TrustedBridgeOnboarding onOpenChange={vi.fn()} open />)
+
+    fireEvent.change(screen.getByLabelText('Agent card URL'), { target: { value: 'https://example.com/agent' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Review endpoint' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Confirm and connect' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm and connect' }))
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Confirm failed'))
+  })
 })

@@ -270,8 +270,17 @@ def fetch_json(
     opener = urllib.request.build_opener(_NoRedirectProcessor)
     try:
         with opener.open(
-            req, timeout=(_CONNECT_TIMEOUT_S, _READ_TIMEOUT_S)
+            req, timeout=_CONNECT_TIMEOUT_S
         ) as resp:
+            # Headers arrived within the connect bound. Widen the socket
+            # timeout to the read bound for the bounded body read below.
+            # The attribute chain is CPython internals; if it is ever
+            # unavailable the connect timeout still bounds the read, so a
+            # failure here degrades safely and must not abort the fetch.
+            try:
+                resp.fp.raw._sock.settimeout(_READ_TIMEOUT_S)
+            except (AttributeError, OSError, TypeError):
+                pass
             # Re-validate the final URL if it differed from the request
             final_url = resp.geturl()
             if final_url != url:

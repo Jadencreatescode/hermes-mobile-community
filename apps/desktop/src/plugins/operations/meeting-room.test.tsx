@@ -175,4 +175,78 @@ describe('graphical Bot meeting room', () => {
     // Fallback renders a monogram span when no agent matches
     expect(ghostSeat.textContent).toContain('G')
   })
+
+  it('renders zero seats when no participants', () => {
+    const emptyMeeting: MeetingRecord = {
+      ...meeting,
+      participants: []
+    }
+
+    render(<MeetingRoom agents={agents} meeting={emptyMeeting} />)
+
+    expect(screen.queryAllByTestId('meeting-room-seat')).toHaveLength(0)
+  })
+
+  it('shows running state label', () => {
+    render(<MeetingRoom agents={agents} meeting={meeting} />)
+
+    expect(screen.getByRole('status').textContent).toContain('Meeting in progress')
+  })
+
+  it('shows waiting state label', () => {
+    render(<MeetingRoom agents={agents} meeting={{ ...meeting, state: 'waiting' }} />)
+
+    expect(screen.getByRole('status').textContent).toContain('Meeting waiting for owner input')
+  })
+
+  it('shows completed state label', () => {
+    render(<MeetingRoom agents={agents} meeting={{ ...meeting, state: 'completed' }} />)
+
+    expect(screen.getByRole('status').textContent).toContain('Meeting completed')
+  })
+
+  it('handles agent leave gracefully by removing seat', () => {
+    const leaveMeeting: MeetingRecord = {
+      ...meeting,
+      participants: [
+        { connectionId: 'vps', profile: 'chair' }
+      ]
+    }
+
+    render(<MeetingRoom agents={agents} meeting={leaveMeeting} />)
+
+    expect(screen.getAllByTestId('meeting-room-seat')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Open Chair Bot workspace' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Open Research Bot workspace' })).toBeNull()
+  })
+
+  it('renders round table with no participants as empty', () => {
+    const emptyMeeting: MeetingRecord = {
+      ...meeting,
+      participants: [],
+      currentRound: 0
+    }
+
+    render(<MeetingRoom agents={agents} meeting={emptyMeeting} />)
+
+    const progress = screen.getByRole('img', { name: 'Round 0 of 3' })
+    const segments = progress.querySelectorAll('[data-round-segment]')
+    expect(segments).toHaveLength(3)
+    expect([...segments].filter(segment => (segment as HTMLElement).dataset.illuminated === 'true')).toHaveLength(0)
+  })
+
+  it('highlights chair participant with special indicator', () => {
+    render(<MeetingRoom agents={agents} meeting={meeting} />)
+
+    const chair = screen.getByRole('button', { name: 'Open Chair Bot workspace' })
+    expect(chair.getAttribute('aria-description')).toBe('Meeting chair')
+  })
+
+  it('shows correct lighting for running state', () => {
+    render(<MeetingRoom agents={agents} meeting={meeting} />)
+
+    const room = screen.getByRole('region', { name: 'Bot meeting room' })
+    expect(room.dataset.meetingState).toBe('running')
+    expect(room.dataset.lighting).toBe('live')
+  })
 })

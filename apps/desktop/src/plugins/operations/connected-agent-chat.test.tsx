@@ -154,4 +154,54 @@ describe('ConnectedAgentChat', () => {
     expect(screen.getByRole('textbox', { name: 'Message Claude Reviewer' }).getAttribute('disabled')).not.toBeNull()
     expect(screen.getByText('This connector did not advertise chat.send.')).toBeTruthy()
   })
+
+  it('handles send error gracefully', async () => {
+    getA2AChatHistory.mockResolvedValue({ messages: [], mirror_session_id: 'mirror_1' })
+    sendA2AChatMessage.mockRejectedValue(new Error('Send failed'))
+
+    render(<ConnectedAgentChatSurface agent={harnessAgent()} />)
+
+    const composer = await screen.findByRole('textbox', { name: 'Message Claude Reviewer' })
+    fireEvent.change(composer, { target: { value: 'Hello' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Claude Reviewer' }))
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Send failed'))
+  })
+
+  it('clears input after successful send', async () => {
+    getA2AChatHistory.mockImplementation(async (_agentId: string, requestId?: string) => ({
+      messages: [],
+      mirror_session_id: 'mirror_1',
+      request_status: requestId ? 'committed' : undefined
+    }))
+    sendA2AChatMessage.mockResolvedValue({ reply: 'Got it', state: 'completed', request_status: 'committed', native_session_id: 'mirror_1', connector_event_id: 'evt-1' })
+
+    render(<ConnectedAgentChatSurface agent={harnessAgent()} />)
+
+    const composer = await screen.findByRole('textbox', { name: 'Message Claude Reviewer' })
+    fireEvent.change(composer, { target: { value: 'Hello' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Claude Reviewer' }))
+
+    await waitFor(() => expect((composer as HTMLTextAreaElement).value).toBe(''))
+  })
+
+  it('disables send button for empty or whitespace-only draft', async () => {
+    getA2AChatHistory.mockResolvedValue({ messages: [], mirror_session_id: 'mirror_1' })
+
+    render(<ConnectedAgentChatSurface agent={harnessAgent()} />)
+
+    const composer = await screen.findByRole('textbox', { name: 'Message Claude Reviewer' })
+    fireEvent.change(composer, { target: { value: '   ' } })
+
+    expect((screen.getByRole('button', { name: 'Send to Claude Reviewer' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('shows degraded status in agent metadata', async () => {
+    getA2AChatHistory.mockResolvedValue({ messages: [{ role: 'assistant', content: 'Last message.' }], mirror_session_id: 'mirror_1' })
+
+    render(<ConnectedAgentChatSurface agent={{ ...harnessAgent(), status: 'degraded' }} />)
+
+    expect(await screen.findByText('Last message.')).toBeTruthy()
+    expect(screen.getByText(/degraded/)).toBeTruthy()
+  })
 })
