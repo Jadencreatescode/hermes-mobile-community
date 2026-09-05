@@ -8,15 +8,16 @@ credentials, endpoint URLs, environment values, or lease tokens.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import shlex
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 try:
@@ -364,4 +365,331 @@ def list_connected_agents():
             for entry in entries
             if entry.verified and entry.provider != "local"
         ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# A2A harness agent lifecycle
+# ---------------------------------------------------------------------------
+
+from collections import defaultdict, deque
+
+_A2A_RATE_LIMIT_PER_USER = 10
+_A2A_RATE_LIMIT_GLOBAL = 100
+_A2A_RATE_WINDOW = 60.0
+
+
+class _A2ARateLimiter:
+    """Sliding-window rate limiter: one bucket per user + one global bucket."""
+
+    def __init__(self) -> None:
+        self._user_buckets: dict[str, deque[float]] = defaultdict(deque)
+        self._global_bucket: deque[float] = deque()
+        self._lock = threading.Lock()
+
+    def allow(self, user_id: str) -> bool:
+        with self._lock:
+            now = time.time()
+            # Global bucket
+            while self._global_bucket and now - self._global_bucket[0] > _A2A_RATE_WINDOW:
+                self._global_bucket.popleft()
+            if len(self._global_bucket) >= _A2A_RATE_LIMIT_GLOBAL:
+                return False
+            # Per-user bucket
+            bucket = self._user_buckets[user_id]
+            while bucket and now - bucket[0] > _A2A_RATE_WINDOW:
+                bucket.popleft()
+            if len(bucket) >= _A2A_RATE_LIMIT_PER_USER:
+                return False
+            self._global_bucket.append(now)
+            bucket.append(now)
+            return True
+
+
+_a2a_rate_limiter = _A2ARateLimiter()
+
+
+def _user_id_from_request(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _a2a_registry_path() -> Path:
+    return Path(get_hermes_home()) / "operations" / "harness_agents.db"
+
+
+def _a2a_catalog_path() -> Path:
+    return Path(get_hermes_home()) / "operations" / "agent_cards.db"
+
+
+class A2ARegisterRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+    confirm: bool = False
+
+
+def _normalize_a2a_url(url: str) -> str:
+    stripped = url.strip()
+    lowered = stripped.lower()
+    for suffix in ("/.well-known/agent-card.json", "/.well-known/agent.json"):
+        if lowered.endswith(suffix):
+            return stripped[: -len(suffix)]
+    return stripped
+
+
+def _public_agent_summary(agent: dict[str, Any]) -> dict[str, Any]:
+    """Return only public-safe fields for the renderer."""
+    return {
+        "agent_id": agent["id"],
+        "name": agent["name"],
+        "status": agent["verification_state"],
+        "capabilities": agent.get("capabilities", []),
+    }
+
+
+@router.post("/agents/a2a/register")
+def register_a2a_agent(request: Request, body: A2ARegisterRequest):
+    """Register a new A2A harness agent from a public Agent Card URL.
+
+    The agent is created in *pending* state. Pass ``confirm=true`` to
+    immediately probe, verify, and bind a per-user mirror session.
+    """
+    user_id = _user_id_from_request(request)
+    if not _a2a_rate_limiter.allow(user_id):
+        raise HTTPException(status_code=429, detail="a2a_rate_limited")
+
+    url = _normalize_a2a_url(body.url)
+
+    # Policy validation (SSRF + default-deny)
+    try:
+        from plugins.harness_agents.policy import validate_url
+
+        scheme, host, _port = validate_url(url, require_https=True)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=403, detail="a2a_destination_not_allowed"
+        ) from exc
+
+    # Fetch and cache the public Agent Card
+    try:
+        from plugins.harness_agents.catalog import AgentCardCatalog
+
+        catalog = AgentCardCatalog(_a2a_catalog_path())
+        card = catalog.get(url, allowlist=None)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="a2a_malformed_agent_card"
+        ) from exc
+
+    # Schema validation
+    name = str(card.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="a2a_malformed_agent_card")
+
+    from plugins.harness_agents.registry import HarnessRegistry
+
+    reg = HarnessRegistry(_a2a_registry_path())
+    agent_id = f"a2a:{hashlib.sha256(url.encode()).hexdigest()[:16]}"
+
+    try:
+        reg.get_agent(agent_id)
+    except ValueError:
+        reg.create_agent(
+            {
+                "id": agent_id,
+                "name": name,
+                "handle": name.lower().replace(" ", "-")[:64] or "agent",
+                "description": str(card.get("description") or "")[:4096],
+                "harness": "generic_a2a",
+                "host_id": host,
+                "host_label": host,
+                "connector_url": url,
+                "auth_env": "",
+                "team_id": "",
+            }
+        )
+        reg.record_event(
+            agent_id,
+            principal=user_id,
+            event_type="register",
+            outcome="succeeded",
+            detail={"url_domain": host},
+        )
+
+    # Confirm = immediate verification + mirror binding
+    if body.confirm:
+        try:
+            from plugins.harness_agents.connectors import A2AConnector
+
+            conn = A2AConnector(name=name, url=url, allowlist=frozenset({host}))
+            probe_result = conn.probe()
+            mirror_session_id = f"a2a_mirror_{agent_id}_{int(time.time())}"
+            reg.mark_verified(
+                agent_id,
+                native_agent_id=str(probe_result.get("native_agent_id", name)),
+                native_session_id="",
+                mirror_session_id=mirror_session_id,
+                capabilities=probe_result.get("capabilities", []),
+                runtime_state="idle",
+                supported_operations=probe_result.get("operations", []),
+            )
+            reg.record_event(
+                agent_id,
+                principal=user_id,
+                event_type="confirm",
+                outcome="succeeded",
+                detail={},
+            )
+        except Exception as exc:
+            reg.record_event(
+                agent_id,
+                principal=user_id,
+                event_type="confirm",
+                outcome="failed",
+                detail={"error": str(exc)},
+            )
+            raise HTTPException(
+                status_code=400, detail="a2a_verification_failed"
+            ) from exc
+
+    agent = reg.get_agent(agent_id)
+    return _public_agent_summary(agent)
+
+
+@router.get("/agents/a2a")
+def list_a2a_agents(request: Request, limit: int = Query(default=50, ge=1, le=100)):
+    user_id = _user_id_from_request(request)
+    if not _a2a_rate_limiter.allow(user_id):
+        raise HTTPException(status_code=429, detail="a2a_rate_limited")
+
+    from plugins.harness_agents.registry import HarnessRegistry
+
+    reg = HarnessRegistry(_a2a_registry_path())
+    agents = reg.list_agents()
+    return {"agents": [_public_agent_summary(a) for a in agents[:limit]]}
+
+
+@router.delete("/agents/a2a/{agent_id}")
+def delete_a2a_agent(request: Request, agent_id: str):
+    user_id = _user_id_from_request(request)
+    if not _a2a_rate_limiter.allow(user_id):
+        raise HTTPException(status_code=429, detail="a2a_rate_limited")
+
+    from plugins.harness_agents.registry import HarnessRegistry
+
+    reg = HarnessRegistry(_a2a_registry_path())
+    try:
+        reg.get_agent(agent_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="a2a_agent_not_found")
+
+    reg.delete_agent(agent_id)
+    reg.record_event(
+        agent_id,
+        principal=user_id,
+        event_type="delete",
+        outcome="succeeded",
+        detail={},
+    )
+    return {"agent_id": agent_id, "deleted": True}
+
+
+@router.get("/agents/a2a/{agent_id}/status")
+def get_a2a_agent_status(request: Request, agent_id: str):
+    user_id = _user_id_from_request(request)
+    if not _a2a_rate_limiter.allow(user_id):
+        raise HTTPException(status_code=429, detail="a2a_rate_limited")
+
+    from plugins.harness_agents.registry import HarnessRegistry
+
+    reg = HarnessRegistry(_a2a_registry_path())
+    try:
+        agent = reg.get_agent(agent_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="a2a_agent_not_found")
+
+    return _public_agent_summary(agent)
+
+
+class A2AChatSendRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=16_000)
+    request_id: str = Field(default="", max_length=256)
+
+
+@router.get("/agents/a2a/{agent_id}/chat")
+def get_a2a_chat_history(request: Request, agent_id: str, request_id: str = Query(default="")):
+    user_id = _user_id_from_request(request)
+    if not _a2a_rate_limiter.allow(user_id):
+        raise HTTPException(status_code=429, detail="a2a_rate_limited")
+
+    from plugins.harness_agents.registry import HarnessRegistry
+
+    reg = HarnessRegistry(_a2a_registry_path())
+    try:
+        reg.get_agent(agent_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="a2a_agent_not_found")
+
+    return reg.get_chat_history(agent_id, request_id=request_id)
+
+
+@router.post("/agents/a2a/{agent_id}/chat")
+def send_a2a_chat_message(request: Request, agent_id: str, body: A2AChatSendRequest):
+    user_id = _user_id_from_request(request)
+    if not _a2a_rate_limiter.allow(user_id):
+        raise HTTPException(status_code=429, detail="a2a_rate_limited")
+
+    from plugins.harness_agents.registry import HarnessRegistry
+    from plugins.harness_agents.connectors import A2AConnector
+
+    reg = HarnessRegistry(_a2a_registry_path())
+    try:
+        agent = reg.get_agent(agent_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="a2a_agent_not_found")
+
+    if agent.get("verification_state") != "verified":
+        raise HTTPException(status_code=403, detail="a2a_agent_not_verified")
+
+    try:
+        binding = reg.get_chat_binding(agent_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="a2a_chat_binding_not_found")
+
+    connector_url = str(agent.get("connector_url") or "").strip()
+    if not connector_url:
+        raise HTTPException(status_code=400, detail="a2a_agent_missing_connector_url")
+
+    host = str(agent.get("host_id") or "").strip()
+    allowlist = frozenset({host}) if host else None
+
+    try:
+        conn = A2AConnector(
+            name=str(agent.get("name") or agent_id),
+            url=connector_url,
+            allowlist=allowlist,
+        )
+        result = conn.send(
+            body.message,
+            native_session_id=binding["native_session_id"],
+            request_id=body.request_id or None,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"a2a_send_failed: {exc}") from exc
+
+    reg.send_chat_turn(
+        agent_id,
+        connector_event_id=result["connector_event_id"],
+        user_message=body.message,
+        assistant_reply=result["reply"],
+        native_session_id=result["native_session_id"],
+    )
+
+    return {
+        "reply": result["reply"],
+        "state": result["state"],
+        "request_status": "committed",
+        "native_session_id": result["native_session_id"],
+        "connector_event_id": result["connector_event_id"],
     }

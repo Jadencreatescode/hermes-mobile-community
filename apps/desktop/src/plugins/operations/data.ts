@@ -1,4 +1,5 @@
 import { operationsApi } from './api'
+import { record } from './contracts'
 import { mapOperationsAgentState, type OperationsAgentState, type OperationsAssignmentEvidence } from './state'
 
 interface RosterAgent {
@@ -169,10 +170,25 @@ function connectedAgentToModel(agent: ConnectedAgent): OperationsAgentModel {
   }
 }
 
+function harnessAgentToModel(agent: HarnessAgent): OperationsAgentModel {
+  return {
+    assignments: [],
+    displayName: agent.name || agent.agentId,
+    id: `a2a::${agent.agentId}`,
+    profile: agent.agentId,
+    sourceId: 'a2a',
+    sourceKind: 'a2a',
+    sourceLabel: 'A2A Harness',
+    state: agent.status === 'verified' ? 'idle' : agent.status === 'pending' ? 'waiting' : 'unknown',
+    workSummary: agent.capabilities.slice(0, 3).join(', ') || 'A2A connected agent'
+  }
+}
+
 export async function loadOperationsSnapshot(
   host: OperationsHost,
   options: {
     connectedAgents?: ConnectedAgent[]
+    a2aAgents?: HarnessAgent[]
     delegatedBySession?: Record<string, DelegatedAgentEvidence[]>
     nowMs?: number
   } = {}
@@ -281,6 +297,7 @@ export async function loadOperationsSnapshot(
   )
 
   const connectedModels = (options.connectedAgents ?? []).map(connectedAgentToModel)
+  const a2aModels = (options.a2aAgents ?? []).map(harnessAgentToModel)
 
   const sources = roster.sources.map(source => ({
     error: source.error,
@@ -295,8 +312,157 @@ export async function loadOperationsSnapshot(
   }))
 
   return {
-    agents: [...agents, ...connectedModels],
+    agents: [...agents, ...connectedModels, ...a2aModels],
     partialFailures: [...new Set(partialFailures)],
     sources
   }
+}
+
+// ── A2A harness agent types ─────────────────────────────────────────────────
+
+export type A2AConnectionStatus = 'pending' | 'verified' | 'degraded'
+
+export interface HarnessAgent {
+  agentId: string
+  name: string
+  status: A2AConnectionStatus
+  capabilities: string[]
+}
+
+export interface AgentCard {
+  url: string
+  name: string
+  description?: string
+}
+
+// ── A2A harness agent reads ─────────────────────────────────────────────────
+
+export async function listA2AAgents(): Promise<HarnessAgent[]> {
+  const response = await operationsApi()<{ agents?: unknown[] }>('/agents/a2a')
+
+  return (response.agents ?? []).map(normalizeHarnessAgent)
+}
+
+export async function getA2AAgentStatus(agentId: string): Promise<HarnessAgent> {
+  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/status`)
+
+  return normalizeHarnessAgent(response)
+}
+
+// ── A2A harness agent writes ────────────────────────────────────────────────
+
+export async function registerA2AAgent(url: string, confirm = false): Promise<HarnessAgent> {
+  const normalized = url.trim()
+
+  if (!normalized || normalized.length > 2048) {
+    throw new Error('A2A URL is invalid')
+  }
+
+  try {
+    const parsed = new URL(normalized)
+
+    if (parsed.protocol !== 'https:') {
+      throw new Error('A2A URL is invalid')
+    }
+  } catch {
+    throw new Error('A2A URL is invalid')
+  }
+
+  const response = await operationsApi()<unknown>('/agents/a2a/register', {
+    method: 'POST',
+    body: { url: normalized, confirm }
+  })
+
+  return normalizeHarnessAgent(response)
+}
+
+export async function removeA2AAgent(agentId: string): Promise<{ agentId: string; deleted: boolean }> {
+  const response = await operationsApi()<{ agent_id?: unknown; deleted?: unknown }>(
+    `/agents/a2a/${encodeURIComponent(agentId)}`,
+    { method: 'DELETE' }
+  )
+
+  return {
+    agentId: typeof response.agent_id === 'string' ? response.agent_id : agentId,
+    deleted: response.deleted === true
+  }
+}
+
+// ── A2A harness agent chat ──────────────────────────────────────────────────
+
+export interface A2AChatMessage {
+  content: string
+  role: 'assistant' | 'user'
+}
+
+export interface A2AChatHistory {
+  messages: A2AChatMessage[]
+  mirror_session_id?: string
+  request_status?: string | null
+}
+
+export interface A2AChatSendResult {
+  reply: string
+  state: string
+  request_status: string
+  native_session_id: string
+  connector_event_id: string
+}
+
+export async function getA2AChatHistory(agentId: string, requestId = ''): Promise<A2AChatHistory> {
+  const query = requestId ? `?request_id=${encodeURIComponent(requestId)}` : ''
+  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/chat${query}`)
+
+  const row = record(response)
+  const rawMessages = Array.isArray(row.messages) ? row.messages : []
+  const messages = rawMessages.flatMap<A2AChatMessage>((msg: unknown) => {
+    const m = record(msg)
+    const role = m.role === 'user' || m.role === 'assistant' ? m.role : null
+    const content = typeof m.content === 'string' ? m.content : ''
+    if (!role || !content) return []
+    return [{ role, content }]
+  })
+
+  return {
+    messages,
+    mirror_session_id: typeof row.mirror_session_id === 'string' ? row.mirror_session_id : undefined,
+    request_status: row.request_status === null ? null : typeof row.request_status === 'string' ? row.request_status : null
+  }
+}
+
+export async function sendA2AChatMessage(
+  agentId: string,
+  message: string,
+  requestId = ''
+): Promise<A2AChatSendResult> {
+  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/chat`, {
+    method: 'POST',
+    body: { message: message.trim(), request_id: requestId }
+  })
+
+  const row = record(response)
+
+  return {
+    reply: typeof row.reply === 'string' ? row.reply : '',
+    state: typeof row.state === 'string' ? row.state : 'unknown',
+    request_status: typeof row.request_status === 'string' ? row.request_status : 'unknown',
+    native_session_id: typeof row.native_session_id === 'string' ? row.native_session_id : '',
+    connector_event_id: typeof row.connector_event_id === 'string' ? row.connector_event_id : ''
+  }
+}
+
+// ── normalization ───────────────────────────────────────────────────────────
+
+function normalizeHarnessAgent(value: unknown): HarnessAgent {
+  const row = record(value)
+  const agentId = typeof row.agent_id === 'string' ? row.agent_id : ''
+  const name = typeof row.name === 'string' ? row.name : ''
+  const rawStatus = typeof row.status === 'string' ? row.status : ''
+  const status: A2AConnectionStatus = ['pending', 'verified', 'degraded'].includes(rawStatus)
+    ? (rawStatus as A2AConnectionStatus)
+    : 'degraded'
+  const rawCapabilities = Array.isArray(row.capabilities) ? row.capabilities : []
+  const capabilities = rawCapabilities.filter((c: unknown): c is string => typeof c === 'string')
+
+  return { agentId, name, status, capabilities }
 }

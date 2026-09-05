@@ -1,13 +1,14 @@
 import { Button, Codicon, ErrorState, host, Loader, useValue } from '@hermes/plugin-sdk'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { loadConnectedAgents, loadOperationsSnapshot, type OperationsSnapshot } from './data'
+import { loadConnectedAgents, loadOperationsSnapshot, type OperationsSnapshot, listA2AAgents } from './data'
 import { ForgeView } from './forge-view'
 import { MailroomView } from './mailroom-view'
 import { MeetingsView } from './meetings-view'
 import { OperationsNavigation, type OperationsSection } from './navigation'
 import { type OperationsDelegation, OperationsOverview } from './overview'
 import { loadOperationsRoutines, type OperationsRoutinesSnapshot } from './routines'
+import { ControlRoomView } from './control-room-view'
 import { WorkspaceView } from './workspace-view'
 
 const REFRESH_MS = 8_000
@@ -65,10 +66,13 @@ export function OperationsPage() {
     }
 
     try {
-      const connectedAgents = await loadConnectedAgents()
+      const [connectedAgents, a2aAgents] = await Promise.all([
+        loadConnectedAgents(),
+        listA2AAgents().catch(() => [])
+      ])
 
       const [nextSnapshot, nextRoutines] = await Promise.all([
-        loadOperationsSnapshot(host, { connectedAgents, delegatedBySession: delegatedBySession as never }),
+        loadOperationsSnapshot(host, { connectedAgents, a2aAgents, delegatedBySession: delegatedBySession as never }),
         loadOperationsRoutines(host)
       ])
 
@@ -146,6 +150,7 @@ export function OperationsPage() {
           {section === 'overview' && (
             <OperationsOverview delegations={delegations} routines={routines} snapshot={stableSnapshot} />
           )}
+          {section === 'control-room' && <ControlRoomView />}
           {section === 'mailroom' && (
             <MailroomView
               activeProfile={activeProfile}

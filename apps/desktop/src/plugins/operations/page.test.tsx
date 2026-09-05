@@ -1,10 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { loadConnectedAgents, loadOperationsRoutines, loadOperationsSnapshot, navigate } = vi.hoisted(() => ({
+const { loadConnectedAgents, loadOperationsRoutines, loadOperationsSnapshot, listA2AAgents, navigate } = vi.hoisted(() => ({
   loadConnectedAgents: vi.fn(),
   loadOperationsRoutines: vi.fn(),
   loadOperationsSnapshot: vi.fn(),
+  listA2AAgents: vi.fn(async () => [] as unknown[]),
   navigate: vi.fn()
 }))
 
@@ -19,7 +20,8 @@ const forgeBoard = vi.hoisted(() => ({
 vi.mock('./data', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   loadConnectedAgents,
-  loadOperationsSnapshot
+  loadOperationsSnapshot,
+  listA2AAgents
 }))
 
 vi.mock('./forge-data', () => ({
@@ -192,9 +194,8 @@ describe('OperationsPage', () => {
     await screen.findByText('Release Bot')
     fireEvent.change(screen.getByLabelText('Operations section'), { target: { value: 'meetings' } })
 
-    expect(await screen.findByRole('heading', { name: 'New specialist meeting' })).toBeTruthy()
-    expect(screen.getByLabelText('Select Release Bot as a meeting participant')).toBeTruthy()
-    expect(screen.getByLabelText('Select Builder Bot as a meeting participant')).toBeTruthy()
+    expect(await screen.findByText('The council chamber is empty')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Set the table' })).toBeTruthy()
   })
 
   it('keeps the last verified snapshot visible when a later refresh fails', async () => {
@@ -245,5 +246,22 @@ describe('OperationsPage', () => {
 
     expect(screen.getByText('Newest Bot')).toBeTruthy()
     expect(screen.queryByText('Stale Bot')).toBeNull()
+  })
+
+  it('renders the Control Room v2 section with A2A agents', async () => {
+    loadConnectedAgents.mockResolvedValue([])
+    loadOperationsSnapshot.mockResolvedValue(snapshot)
+    loadOperationsRoutines.mockResolvedValue(routines)
+    listA2AAgents.mockResolvedValue([
+      { agentId: 'a2a:test', name: 'Test Agent', status: 'verified', capabilities: ['chat'] }
+    ])
+
+    render(<OperationsPage />)
+    await screen.findByText('Release Bot')
+    fireEvent.change(screen.getByLabelText('Operations section'), { target: { value: 'control-room' } })
+
+    await waitFor(() => expect(screen.getByText('Test Agent')).toBeTruthy())
+    expect(screen.getByRole('heading', { name: 'Control Room' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Connect agent' })).toBeTruthy()
   })
 })
