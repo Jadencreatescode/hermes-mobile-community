@@ -5,7 +5,7 @@ const { loadConnectedAgents, loadOperationsRoutines, loadOperationsSnapshot, lis
   loadConnectedAgents: vi.fn(),
   loadOperationsRoutines: vi.fn(),
   loadOperationsSnapshot: vi.fn(),
-  listA2AAgents: vi.fn(),
+  listA2AAgents: vi.fn(async () => [] as unknown[]),
   navigate: vi.fn()
 }))
 
@@ -194,9 +194,8 @@ describe('OperationsPage', () => {
     await screen.findByText('Release Bot')
     fireEvent.change(screen.getByLabelText('Operations section'), { target: { value: 'meetings' } })
 
-    expect(await screen.findByRole('heading', { name: 'New specialist meeting' })).toBeTruthy()
-    expect(screen.getByLabelText('Select Release Bot as a meeting participant')).toBeTruthy()
-    expect(screen.getByLabelText('Select Builder Bot as a meeting participant')).toBeTruthy()
+    expect(await screen.findByText('The council chamber is empty')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Set the table' })).toBeTruthy()
   })
 
   it('keeps the last verified snapshot visible when a later refresh fails', async () => {

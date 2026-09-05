@@ -170,10 +170,25 @@ function connectedAgentToModel(agent: ConnectedAgent): OperationsAgentModel {
   }
 }
 
+function harnessAgentToModel(agent: HarnessAgent): OperationsAgentModel {
+  return {
+    assignments: [],
+    displayName: agent.name || agent.agentId,
+    id: `a2a::${agent.agentId}`,
+    profile: agent.agentId,
+    sourceId: 'a2a',
+    sourceKind: 'a2a',
+    sourceLabel: 'A2A Harness',
+    state: agent.status === 'verified' ? 'idle' : agent.status === 'pending' ? 'waiting' : 'unknown',
+    workSummary: agent.capabilities.slice(0, 3).join(', ') || 'A2A connected agent'
+  }
+}
+
 export async function loadOperationsSnapshot(
   host: OperationsHost,
   options: {
     connectedAgents?: ConnectedAgent[]
+    a2aAgents?: HarnessAgent[]
     delegatedBySession?: Record<string, DelegatedAgentEvidence[]>
     nowMs?: number
   } = {}
@@ -282,6 +297,7 @@ export async function loadOperationsSnapshot(
   )
 
   const connectedModels = (options.connectedAgents ?? []).map(connectedAgentToModel)
+  const a2aModels = (options.a2aAgents ?? []).map(harnessAgentToModel)
 
   const sources = roster.sources.map(source => ({
     error: source.error,
@@ -296,7 +312,7 @@ export async function loadOperationsSnapshot(
   }))
 
   return {
-    agents: [...agents, ...connectedModels],
+    agents: [...agents, ...connectedModels, ...a2aModels],
     partialFailures: [...new Set(partialFailures)],
     sources
   }

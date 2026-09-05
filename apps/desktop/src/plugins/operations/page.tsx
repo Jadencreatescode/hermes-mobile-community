@@ -1,7 +1,7 @@
 import { Button, Codicon, ErrorState, host, Loader, useValue } from '@hermes/plugin-sdk'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { loadConnectedAgents, loadOperationsSnapshot, type OperationsSnapshot } from './data'
+import { loadConnectedAgents, loadOperationsSnapshot, type OperationsSnapshot, listA2AAgents } from './data'
 import { ForgeView } from './forge-view'
 import { MailroomView } from './mailroom-view'
 import { MeetingsView } from './meetings-view'
@@ -66,10 +66,13 @@ export function OperationsPage() {
     }
 
     try {
-      const connectedAgents = await loadConnectedAgents()
+      const [connectedAgents, a2aAgents] = await Promise.all([
+        loadConnectedAgents(),
+        listA2AAgents().catch(() => [])
+      ])
 
       const [nextSnapshot, nextRoutines] = await Promise.all([
-        loadOperationsSnapshot(host, { connectedAgents, delegatedBySession: delegatedBySession as never }),
+        loadOperationsSnapshot(host, { connectedAgents, a2aAgents, delegatedBySession: delegatedBySession as never }),
         loadOperationsRoutines(host)
       ])
 
