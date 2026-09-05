@@ -457,6 +457,17 @@ class HarnessRegistry:
             raise ValueError(f"unknown agent: {agent_id}")
         return self._normalize_agent(row)
 
+    def delete_agent(self, agent_id: str) -> bool:
+        """Remove one agent and its cascading rows. Returns True if it existed."""
+        agent_id = _optional_text(agent_id, "agent id", 256)
+        if not agent_id:
+            raise ValueError("agent id is required")
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM connected_agents WHERE id = ?", (agent_id,)
+            )
+            return cursor.rowcount > 0
+
     def mark_verified(
         self,
         agent_id: str,

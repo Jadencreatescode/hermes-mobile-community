@@ -56,6 +56,8 @@ class RosterEntry:
     stale: bool
     chat_path: str = ""
     management_path: str = ""
+    avatar_url: str = ""
+    endpoint_domain: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +160,67 @@ class ConnectedAgentRosterProvider:
         return entries
 
 
+class HarnessAgentRosterProvider:
+    """Contributes verified A2A harness agents from the HarnessRegistry.
+
+    Exposes public-safe metadata only: name, avatar_url, endpoint_domain,
+    and capabilities.  Destination URLs and credentials are never returned.
+    """
+
+    def __init__(self, hermes_home: Optional[Path] = None):
+        self._home = hermes_home or Path(_get_hermes_home())
+
+    def list_entries(self, root: Path, me: str) -> list[RosterEntry]:
+        from plugins.harness_agents.registry import HarnessRegistry
+        from plugins.harness_agents.catalog import AgentCardCatalog
+        from urllib.parse import urlparse
+
+        entries: list[RosterEntry] = []
+        db_path = self._home / "operations" / "harness_agents.db"
+        if not db_path.is_file():
+            return entries
+
+        reg = HarnessRegistry(db_path)
+        try:
+            for agent in reg.list_agents(verified_only=True):
+                connector_url = agent.get("connector_url", "")
+                endpoint_domain = ""
+                try:
+                    endpoint_domain = urlparse(connector_url).hostname or ""
+                except Exception:
+                    pass
+
+                avatar_url = ""
+                try:
+                    catalog = AgentCardCatalog(self._home / "operations" / "agent_cards.db")
+                    card = catalog.get(connector_url, allowlist=None)
+                    avatar_url = str(card.get("avatarUrl") or card.get("imageUrl") or "")[:2048]
+                except Exception:
+                    pass
+
+                entries.append(
+                    RosterEntry(
+                        handle=agent.get("handle", ""),
+                        display_name=agent.get("name", ""),
+                        role="",
+                        provider="a2a",
+                        workspace_path=None,
+                        agent_id=agent.get("id"),
+                        capabilities=tuple(agent.get("capabilities", [])),
+                        model_reference=None,
+                        verified=True,
+                        stale=agent.get("verification_state") != "verified",
+                        chat_path=f"/connected-agents/{agent.get('id')}/chat",
+                        management_path=f"/connected-agents/{agent.get('id')}/manage",
+                        avatar_url=avatar_url,
+                        endpoint_domain=endpoint_domain,
+                    )
+                )
+        finally:
+            reg.close()
+        return entries
+
+
 class BotRoster:
     """Aggregates all roster providers into a single unified roster.
 
@@ -170,6 +233,7 @@ class BotRoster:
         self._providers: list[Any] = [
             LocalProfileRosterProvider(),
             ConnectedAgentRosterProvider(hermes_home=self._home),
+            HarnessAgentRosterProvider(hermes_home=self._home),
         ]
 
     def list_entries(self, root: Path, me: str) -> list[RosterEntry]:

@@ -289,6 +289,26 @@ class TestRegistry:
         assert binding["native_session_id"] == "sess-1"
         db.close()
 
+    def test_delete_agent(self, tmp_path: Path) -> None:
+        db = registry.HarnessRegistry(tmp_path / "agents.db")
+        db.create_agent({
+            "id": "hermes:del:test",
+            "name": "D Agent",
+            "handle": "d-agent",
+            "description": "",
+            "harness": "hermes",
+            "host_id": "h1",
+            "host_label": "H1",
+            "connector_url": "https://d.example.com",
+            "auth_env": "",
+            "team_id": "",
+        })
+        assert db.delete_agent("hermes:del:test") is True
+        with pytest.raises(ValueError, match="unknown agent"):
+            db.get_agent("hermes:del:test")
+        assert db.delete_agent("hermes:del:test") is False
+        db.close()
+
 
 # ---------------------------------------------------------------------------
 # catalog
