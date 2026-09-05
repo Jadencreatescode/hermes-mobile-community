@@ -372,6 +372,69 @@ export async function removeA2AAgent(agentId: string): Promise<{ agentId: string
   }
 }
 
+// ── A2A harness agent chat ──────────────────────────────────────────────────
+
+export interface A2AChatMessage {
+  content: string
+  role: 'assistant' | 'user'
+}
+
+export interface A2AChatHistory {
+  messages: A2AChatMessage[]
+  mirror_session_id?: string
+  request_status?: string | null
+}
+
+export interface A2AChatSendResult {
+  reply: string
+  state: string
+  request_status: string
+  native_session_id: string
+  connector_event_id: string
+}
+
+export async function getA2AChatHistory(agentId: string, requestId = ''): Promise<A2AChatHistory> {
+  const query = requestId ? `?request_id=${encodeURIComponent(requestId)}` : ''
+  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/chat${query}`)
+
+  const row = record(response)
+  const rawMessages = Array.isArray(row.messages) ? row.messages : []
+  const messages = rawMessages.flatMap<A2AChatMessage>((msg: unknown) => {
+    const m = record(msg)
+    const role = m.role === 'user' || m.role === 'assistant' ? m.role : null
+    const content = typeof m.content === 'string' ? m.content : ''
+    if (!role || !content) return []
+    return [{ role, content }]
+  })
+
+  return {
+    messages,
+    mirror_session_id: typeof row.mirror_session_id === 'string' ? row.mirror_session_id : undefined,
+    request_status: row.request_status === null ? null : typeof row.request_status === 'string' ? row.request_status : null
+  }
+}
+
+export async function sendA2AChatMessage(
+  agentId: string,
+  message: string,
+  requestId = ''
+): Promise<A2AChatSendResult> {
+  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/chat`, {
+    method: 'POST',
+    body: { message: message.trim(), request_id: requestId }
+  })
+
+  const row = record(response)
+
+  return {
+    reply: typeof row.reply === 'string' ? row.reply : '',
+    state: typeof row.state === 'string' ? row.state : 'unknown',
+    request_status: typeof row.request_status === 'string' ? row.request_status : 'unknown',
+    native_session_id: typeof row.native_session_id === 'string' ? row.native_session_id : '',
+    connector_event_id: typeof row.connector_event_id === 'string' ? row.connector_event_id : ''
+  }
+}
+
 // ── normalization ───────────────────────────────────────────────────────────
 
 function normalizeHarnessAgent(value: unknown): HarnessAgent {

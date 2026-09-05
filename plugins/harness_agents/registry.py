@@ -1061,6 +1061,103 @@ class HarnessRegistry:
         ).fetchall()
         return [self._normalize_event(row) for row in rows]
 
+    def get_chat_history(self, agent_id: str, *, request_id: str = "") -> dict[str, Any]:
+        """Return an agent's committed chat history as ordered messages."""
+        rows = self._connection.execute(
+            """
+            SELECT user_message, assistant_reply, status, connector_event_id,
+                   mirror_session_id, native_session_id
+            FROM agent_chat_commits
+            WHERE agent_id = ? AND status = 'committed'
+            ORDER BY created_at, connector_event_id
+            LIMIT 200
+            """,
+            (agent_id,),
+        ).fetchall()
+
+        messages: list[dict[str, str]] = []
+        for row in rows:
+            if row["user_message"]:
+                messages.append({"role": "user", "content": row["user_message"]})
+            if row["assistant_reply"]:
+                messages.append({"role": "assistant", "content": row["assistant_reply"]})
+
+        request_status = ""
+        if request_id:
+            pending = self._connection.execute(
+                "SELECT status FROM agent_chat_commits WHERE agent_id = ? AND connector_event_id = ?",
+                (agent_id, request_id),
+            ).fetchone()
+            request_status = pending["status"] if pending else ""
+
+        binding = self._connection.execute(
+            "SELECT mirror_session_id FROM agent_chat_bindings WHERE agent_id = ?",
+            (agent_id,),
+        ).fetchone()
+
+        return {
+            "messages": messages,
+            "mirror_session_id": binding["mirror_session_id"] if binding else "",
+            "request_status": request_status or None,
+        }
+
+    def send_chat_turn(
+        self,
+        agent_id: str,
+        *,
+        connector_event_id: str,
+        user_message: str,
+        assistant_reply: str,
+        native_session_id: str,
+    ) -> dict[str, str]:
+        """Record one completed chat turn directly into agent_chat_commits."""
+        from .manifest import redact_agent_text
+
+        safe_user = redact_agent_text(user_message)
+        safe_reply = redact_agent_text(assistant_reply)
+        payload_digest = hashlib.sha256(
+            (safe_user + "\x00" + safe_reply).encode("utf-8")
+        ).hexdigest()
+
+        binding = self._connection.execute(
+            "SELECT mirror_session_id, native_session_id FROM agent_chat_bindings WHERE agent_id = ?",
+            (agent_id,),
+        ).fetchone()
+        if binding is None:
+            raise ValueError(f"unknown agent: {agent_id}")
+
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO agent_chat_commits (
+                    connector_event_id, agent_id, mirror_session_id,
+                    expected_native_session_id, native_session_id,
+                    payload_digest, user_message, assistant_reply, status, committed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'committed', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                ON CONFLICT(connector_event_id) DO UPDATE SET
+                    native_session_id = excluded.native_session_id,
+                    payload_digest = excluded.payload_digest,
+                    assistant_reply = excluded.assistant_reply,
+                    status = 'committed',
+                    committed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                """,
+                (
+                    connector_event_id,
+                    agent_id,
+                    binding["mirror_session_id"],
+                    binding["native_session_id"],
+                    native_session_id,
+                    payload_digest,
+                    safe_user,
+                    safe_reply,
+                ),
+            )
+        return {
+            "connector_event_id": connector_event_id,
+            "status": "committed",
+            "native_session_id": native_session_id,
+        }
+
     def get_chat_binding(self, agent_id: str) -> dict[str, str]:
         """Return an agent's persisted chat binding."""
         row = self._connection.execute(

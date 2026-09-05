@@ -610,3 +610,86 @@ def get_a2a_agent_status(request: Request, agent_id: str):
         raise HTTPException(status_code=404, detail="a2a_agent_not_found")
 
     return _public_agent_summary(agent)
+
+
+class A2AChatSendRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=16_000)
+    request_id: str = Field(default="", max_length=256)
+
+
+@router.get("/agents/a2a/{agent_id}/chat")
+def get_a2a_chat_history(request: Request, agent_id: str, request_id: str = Query(default="")):
+    user_id = _user_id_from_request(request)
+    if not _a2a_rate_limiter.allow(user_id):
+        raise HTTPException(status_code=429, detail="a2a_rate_limited")
+
+    from plugins.harness_agents.registry import HarnessRegistry
+
+    reg = HarnessRegistry(_a2a_registry_path())
+    try:
+        reg.get_agent(agent_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="a2a_agent_not_found")
+
+    return reg.get_chat_history(agent_id, request_id=request_id)
+
+
+@router.post("/agents/a2a/{agent_id}/chat")
+def send_a2a_chat_message(request: Request, agent_id: str, body: A2AChatSendRequest):
+    user_id = _user_id_from_request(request)
+    if not _a2a_rate_limiter.allow(user_id):
+        raise HTTPException(status_code=429, detail="a2a_rate_limited")
+
+    from plugins.harness_agents.registry import HarnessRegistry
+    from plugins.harness_agents.connectors import A2AConnector
+
+    reg = HarnessRegistry(_a2a_registry_path())
+    try:
+        agent = reg.get_agent(agent_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="a2a_agent_not_found")
+
+    if agent.get("verification_state") != "verified":
+        raise HTTPException(status_code=403, detail="a2a_agent_not_verified")
+
+    try:
+        binding = reg.get_chat_binding(agent_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="a2a_chat_binding_not_found")
+
+    connector_url = str(agent.get("connector_url") or "").strip()
+    if not connector_url:
+        raise HTTPException(status_code=400, detail="a2a_agent_missing_connector_url")
+
+    host = str(agent.get("host_id") or "").strip()
+    allowlist = frozenset({host}) if host else None
+
+    try:
+        conn = A2AConnector(
+            name=str(agent.get("name") or agent_id),
+            url=connector_url,
+            allowlist=allowlist,
+        )
+        result = conn.send(
+            body.message,
+            native_session_id=binding["native_session_id"],
+            request_id=body.request_id or None,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"a2a_send_failed: {exc}") from exc
+
+    reg.send_chat_turn(
+        agent_id,
+        connector_event_id=result["connector_event_id"],
+        user_message=body.message,
+        assistant_reply=result["reply"],
+        native_session_id=result["native_session_id"],
+    )
+
+    return {
+        "reply": result["reply"],
+        "state": result["state"],
+        "request_status": "committed",
+        "native_session_id": result["native_session_id"],
+        "connector_event_id": result["connector_event_id"],
+    }
