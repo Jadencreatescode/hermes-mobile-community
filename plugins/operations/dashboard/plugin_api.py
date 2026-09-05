@@ -331,3 +331,37 @@ def put_meeting(meeting_id: str, request: MeetingPut):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/connected-agents")
+def list_connected_agents():
+    """Return verified connected agents from the AgentRegistry.
+
+    Unverified agents are invisible. Staleness is reported honestly.
+    """
+    try:
+        from tools.connected_agent_bot_integration import BotRoster
+        from hermes_constants import get_hermes_home
+
+        home = Path(get_hermes_home())
+        roster = BotRoster(hermes_home=home)
+        entries = roster.list_entries(home, "default")
+    except Exception:
+        return {"agents": []}
+
+    return {
+        "agents": [
+            {
+                "agent_id": entry.agent_id,
+                "capabilities": list(entry.capabilities),
+                "display_name": entry.display_name,
+                "handle": entry.handle,
+                "provider": entry.provider,
+                "role": entry.role,
+                "stale": entry.stale,
+                "verified": entry.verified,
+            }
+            for entry in entries
+            if entry.verified and entry.provider != "local"
+        ]
+    }

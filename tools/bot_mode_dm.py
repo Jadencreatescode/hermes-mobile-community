@@ -257,6 +257,16 @@ def message_agent_tool(
     peers = _peers(root)
     teammates = [_handle(n) for n in roster if n != me]
 
+    # Include verified connected agents in the error roster
+    try:
+        from tools.connected_agent_bot_integration import BotRoster
+
+        for entry in BotRoster(hermes_home=root).list_entries(root, me):
+            if entry.provider != "local" and entry.handle not in teammates:
+                teammates.append(entry.handle)
+    except Exception:
+        pass
+
     body = str(message or "").strip()
     if not body:
         return _err("message is required — compose what you want to say to that agent.")
@@ -273,7 +283,21 @@ def message_agent_tool(
     sender_handle = _handle(me)
     prefix = f"Message from 🤖 {sender_handle} (@{sender_handle}): "
 
-    # ── peer target: '<peer>/<agent>' or a bare registered peer name ──
+    # ── connected agent target ────────────────────────────────────────────────────
+    try:
+        from tools.connected_agent_bot_integration import BotRoster, ConnectedAgentMessenger
+
+        ca_roster = BotRoster(hermes_home=root)
+        entry = ca_roster.get_entry(raw_target, root, me)
+        if entry and entry.provider != "local":
+            messenger = ConnectedAgentMessenger(hermes_home=root)
+            result = messenger.send_message(entry, body, sender_handle)
+            return json.dumps(result)
+    except Exception as exc:
+        logger.error("Connected agent dispatch failed: %s", exc, exc_info=True)
+        return _err(f"Connected agent dispatch failed: {exc}")
+
+    # ── peer target: '<peer>/<agent>' or a bare registered peer name ──────────────────
     peer_match = _PEER_TARGET_RE.match(raw_target)
     bare_peer = raw_target.lower() if raw_target.lower() in peers else None
     if peer_match or bare_peer:
