@@ -8,6 +8,7 @@ import { MeetingsView } from './meetings-view'
 import { OperationsNavigation, type OperationsSection } from './navigation'
 import { type OperationsDelegation, OperationsOverview } from './overview'
 import { loadOperationsRoutines, type OperationsRoutinesSnapshot } from './routines'
+import { ControlRoomView } from './control-room-view'
 import { WorkspaceView } from './workspace-view'
 
 const REFRESH_MS = 8_000
@@ -146,6 +147,7 @@ export function OperationsPage() {
           {section === 'overview' && (
             <OperationsOverview delegations={delegations} routines={routines} snapshot={stableSnapshot} />
           )}
+          {section === 'control-room' && <ControlRoomView />}
           {section === 'mailroom' && (
             <MailroomView
               activeProfile={activeProfile}
