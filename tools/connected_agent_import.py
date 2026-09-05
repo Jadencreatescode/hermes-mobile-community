@@ -503,15 +503,27 @@ def _build_manifest(
 def normalize_url_to_manifest(url: str) -> ImportPreview:
     """Fetch an agent manifest from a public HTTPS URL and normalize it.
 
-    Validates the destination against SSRF policy, fetches the JSON payload,
-    and runs the same sanitization pipeline as file-based imports.
+    Validates the destination against SSRF policy, discovers the public Agent
+    Card via well-known URLs, and runs the same sanitization pipeline as
+    file-based imports.
     """
-    from plugins.harness_agents.policy import validate_url, fetch_json
+    from plugins.harness_agents.policy import validate_url, fetch_agent_card
 
-    validate_url(url, require_https=True)
-    card = fetch_json(url)
+    normalized = _normalize_a2a_url(url)
+    validate_url(normalized, require_https=True)
+    card = fetch_agent_card(normalized)
     source = json.dumps(card, ensure_ascii=False).encode("utf-8")
     return normalize_to_manifest(source, filename="agent.json", platform_hint="generic_a2a")
+
+
+def _normalize_a2a_url(url: str) -> str:
+    """Strip well-known agent card suffixes to obtain the origin."""
+    stripped = url.strip()
+    lowered = stripped.lower()
+    for suffix in ("/.well-known/agent-card.json", "/.well-known/agent.json"):
+        if lowered.endswith(suffix):
+            return stripped[: -len(suffix)]
+    return stripped
 
 
 def import_agent_from_url(url: str, registry: Optional["AgentRegistry"] = None) -> AgentRegistryEntry:

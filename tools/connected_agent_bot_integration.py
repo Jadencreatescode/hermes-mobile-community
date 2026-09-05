@@ -181,6 +181,7 @@ class HarnessAgentRosterProvider:
             return entries
 
         reg = HarnessRegistry(db_path)
+        catalog: AgentCardCatalog | None = None
         try:
             for agent in reg.list_agents(verified_only=True):
                 connector_url = agent.get("connector_url", "")
@@ -191,12 +192,14 @@ class HarnessAgentRosterProvider:
                     pass
 
                 avatar_url = ""
-                try:
-                    catalog = AgentCardCatalog(self._home / "operations" / "agent_cards.db")
-                    card = catalog.get(connector_url, allowlist=None)
-                    avatar_url = str(card.get("avatarUrl") or card.get("imageUrl") or "")[:2048]
-                except Exception:
-                    pass
+                if connector_url:
+                    try:
+                        if catalog is None:
+                            catalog = AgentCardCatalog(self._home / "operations" / "agent_cards.db")
+                        card = catalog.get(connector_url, allowlist=None)
+                        avatar_url = str(card.get("avatarUrl") or card.get("imageUrl") or "")[:2048]
+                    except Exception:
+                        pass
 
                 entries.append(
                     RosterEntry(
@@ -218,6 +221,8 @@ class HarnessAgentRosterProvider:
                 )
         finally:
             reg.close()
+            if catalog is not None:
+                catalog.close()
         return entries
 
 
