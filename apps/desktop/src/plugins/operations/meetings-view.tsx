@@ -1,4 +1,4 @@
-import { Button, Codicon, Dialog, DialogContent, DialogHeader, DialogTitle, EmptyState, host, Input } from '@hermes/plugin-sdk'
+import { Button, Codicon, Dialog, DialogContent, DialogHeader, DialogTitle, host, Input } from '@hermes/plugin-sdk'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import type { OperationsAgentModel, OperationsSnapshot } from './data'
@@ -28,6 +28,7 @@ export function MeetingsView({
     () => snapshot.agents.map(agent => ({ connectionId: agent.sourceId, profile: agent.profile, label: `${agent.displayName} · ${agent.sourceLabel}` })),
     [snapshot.agents]
   )
+
   const [meetings, setMeetings] = useState<Array<{ meeting: MeetingRecord; version: number }>>([])
   const [selectedId, setSelectedId] = useState('')
   const [title, setTitle] = useState('')

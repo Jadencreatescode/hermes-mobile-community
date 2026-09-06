@@ -11,8 +11,8 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { BotAvatar } from './bot-avatar'
-import { clearQuickSettings, loadQuickSettings, saveQuickSettings, type QuickSettings } from './control-room-actions'
-import { listA2AAgents, removeA2AAgent, type HarnessAgent } from './data'
+import { clearQuickSettings, loadQuickSettings, type QuickSettings, saveQuickSettings } from './control-room-actions'
+import { type HarnessAgent, listA2AAgents, removeA2AAgent } from './data'
 import { TrustedBridgeOnboarding } from './trusted-bridge-onboarding'
 
 const ICON_SHAPES = [
@@ -39,11 +39,18 @@ function QuickSettingsPanel({
     async function load() {
       try {
         const result = await loadQuickSettings(agent.agentId, host.request)
-        if (!cancelled) setSettings(result)
+
+        if (!cancelled) {
+          setSettings(result)
+        }
       } catch {
-        if (!cancelled) setError('Could not load settings')
+        if (!cancelled) {
+          setError('Could not load settings')
+        }
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+        }
       }
     }
 
@@ -54,7 +61,10 @@ function QuickSettingsPanel({
 
   const commit = useCallback(
     async (patch: Partial<QuickSettings>) => {
-      if (!settings) return
+      if (!settings) {
+        return
+      }
+
       const next = { ...settings, ...patch }
       setSettings(next)
       setSaving(true)
@@ -242,9 +252,11 @@ export function ControlRoomView() {
 
   const counts = useMemo(() => {
     const map = new Map<string, number>()
+
     for (const agent of agents) {
       map.set(agent.status, (map.get(agent.status) ?? 0) + 1)
     }
+
     return map
   }, [agents])
 

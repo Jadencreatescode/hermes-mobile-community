@@ -8,7 +8,7 @@ import {
 } from '@hermes/plugin-sdk'
 import { useCallback, useEffect, useState } from 'react'
 
-import { getA2AChatHistory, sendA2AChatMessage, type A2AChatMessage, type HarnessAgent } from './data'
+import { type A2AChatMessage, getA2AChatHistory, type HarnessAgent, sendA2AChatMessage } from './data'
 
 interface PendingConnectedTurn {
   agentId: string

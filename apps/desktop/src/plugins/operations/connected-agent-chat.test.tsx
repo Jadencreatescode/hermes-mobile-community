@@ -114,12 +114,14 @@ describe('ConnectedAgentChat', () => {
       if (requestId) {
         return { messages: [...messages], mirror_session_id: 'mirror_1', request_status: 'committed' }
       }
+
       return { messages: [...messages], mirror_session_id: 'mirror_1' }
     })
 
     sendA2AChatMessage.mockImplementation(async (_agentId: string, message: string) => {
       messages.push({ role: 'user', content: message })
       messages.push({ role: 'assistant', content: 'The exact diff passes.' })
+
       return {
         reply: 'The exact diff passes.',
         state: 'completed',

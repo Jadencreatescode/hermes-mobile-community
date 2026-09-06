@@ -11,7 +11,7 @@ import {
 } from '@hermes/plugin-sdk'
 import { useCallback, useState } from 'react'
 
-import { registerA2AAgent, type HarnessAgent } from './data'
+import { type HarnessAgent, registerA2AAgent } from './data'
 
 export interface TrustedBridgeOnboardingProps {
   open: boolean
@@ -37,6 +37,7 @@ export function TrustedBridgeOnboarding({ open, onOpenChange, onRegistered }: Tr
   const handleClose = useCallback(
     (next: boolean) => {
       onOpenChange(next)
+
       if (!next) {
         window.setTimeout(reset, 300)
       }

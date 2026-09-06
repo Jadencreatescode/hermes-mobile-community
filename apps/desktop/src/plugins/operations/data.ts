@@ -415,11 +415,16 @@ export async function getA2AChatHistory(agentId: string, requestId = ''): Promis
 
   const row = record(response)
   const rawMessages = Array.isArray(row.messages) ? row.messages : []
+
   const messages = rawMessages.flatMap<A2AChatMessage>((msg: unknown) => {
     const m = record(msg)
     const role = m.role === 'user' || m.role === 'assistant' ? m.role : null
     const content = typeof m.content === 'string' ? m.content : ''
-    if (!role || !content) return []
+
+    if (!role || !content) {
+      return []
+    }
+
     return [{ role, content }]
   })
 
@@ -458,9 +463,11 @@ function normalizeHarnessAgent(value: unknown): HarnessAgent {
   const agentId = typeof row.agent_id === 'string' ? row.agent_id : ''
   const name = typeof row.name === 'string' ? row.name : ''
   const rawStatus = typeof row.status === 'string' ? row.status : ''
+
   const status: A2AConnectionStatus = ['pending', 'verified', 'degraded'].includes(rawStatus)
     ? (rawStatus as A2AConnectionStatus)
     : 'degraded'
+
   const rawCapabilities = Array.isArray(row.capabilities) ? row.capabilities : []
   const capabilities = rawCapabilities.filter((c: unknown): c is string => typeof c === 'string')
 

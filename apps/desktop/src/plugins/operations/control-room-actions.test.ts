@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { clearQuickSettings, loadQuickSettings, saveQuickSettings, type QuickSettings } from './control-room-actions'
+import { clearQuickSettings, loadQuickSettings, type QuickSettings, saveQuickSettings } from './control-room-actions'
 
 const request = vi.fn()
 

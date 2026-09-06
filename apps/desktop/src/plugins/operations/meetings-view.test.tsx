@@ -106,6 +106,7 @@ describe('Meetings graphical room integration', () => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting, version: 1 }] }
       }
+
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -128,6 +129,7 @@ describe('Meetings graphical room integration', () => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting, version: 1 }] }
       }
+
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -153,6 +155,7 @@ describe('Meetings graphical room integration', () => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting, version: 1 }] }
       }
+
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -188,6 +191,7 @@ describe('Meetings graphical room integration', () => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting: a2aMeeting, version: 1 }] }
       }
+
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -205,6 +209,7 @@ describe('Meetings graphical room integration', () => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [] }
       }
+
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
