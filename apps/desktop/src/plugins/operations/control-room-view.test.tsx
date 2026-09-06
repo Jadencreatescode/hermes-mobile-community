@@ -1,17 +1,14 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { listA2AAgents, loadQuickSettings, removeA2AAgent, saveQuickSettings } = vi.hoisted(() => ({
-  listA2AAgents: vi.fn(),
+const { loadQuickSettings, removeA2AAgent, saveQuickSettings } = vi.hoisted(() => ({
   loadQuickSettings: vi.fn(),
   removeA2AAgent: vi.fn(),
-  saveQuickSettings: vi.fn(),
-  registerA2AAgent: vi.fn()
+  saveQuickSettings: vi.fn()
 }))
 
 vi.mock('./data', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  listA2AAgents,
   removeA2AAgent
 }))
 
@@ -35,40 +32,140 @@ vi.mock('@hermes/plugin-sdk', async importOriginal => {
 })
 
 import { ControlRoomView } from './control-room-view'
+import type { OperationsSnapshot } from './data'
 
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
 })
 
-describe('ControlRoomView', () => {
-  it('lists A2A agents with avatars and status', async () => {
-    listA2AAgents.mockResolvedValue([
-      { agentId: 'a2a:one', name: 'Agent One', status: 'verified', capabilities: ['chat'] },
-      { agentId: 'a2a:two', name: 'Agent Two', status: 'pending', capabilities: [] }
-    ])
+const emptySnapshot: OperationsSnapshot = {
+  agents: [],
+  partialFailures: [],
+  sources: []
+}
 
-    render(<ControlRoomView />)
+const populatedSnapshot: OperationsSnapshot = {
+  agents: [
+    {
+      assignments: [],
+      displayName: 'Release Bot',
+      id: 'local::release',
+      profile: 'release',
+      sourceId: 'local',
+      sourceKind: 'local',
+      sourceLabel: 'Local Hermes',
+      state: 'idle',
+      workSummary: 'No active work'
+    },
+    {
+      assignments: [],
+      displayName: 'Builder Bot',
+      id: 'local::builder',
+      profile: 'builder',
+      sourceId: 'local',
+      sourceKind: 'local',
+      sourceLabel: 'Local Hermes',
+      state: 'working',
+      workSummary: 'Building the release'
+    },
+    {
+      assignments: [],
+      displayName: 'Agent One',
+      id: 'a2a::a2a:one',
+      profile: 'a2a:one',
+      sourceId: 'a2a',
+      sourceKind: 'a2a',
+      sourceLabel: 'A2A Harness',
+      state: 'idle',
+      workSummary: 'chat'
+    }
+  ],
+  partialFailures: [],
+  sources: [{ id: 'local', kind: 'local', label: 'Local Hermes', reachable: true, status: 'online' }]
+}
 
-    await waitFor(() => expect(screen.getByText('Agent One')).toBeTruthy())
-    expect(screen.getByText('Agent Two')).toBeTruthy()
-    expect(screen.getByText('Capabilities: chat')).toBeTruthy()
+describe('ControlRoomView visual shell', () => {
+  it('renders the Live visual headquarters hero, department doors, and every room even when empty', async () => {
+    render(<ControlRoomView snapshot={emptySnapshot} />)
+
+    expect(screen.getByText('Live visual headquarters')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Control Room' })).toBeTruthy()
+    expect(screen.getByText('Every room is driven by real session, task, review, input, and source evidence.')).toBeTruthy()
+
+    for (const room of ['Live Floor', 'Needs You', 'Review Desk', 'Blocked Bay', 'Idle Lounge', 'Offline Station']) {
+      expect(screen.getByRole('heading', { name: room })).toBeTruthy()
+    }
+
+    expect(screen.getAllByText('No Bots in this room').length).toBeGreaterThanOrEqual(6)
   })
 
-  it('opens the onboarding dialog and adds a new agent', async () => {
-    listA2AAgents.mockResolvedValue([])
+  it('renders source pills from the public snapshot', async () => {
+    render(<ControlRoomView snapshot={populatedSnapshot} />)
 
-    render(<ControlRoomView />)
-    await waitFor(() => expect(screen.getByText('No A2A agents connected')).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'Connect agent' }))
+    expect(screen.getByText(/Local Hermes\s+online/)).toBeTruthy()
+  })
+
+  it('opens the department door callback for a real public section', async () => {
+    const onOpenSection = vi.fn()
+
+    render(<ControlRoomView onOpenSection={onOpenSection} snapshot={populatedSnapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Mailroom' }))
+    expect(onOpenSection).toHaveBeenCalledWith('mailroom')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Meetings' }))
+    expect(onOpenSection).toHaveBeenCalledWith('meetings')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Agent Workspace' }))
+    expect(onOpenSection).toHaveBeenCalledWith('workspace')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Teach a Task' }))
+    expect(onOpenSection).toHaveBeenCalledWith('training')
+  })
+
+  it('places idle and working agents in their rooms with station cards', async () => {
+    render(<ControlRoomView snapshot={populatedSnapshot} />)
+
+    const idleLounge = screen.getByRole('heading', { name: 'Idle Lounge' }).closest('section') as HTMLElement
+    const liveFloor = screen.getByRole('heading', { name: 'Live Floor' }).closest('section') as HTMLElement
+
+    expect(idleLounge.textContent).toContain('Release Bot')
+    expect(idleLounge.textContent).toContain('Agent One')
+    expect(liveFloor.textContent).toContain('Builder Bot')
+  })
+
+  it('opens the onboarding dialog from the Connect a Bot hero action', async () => {
+    render(<ControlRoomView snapshot={emptySnapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect a Bot' }))
 
     expect(screen.getByLabelText('Agent card URL')).toBeTruthy()
   })
 
-  it('expands quick settings for an agent', async () => {
-    listA2AAgents.mockResolvedValue([
-      { agentId: 'a2a:one', name: 'Agent One', status: 'verified', capabilities: [] }
-    ])
+  it('shows the Details action when requested and routes it through the callback', async () => {
+    const onShowDetails = vi.fn()
+
+    render(<ControlRoomView onShowDetails={onShowDetails} snapshot={populatedSnapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'View detailed Operations' }))
+    expect(onShowDetails).toHaveBeenCalledOnce()
+  })
+
+  it('opens a local Bot station into the inspector Overview with an Open workspace action', async () => {
+    const onOpenAgent = vi.fn()
+
+    render(<ControlRoomView onOpenAgent={onOpenAgent} snapshot={populatedSnapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Release Bot workspace' }))
+    expect(await screen.findByRole('tab', { name: 'Overview' })).toBeTruthy()
+    expect(screen.getAllByText('Release Bot').length).toBeGreaterThanOrEqual(2)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Release Bot Bot workspace' }))
+    expect(onOpenAgent).toHaveBeenCalledOnce()
+  })
+
+  it('lets an A2A peer open Quick Settings from its inspector', async () => {
     loadQuickSettings.mockResolvedValue({
       model: 'gpt-4o',
       provider: 'openai',
@@ -78,72 +175,29 @@ describe('ControlRoomView', () => {
       iconShape: 'rounded'
     })
 
-    render(<ControlRoomView />)
-    await waitFor(() => expect(screen.getByText('Agent One')).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: /Expand settings for Agent One/i }))
+    render(<ControlRoomView snapshot={populatedSnapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Agent One workspace' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Agent One Quick Settings' }))
 
     await waitFor(() => expect(screen.getByDisplayValue('gpt-4o')).toBeTruthy())
     expect(screen.getByDisplayValue('openai')).toBeTruthy()
   })
 
-  it('removes an agent and clears its settings', async () => {
-    listA2AAgents.mockResolvedValue([
-      { agentId: 'a2a:one', name: 'Agent One', status: 'verified', capabilities: [] }
-    ])
+  it('removes an A2A peer from its inspector and clears settings', async () => {
     removeA2AAgent.mockResolvedValue({ agentId: 'a2a:one', deleted: true })
 
-    render(<ControlRoomView />)
-    await waitFor(() => expect(screen.getByText('Agent One')).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: /Remove Agent One/i }))
+    render(<ControlRoomView snapshot={populatedSnapshot} />)
 
-    await waitFor(() => expect(screen.queryByText('Agent One')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Open Agent One workspace' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove Agent One' }))
+
+    await waitFor(() => expect(removeA2AAgent).toHaveBeenCalledWith('a2a:one'))
   })
 
-  it('shows an error when the agent list fails', async () => {
-    listA2AAgents.mockRejectedValue(new Error('network'))
+  it('surfaces an A2A registry error banner passed by the page', async () => {
+    render(<ControlRoomView a2aError="Could not load A2A agents" snapshot={emptySnapshot} />)
 
-    render(<ControlRoomView />)
-
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Could not load A2A agents'))
-  })
-
-  it('shows status counts for verified pending and degraded', async () => {
-    listA2AAgents.mockResolvedValue([
-      { agentId: 'a2a:one', name: 'Agent One', status: 'verified', capabilities: ['chat'] },
-      { agentId: 'a2a:two', name: 'Agent Two', status: 'pending', capabilities: [] },
-      { agentId: 'a2a:three', name: 'Agent Three', status: 'degraded', capabilities: [] }
-    ])
-
-    render(<ControlRoomView />)
-
-    await waitFor(() => expect(screen.getByText('Agent One')).toBeTruthy())
-    // Status counts visible in the count grid
-    const counts = screen.getAllByText('1')
-    expect(counts.length).toBeGreaterThanOrEqual(3)
-  })
-
-  it('shows agent capabilities as comma-separated text', async () => {
-    listA2AAgents.mockResolvedValue([
-      { agentId: 'a2a:multi', name: 'Multi', status: 'verified', capabilities: ['chat.send', 'agent.view', 'run.assign'] }
-    ])
-
-    render(<ControlRoomView />)
-
-    await waitFor(() => expect(screen.getByText('Multi')).toBeTruthy())
-    expect(screen.getByText(/chat.send/)).toBeTruthy()
-    expect(screen.getByText(/agent.view/)).toBeTruthy()
-  })
-
-  it('removes agent from list after successful delete', async () => {
-    listA2AAgents.mockResolvedValue([
-      { agentId: 'a2a:one', name: 'Agent One', status: 'verified', capabilities: [] }
-    ])
-    removeA2AAgent.mockResolvedValue({ agentId: 'a2a:one', deleted: true })
-
-    render(<ControlRoomView />)
-    await waitFor(() => expect(screen.getByText('Agent One')).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: /Remove Agent One/i }))
-
-    await waitFor(() => expect(screen.queryByText('Agent One')).toBeNull())
+    expect(screen.getByRole('alert').textContent).toContain('Could not load A2A agents')
   })
 })

@@ -9,6 +9,7 @@ import { MeetingsView } from './meetings-view'
 import { OperationsNavigation, type OperationsSection } from './navigation'
 import { type OperationsDelegation, OperationsOverview } from './overview'
 import { loadOperationsRoutines, type OperationsRoutinesSnapshot } from './routines'
+import { openAgentWorkspace } from './workspace'
 import { WorkspaceView } from './workspace-view'
 
 const REFRESH_MS = 8_000
@@ -44,8 +45,9 @@ export function OperationsPage() {
   const [snapshot, setSnapshot] = useState<OperationsSnapshot | null>(null)
   const [routines, setRoutines] = useState<OperationsRoutinesSnapshot>(EMPTY_ROUTINES)
   const [error, setError] = useState<Error | null>(null)
+  const [a2aError, setA2aError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
-  const [section, setSection] = useState<OperationsSection>('overview')
+  const [section, setSection] = useState<OperationsSection>('control-room')
   const refreshGeneration = useRef(0)
   const foregroundGeneration = useRef(0)
 
@@ -66,9 +68,18 @@ export function OperationsPage() {
     }
 
     try {
+      let a2aFailed = false
+
+      const a2aRequest = listA2AAgents().catch((cause: unknown) => {
+        a2aFailed = true
+        void cause
+
+        return [] as never[]
+      })
+
       const [connectedAgents, a2aAgents] = await Promise.all([
         loadConnectedAgents(),
-        listA2AAgents().catch(() => [])
+        a2aRequest
       ])
 
       const [nextSnapshot, nextRoutines] = await Promise.all([
@@ -83,6 +94,7 @@ export function OperationsPage() {
       setSnapshot(nextSnapshot)
       setRoutines(nextRoutines)
       setError(null)
+      setA2aError(a2aFailed ? 'Could not load A2A agents' : '')
     } catch (cause) {
       if (generation === refreshGeneration.current) {
         setError(cause instanceof Error ? cause : new Error(String(cause)))
@@ -150,7 +162,18 @@ export function OperationsPage() {
           {section === 'overview' && (
             <OperationsOverview delegations={delegations} routines={routines} snapshot={stableSnapshot} />
           )}
-          {section === 'control-room' && <ControlRoomView />}
+          {section === 'control-room' && (
+            <ControlRoomView
+              a2aError={a2aError}
+              onChanged={() => void refresh(true)}
+              onOpenAgent={agent => {
+                void openAgentWorkspace(host, agent).catch(cause => host.notifyError(cause, `Could not open ${agent.displayName}`))
+              }}
+              onOpenSection={setSection}
+              onShowDetails={() => setSection('overview')}
+              snapshot={stableSnapshot}
+            />
+          )}
           {section === 'mailroom' && (
             <MailroomView
               activeProfile={activeProfile}
