@@ -27,7 +27,7 @@ const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/
 const URGENCIES = new Set<MailUrgency>(['normal', 'priority', 'critical'])
 const STATUSES = new Set<MailStatus>(['queued', 'delivered', 'acknowledged', 'failed', 'expired', 'cancelled'])
 
-function record(value: unknown): Record<string, unknown> {
+export function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 

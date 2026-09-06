@@ -6,6 +6,7 @@ Strict vertical TDD: every behavior is tested red-before-green.
 
 import json
 import textwrap
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -473,3 +474,106 @@ def test_registry_roundtrip_preserves_manifest(tmp_registry, sample_preview):
     assert m.runtime_targets == (HarnessFamily.HERMES,)
     assert m.source_metadata is not None
     assert len(m.source_metadata.fingerprint) == 64
+
+
+# ── URL import path integration ──────────────────────────────────────────────
+
+
+class TestNormalizeUrlToManifest:
+    def test_fetches_agent_card_via_well_known(self, monkeypatch):
+        called_with = []
+
+        def fake_fetch_agent_card(url, *, allowlist=None):
+            called_with.append(url)
+            return {"name": "URL Agent", "description": "from url"}
+
+        monkeypatch.setattr(
+            cai, "_normalize_a2a_url", lambda u: u.strip()
+        )
+        monkeypatch.setattr(
+            "plugins.harness_agents.policy.fetch_agent_card", fake_fetch_agent_card
+        )
+        monkeypatch.setattr(
+            "plugins.harness_agents.policy.validate_url", lambda u, **kw: ("https", "example.com", 443)
+        )
+
+        preview = cai.normalize_url_to_manifest("https://example.com/agent")
+        assert preview.rejected is False
+        assert preview.manifest.name == "URL Agent"
+        assert called_with == ["https://example.com/agent"]
+
+    def test_normalizes_well_known_suffixes(self, monkeypatch):
+        called_with = []
+
+        def fake_fetch_agent_card(url, *, allowlist=None):
+            called_with.append(url)
+            return {"name": "Card Agent"}
+
+        monkeypatch.setattr(
+            "plugins.harness_agents.policy.fetch_agent_card", fake_fetch_agent_card
+        )
+        monkeypatch.setattr(
+            "plugins.harness_agents.policy.validate_url", lambda u, **kw: ("https", "example.com", 443)
+        )
+
+        preview = cai.normalize_url_to_manifest("https://example.com/.well-known/agent-card.json")
+        assert preview.rejected is False
+        assert preview.manifest.name == "Card Agent"
+        assert called_with == ["https://example.com"]
+
+    def test_rejects_private_ip_via_policy(self, monkeypatch):
+        from plugins.harness_agents import policy as ha_policy
+
+        def fake_validate(url, **kw):
+            raise ValueError("blocked address")
+
+        monkeypatch.setattr(ha_policy, "validate_url", fake_validate)
+
+        with pytest.raises(ValueError, match="blocked address"):
+            cai.normalize_url_to_manifest("https://192.168.1.1/agent")
+
+    def test_rejects_metadata_host_via_policy(self, monkeypatch):
+        from plugins.harness_agents import policy as ha_policy
+
+        def fake_validate(url, **kw):
+            raise ValueError("metadata service")
+
+        monkeypatch.setattr(ha_policy, "validate_url", fake_validate)
+
+        with pytest.raises(ValueError, match="metadata service"):
+            cai.normalize_url_to_manifest("https://metadata.google.internal/agent")
+
+    def test_rejects_malformed_card(self, monkeypatch):
+        monkeypatch.setattr(
+            "plugins.harness_agents.policy.fetch_agent_card",
+            lambda url, **kw: {"description": "missing name"},
+        )
+        monkeypatch.setattr(
+            "plugins.harness_agents.policy.validate_url", lambda u, **kw: ("https", "example.com", 443)
+        )
+
+        preview = cai.normalize_url_to_manifest("https://example.com/agent")
+        # normalize_to_manifest handles missing name gracefully — it falls back to filename
+        assert preview.rejected is False
+        assert preview.manifest.name == "agent.json"
+
+    def test_url_import_strips_credentials(self, monkeypatch):
+        monkeypatch.setattr(
+            "plugins.harness_agents.policy.fetch_agent_card",
+            lambda url, **kw: {
+                "name": "Safe Agent",
+                "api_key": "sk-secret",
+                "instructions": "Use token Bearer abc123",
+            },
+        )
+        monkeypatch.setattr(
+            "plugins.harness_agents.policy.validate_url", lambda u, **kw: ("https", "example.com", 443)
+        )
+
+        preview = cai.normalize_url_to_manifest("https://example.com/agent")
+        assert preview.rejected is False
+        assert preview.credential_keys_found == ("api_key",)
+        assert preview.secret_redactions >= 1
+        manifest_text = json.dumps(cai.asdict(preview.manifest), default=str)
+        assert "sk-secret" not in manifest_text
+        assert "abc123" not in manifest_text

@@ -21,6 +21,7 @@ from tools.connected_agent_bot_integration import (
     ConnectedAgentChatStore,
     ConnectedAgentMessenger,
     ConnectedAgentRosterProvider,
+    HarnessAgentRosterProvider,
     LocalProfileRosterProvider,
     RosterEntry,
 )
@@ -680,3 +681,154 @@ def test_message_agent_tool_dispatches_to_connected_agent(tmp_path):
     assert parsed["to"] == "conn-bot"
     assert parsed["provider"] == "codex"
     bot_mode_probe._reset_cache_for_tests()
+
+
+# ── HarnessAgentRosterProvider (A2A verified roster ingest) ─────────────────────
+
+
+def test_harness_agent_provider_lists_verified_only(tmp_path):
+    from plugins.harness_agents.registry import HarnessRegistry
+
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    ops = home / "operations"
+    ops.mkdir()
+
+    db = HarnessRegistry(ops / "harness_agents.db")
+    db.create_agent(
+        {
+            "id": "a2a:verified1",
+            "name": "Verified Agent",
+            "handle": "verified-agent",
+            "description": "",
+            "harness": "generic_a2a",
+            "host_id": "example.com",
+            "host_label": "example.com",
+            "connector_url": "https://example.com/agent",
+            "auth_env": "",
+            "team_id": "",
+        }
+    )
+    db.mark_verified(
+        "a2a:verified1",
+        native_agent_id="native-1",
+        native_session_id="sess-1",
+        mirror_session_id="mirror-1",
+        capabilities=["chat.send"],
+    )
+    db.create_agent(
+        {
+            "id": "a2a:pending1",
+            "name": "Pending Agent",
+            "handle": "pending-agent",
+            "description": "",
+            "harness": "generic_a2a",
+            "host_id": "other.com",
+            "host_label": "other.com",
+            "connector_url": "https://other.com/agent",
+            "auth_env": "",
+            "team_id": "",
+        }
+    )
+    db.close()
+
+    provider = HarnessAgentRosterProvider(hermes_home=home)
+    entries = provider.list_entries(home, me="default")
+    assert len(entries) == 1
+    assert entries[0].display_name == "Verified Agent"
+    assert entries[0].provider == "a2a"
+
+
+def test_harness_agent_provider_returns_public_safe_metadata(tmp_path):
+    from plugins.harness_agents.registry import HarnessRegistry
+
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    ops = home / "operations"
+    ops.mkdir()
+
+    db = HarnessRegistry(ops / "harness_agents.db")
+    db.create_agent(
+        {
+            "id": "a2a:safe1",
+            "name": "Safe Agent",
+            "handle": "safe-agent",
+            "description": "",
+            "harness": "generic_a2a",
+            "host_id": "safe.example.com",
+            "host_label": "safe.example.com",
+            "connector_url": "https://safe.example.com/agent",
+            "auth_env": "",
+            "team_id": "",
+        }
+    )
+    db.mark_verified(
+        "a2a:safe1",
+        native_agent_id="native-1",
+        native_session_id="sess-1",
+        mirror_session_id="mirror-1",
+        capabilities=["chat.send", "agent.view"],
+    )
+    db.close()
+
+    provider = HarnessAgentRosterProvider(hermes_home=home)
+    entries = provider.list_entries(home, me="default")
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.display_name == "Safe Agent"
+    assert entry.provider == "a2a"
+    assert entry.capabilities == ("agent.view", "chat.send")
+    assert entry.verified is True
+    assert entry.endpoint_domain == "safe.example.com"
+    # Must not leak credentials or connector URLs
+    response_json = json.dumps(
+        {
+            "handle": entry.handle,
+            "display_name": entry.display_name,
+            "avatar_url": entry.avatar_url,
+            "endpoint_domain": entry.endpoint_domain,
+            "capabilities": entry.capabilities,
+        }
+    )
+    assert "connector_url" not in response_json
+    assert "auth_env" not in response_json
+    assert "token" not in response_json.lower()
+    assert "safe.example.com" in response_json  # domain is public-safe
+
+
+def test_harness_agent_provider_skips_unverified(tmp_path):
+    from plugins.harness_agents.registry import HarnessRegistry
+
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    ops = home / "operations"
+    ops.mkdir()
+
+    db = HarnessRegistry(ops / "harness_agents.db")
+    db.create_agent(
+        {
+            "id": "a2a:unverified1",
+            "name": "Unverified Agent",
+            "handle": "unverified-agent",
+            "description": "",
+            "harness": "generic_a2a",
+            "host_id": "example.com",
+            "host_label": "example.com",
+            "connector_url": "https://example.com/agent",
+            "auth_env": "",
+            "team_id": "",
+        }
+    )
+    db.close()
+
+    provider = HarnessAgentRosterProvider(hermes_home=home)
+    entries = provider.list_entries(home, me="default")
+    assert entries == []
+
+
+def test_harness_agent_provider_empty_when_no_db(tmp_path):
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    provider = HarnessAgentRosterProvider(hermes_home=home)
+    entries = provider.list_entries(home, me="default")
+    assert entries == []

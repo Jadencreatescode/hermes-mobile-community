@@ -95,6 +95,7 @@ describe('ForgeView', () => {
     render(<ForgeView />)
 
     const headings = ['Triage', 'Todo', 'Ready', 'Running', 'Blocked', 'Review', 'Done']
+
     const indices = headings
       .map(label => screen.queryByText(label))
       .map((node, index) => (node ? index : -1))

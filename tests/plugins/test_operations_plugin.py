@@ -571,6 +571,33 @@ def test_meeting_store_accepts_semantically_complete_conclusion(tmp_path):
     assert stored["meeting"]["action_items"][0]["dedupeKey"].endswith(":publish")
 
 
+def test_meeting_store_accepts_harness_agent_participants(tmp_path):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+    chair = {"connection": "local", "profile": "default"}
+    a2a_agent = {"connection": "a2a", "profile": "agent-1"}
+    record = meeting_record(
+        chair=chair,
+        participants=[chair, a2a_agent],
+        state="running",
+        current_round=1,
+        contributions=[{
+            "id": "a2a-r1",
+            "round": 1,
+            "participant": a2a_agent,
+            "kind": "speak",
+            "text": "A2A agent contribution.",
+            "evidenceRefs": [],
+        }],
+    )
+
+    stored = store.put(record, expected_version=0)
+
+    assert stored["meeting"]["participants"][1]["connection"] == "a2a"
+    assert stored["meeting"]["participants"][1]["profile"] == "agent-1"
+    assert stored["meeting"]["contributions"][0]["participant"]["connection"] == "a2a"
+
+
 def test_meeting_api_persists_versioned_records_and_returns_conflicts(tmp_path, monkeypatch):
     api = load_api()
     monkeypatch.setattr(api, "_meeting_db_path", lambda: tmp_path / "meetings.db")
