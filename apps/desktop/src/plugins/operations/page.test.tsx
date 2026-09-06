@@ -248,20 +248,49 @@ describe('OperationsPage', () => {
     expect(screen.queryByText('Stale Bot')).toBeNull()
   })
 
-  it('renders the Control Room v2 section with A2A agents', async () => {
+  it('renders the Control Room visual shell with A2A peers in rooms', async () => {
     loadConnectedAgents.mockResolvedValue([])
-    loadOperationsSnapshot.mockResolvedValue(snapshot)
+    loadOperationsSnapshot.mockResolvedValue({
+      ...snapshot,
+      agents: [
+        ...snapshot.agents,
+        {
+          assignments: [],
+          displayName: 'Test Agent',
+          id: 'a2a::a2a:test',
+          profile: 'a2a:test',
+          sourceId: 'a2a',
+          sourceKind: 'a2a',
+          sourceLabel: 'A2A Harness',
+          state: 'idle',
+          workSummary: 'chat'
+        }
+      ]
+    })
     loadOperationsRoutines.mockResolvedValue(routines)
     listA2AAgents.mockResolvedValue([
       { agentId: 'a2a:test', name: 'Test Agent', status: 'verified', capabilities: ['chat'] }
     ])
 
     render(<OperationsPage />)
-    await screen.findByText('Release Bot')
-    fireEvent.change(screen.getByLabelText('Operations section'), { target: { value: 'control-room' } })
 
-    await waitFor(() => expect(screen.getByText('Test Agent')).toBeTruthy())
+    expect(await screen.findByRole('heading', { name: 'Control Room' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Idle Lounge' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Live Floor' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Blocked Bay' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Connect a Bot' })).toBeTruthy()
+    expect(screen.getByText('Test Agent')).toBeTruthy()
+  })
+
+  it('surfaces an A2A registry failure as an alert inside the Control Room', async () => {
+    loadConnectedAgents.mockResolvedValue([])
+    loadOperationsSnapshot.mockResolvedValue(snapshot)
+    loadOperationsRoutines.mockResolvedValue(routines)
+    listA2AAgents.mockRejectedValue(new Error('network'))
+
+    render(<OperationsPage />)
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Could not load A2A agents'))
     expect(screen.getByRole('heading', { name: 'Control Room' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Connect agent' })).toBeTruthy()
   })
 })
