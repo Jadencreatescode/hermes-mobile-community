@@ -32,6 +32,7 @@ import {
   revealTreePane
 } from '@/components/pane-shell/tree/store'
 import { onGatewayEvent } from '@/contrib/events'
+import { $pluginRecords } from '@/contrib/plugins-store'
 import { registry } from '@/contrib/registry'
 import { deleteProfile, getLogs, getStatus, type HermesGateway } from '@/hermes'
 import {
@@ -422,6 +423,11 @@ export const host = {
     gateway: readonlyAtom<string>($gatewayState),
     /** Current main model slug. */
     model: readonlyAtom<string>($currentModel),
+    /** Plugin inventory: id → record (`status: 'loaded'` when enabled +
+     *  registered, `'disabled'` otherwise — live as the user toggles in
+     *  Settings → Plugins). Read a record's status to gate a feature that
+     *  depends on another plugin (e.g. Operations Forge ← Kanban). */
+    plugins: readonlyAtom($pluginRecords),
     /** Profile the live gateway is routed to. */
     profile: readonlyAtom<string>($activeGatewayProfile),
     /** Existing delegated-agent progress grouped by its parent runtime session. */
@@ -1007,6 +1013,14 @@ export type { Contribution } from '@/contrib/types'
 /** The live gateway instance type — for typing the `gateway` prop `McpTab`
  *  takes; obtain the instance from `host.getGateway()`. */
 export type { HermesGateway } from '@/hermes'
+/** Cross-plugin REST door. `ctx.rest` is scoped by construction to the CALLING
+ *  plugin's own namespace; `pluginRest` takes the target namespace explicitly,
+ *  so it is the sanctioned seam for a deliberate plugin-to-plugin dependency
+ *  (e.g. the Operations Forge view reading the kanban plugin's `/board`).
+ *  When the target plugin is disabled its router is not mounted, so calls
+ *  reject with the backend's 404 "No such API endpoint" — treat that as the
+ *  target's capability verdict, not a transient failure. */
+export { pluginRest } from '@/hermes'
 /** Grab-to-pan for overflow containers (boards, timelines, wide tables) —
  *  the shared scrub primitive; don't hand-roll drag-to-scroll. */
 export { type GrabScroll, useGrabScroll } from '@/hooks/use-grab-scroll'

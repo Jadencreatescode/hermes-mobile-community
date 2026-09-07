@@ -3,9 +3,12 @@
  * Operations tab. It surfaces the active Forge pipeline (the `hermes-forge`
  * board) as a responsive grid of columns, each holding a stack of cards.
  *
- * It reuses the kanban plugin's REST contract (`/board?board=hermes-forge`)
- * through the operations plugin's own REST door (see ./forge-data) and its
- * types (./types), so it works whether or not the kanban plugin is enabled.
+ * It reads the kanban plugin's REST contract (`/board?board=hermes-forge`)
+ * through the kanban plugin's own REST door (see ./forge-data) with a local
+ * view of its types (./forge-types), so the Forge section works exactly when
+ * the kanban plugin is enabled — a disabled kanban plugin leaves its router
+ * unmounted, the call 404s, and this view tells the user to enable Kanban
+ * instead of rendering an empty failure.
  *
  * Deliberately lean vs. the standalone /kanban page: no drag-and-drop, no
  * create/edit, no board switcher. It's a glanceable fleet-status strip —
@@ -16,15 +19,22 @@
 import {
   Button,
   Codicon,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
   ErrorState,
+  host,
   Loader,
   profileColor,
   profileColorSoft,
-  useQuery
+  useQuery,
+  useValue
 } from '@hermes/plugin-sdk'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 
-import { fetchForgeBoard, FORGE_BOARD_SLUG } from './forge-data'
+import { fetchForgeBoard, FORGE_BOARD_SLUG, isForgeUnavailable, KANBAN_PLUGIN_ID } from './forge-data'
 import type { ForgeTask } from './forge-types'
 
 /** Column presentation — codicon + tone only. Mirrors the kanban plugin's
@@ -151,9 +161,91 @@ function Column({ name, tasks }: { name: string; tasks: ForgeTask[] }) {
   )
 }
 
+/** Step-by-step overlay teaching the user to enable the Kanban plugin so the
+ *  Forge section can load. */
+function KanbanEnableInstructions({ open, onOpenChange }: { onOpenChange: (open: boolean) => void; open: boolean }) {
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>How to enable Kanban</DialogTitle>
+          <DialogDescription>
+            The Forge pipeline is served by the Kanban plugin. Enable it once and the board loads automatically.
+          </DialogDescription>
+        </DialogHeader>
+        <ol className="list-decimal space-y-2 pl-5 text-sm text-foreground">
+          <li>
+            Open{' '}
+            <span className="font-medium">
+              Settings
+              <Codicon className="mx-1 inline-block align-[-0.125rem]" name="arrow-right" size="0.75rem" />
+              Plugins
+            </span>
+            .
+          </li>
+          <li>Find the Kanban plugin in the list.</li>
+          <li>Flip its switch on.</li>
+          <li>Come back to Operations &rarr; Forge — the board loads on its own.</li>
+        </ol>
+        <div className="flex justify-end">
+          <Button
+            className="min-h-11"
+            onClick={() => {
+              onOpenChange(false)
+              host.navigate('/settings?tab=plugins')
+            }}
+          >
+            <Codicon name="settings-gear" size="0.9rem" />
+            Open Settings → Plugins
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** The Forge section when the kanban plugin is disabled: a clear capability
+ *  state (not an error) — enable Kanban to use Forge, with a link to the
+ *  how-to overlay. */
+function ForgeKanbanDisabled() {
+  const [instructionsOpen, setInstructionsOpen] = useState(false)
+
+  return (
+    <>
+      <ErrorState
+        description={
+          <>
+            Forge only works when the Kanban plugin is enabled.{' '}
+            <button
+              className="font-medium text-primary underline underline-offset-4 hover:text-primary/80"
+              onClick={() => setInstructionsOpen(true)}
+              type="button"
+            >
+              How to enable Kanban
+            </button>
+          </>
+        }
+        icon={<Codicon className="text-(--ui-text-tertiary)" name="plug" size="1.75rem" />}
+        title="Enable Kanban to use Forge"
+      >
+        <Button className="min-h-11" onClick={() => host.navigate('/settings?tab=plugins')} variant="outline">
+          <Codicon name="settings-gear" size="0.9rem" />
+          Open Settings → Plugins
+        </Button>
+      </ErrorState>
+      <KanbanEnableInstructions onOpenChange={setInstructionsOpen} open={instructionsOpen} />
+    </>
+  )
+}
+
 /** The Forge board — a compact, read-only, responsive Kanban grid. */
 export function ForgeView() {
+  // Forge is served by the kanban plugin: only fetch while it is enabled and
+  // registered, so the disabled posture reads as "enable Kanban", not a 404.
+  const kanbanEnabled = useValue(host.state.plugins)[KANBAN_PLUGIN_ID]?.status === 'loaded'
+
   const { data, error, isLoading } = useQuery({
+    enabled: kanbanEnabled,
     queryFn: fetchForgeBoard,
     queryKey: ['operations', 'forge', FORGE_BOARD_SLUG],
     refetchInterval: 60_000
@@ -173,6 +265,11 @@ export function ForgeView() {
 
   const total = columns.reduce((sum, col) => sum + col.tasks.length, 0)
 
+  // Gate AFTER the hooks: kanban disabled → capability notice, not a fetch.
+  if (!kanbanEnabled) {
+    return <ForgeKanbanDisabled />
+  }
+
   if (isLoading) {
     return (
       <div className="grid h-full min-h-[12rem] place-items-center">
@@ -182,6 +279,12 @@ export function ForgeView() {
   }
 
   if (error) {
+    // Kanban plugin disabled (its router is unmounted → 404): tell the user to
+    // enable Kanban rather than dressing the verdict up as a generic failure.
+    if (isForgeUnavailable(error)) {
+      return <ForgeKanbanDisabled />
+    }
+
     return (
       <ErrorState
         description={error.message}
