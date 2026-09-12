@@ -10,7 +10,7 @@ Every mobile change must pass:
 npm run audit:mobile
 ```
 
-This evaluates the complete root audit, blocks every unknown advisory, and permits only the exact reviewed Electron development findings below while they remain development only at the reviewed versions. The website lockfile must also report zero known vulnerabilities.
+This evaluates the complete root audit, blocks every unknown advisory, and permits only the exact reviewed Electron development findings below while they remain development only at the reviewed versions. For every exception, the gate also pins its sole reviewed dependency edge, registry URL, and lockfile integrity hash. The website lockfile must also report zero known vulnerabilities.
 
 ## Electron development exceptions
 
@@ -29,6 +29,10 @@ This advisory requires `ProtocolResponse.url` without an explicit session while 
 ### GHSA-jmr9-qjv8-65gv
 
 `extract-zip` does not validate malicious symbolic link targets. It is used only by Electron's development installation path and has no patched upstream release. The archive is selected by the pinned Electron package and checked through npm lockfile integrity.
+
+### GHSA-7pqw-9j4j-h8q3
+
+This advisory is a second arbitrary-write variant in the same unpatched `extract-zip` release: a duplicate regular-file entry can write through a symlink planted earlier in the archive. The exposure and boundary are identical here. Hermes does not extract user-supplied archives through this package; it appears only in Electron's development installation path, where npm selects the integrity-pinned Electron archive.
 
 Electron 40.10.3 and later replace this JavaScript extractor with a native Microsoft Visual C++ binding. Nous Research reverted that upgrade after confirmed fresh Windows installation failures on machines without the Visual C++ Redistributable. Moving to Electron 41 would remove the audit finding but restore that field failure.
 
