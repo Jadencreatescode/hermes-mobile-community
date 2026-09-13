@@ -9,22 +9,47 @@ const POLICIES = {
       'https://github.com/advisories/GHSA-9f4c-93c8-jc8g',
       'https://github.com/advisories/GHSA-r4w5-6pfg-jxp5'
     ]),
+    allowedEdges: new Set(['apps/desktop:devDependencies']),
     allowedReferences: new Set(['extract-zip']),
     allowedNodes: new Set(['apps/desktop/node_modules/electron']),
+    expectedIntegrity: 'sha512-Xj3Hy0Imbu4g0gDIW55w/jJYz94nMO2JRSGYA3LyAn5SwaERCelgZrA21vfH+Bi//SWAWQXddHsMwCqauyMT8g==',
+    expectedResolved: 'https://registry.npmjs.org/electron/-/electron-40.10.2.tgz',
     expectedVersion: '40.10.2'
   },
   'extract-zip': {
     allowedAdvisories: new Set([
-      'https://github.com/advisories/GHSA-jmr9-qjv8-65gv'
+      'https://github.com/advisories/GHSA-jmr9-qjv8-65gv',
+      'https://github.com/advisories/GHSA-7pqw-9j4j-h8q3'
     ]),
+    allowedEdges: new Set(['apps/desktop/node_modules/electron:dependencies']),
     allowedReferences: new Set(),
     allowedNodes: new Set(['node_modules/extract-zip']),
+    expectedIntegrity: 'sha512-GDhU9ntwuKyGXdZBUgTIe+vXnWj0fppUEtMDL0+idd5Sta8TGpHssn/eusA9mrPr9qNDym6SxAYZjNvCn/9RBg==',
+    expectedResolved: 'https://registry.npmjs.org/extract-zip/-/extract-zip-2.0.1.tgz',
     expectedVersion: '2.0.1'
   }
 }
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function dependencyEdges(packages, dependencyName) {
+  const edges = new Set()
+
+  for (const [node, locked] of Object.entries(packages)) {
+    if (!isRecord(locked)) continue
+
+    for (const section of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+      const dependencies = locked[section]
+
+      if (isRecord(dependencies) && Object.hasOwn(dependencies, dependencyName)) {
+        edges.add(`${node}:${section}`)
+      }
+    }
+  }
+
+  return edges
 }
 
 export function evaluateAuditReport(report, lock) {
@@ -96,8 +121,30 @@ export function evaluateAuditReport(report, lock) {
         )
       }
 
+      if (locked.resolved !== policy.expectedResolved) {
+        errors.push(`${name} registry identity changed or is missing at ${node}`)
+      }
+
+      if (locked.integrity !== policy.expectedIntegrity) {
+        errors.push(`${name} integrity changed or is missing at ${node}`)
+      }
+
       if (locked.dev !== true) {
         errors.push(`${name} is not development only at ${node}`)
+      }
+    }
+
+    const edges = dependencyEdges(packages, name)
+
+    for (const edge of edges) {
+      if (!policy.allowedEdges.has(edge)) {
+        errors.push(`${name} appeared at an unreviewed dependency edge: ${edge}`)
+      }
+    }
+
+    for (const edge of policy.allowedEdges) {
+      if (!edges.has(edge)) {
+        errors.push(`${name} reviewed dependency edge is missing: ${edge}`)
       }
     }
 

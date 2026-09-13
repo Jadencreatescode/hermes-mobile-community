@@ -7,6 +7,16 @@ import { evaluateAuditReport } from '../scripts/release-security/npm-audit-polic
 const electronUrl = 'https://github.com/advisories/GHSA-9f4c-93c8-jc8g'
 const protocolUrl = 'https://github.com/advisories/GHSA-r4w5-6pfg-jxp5'
 const extractUrl = 'https://github.com/advisories/GHSA-jmr9-qjv8-65gv'
+const extractWriteUrl = 'https://github.com/advisories/GHSA-7pqw-9j4j-h8q3'
+
+type LockPackage = {
+  dependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
+  dev?: boolean
+  integrity?: string
+  resolved?: string
+  version?: string
+}
 
 function knownReport() {
   return {
@@ -26,17 +36,33 @@ function knownReport() {
       'extract-zip': {
         severity: 'high',
         nodes: ['node_modules/extract-zip'],
-        via: [{ severity: 'high', url: extractUrl }]
+        via: [
+          { severity: 'high', url: extractUrl },
+          { severity: 'high', url: extractWriteUrl }
+        ]
       }
     }
   }
 }
 
-function developmentLock() {
+function developmentLock(): { packages: Record<string, LockPackage> } {
   return {
     packages: {
-      'apps/desktop/node_modules/electron': { dev: true, version: '40.10.2' },
-      'node_modules/extract-zip': { dev: true, version: '2.0.1' }
+      '': {},
+      'apps/desktop': { devDependencies: { electron: '40.10.2' } },
+      'apps/desktop/node_modules/electron': {
+        dependencies: { 'extract-zip': '^2.0.1' },
+        dev: true,
+        integrity: 'sha512-Xj3Hy0Imbu4g0gDIW55w/jJYz94nMO2JRSGYA3LyAn5SwaERCelgZrA21vfH+Bi//SWAWQXddHsMwCqauyMT8g==',
+        resolved: 'https://registry.npmjs.org/electron/-/electron-40.10.2.tgz',
+        version: '40.10.2'
+      },
+      'node_modules/extract-zip': {
+        dev: true,
+        integrity: 'sha512-GDhU9ntwuKyGXdZBUgTIe+vXnWj0fppUEtMDL0+idd5Sta8TGpHssn/eusA9mrPr9qNDym6SxAYZjNvCn/9RBg==',
+        resolved: 'https://registry.npmjs.org/extract-zip/-/extract-zip-2.0.1.tgz',
+        version: '2.0.1'
+      }
     }
   }
 }
@@ -80,6 +106,28 @@ describe('npm audit policy', () => {
 
     assert.equal(result.passed, false)
     assert.match(result.errors.join('\n'), /not development only/i)
+  })
+
+  test('rejects an exception package reached through an unreviewed dependency edge', () => {
+    const lock = developmentLock()
+    lock.packages[''].devDependencies = { 'extract-zip': '2.0.1' }
+
+    const result = evaluateAuditReport(knownReport(), lock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /unreviewed dependency edge/i)
+  })
+
+  test('rejects an exception package whose registry identity or integrity is missing', () => {
+    const lock = developmentLock()
+    delete lock.packages['apps/desktop/node_modules/electron'].resolved
+    delete lock.packages['node_modules/extract-zip'].integrity
+
+    const result = evaluateAuditReport(knownReport(), lock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /registry identity/i)
+    assert.match(result.errors.join('\n'), /integrity/i)
   })
 
   test('rejects critical findings without exception', () => {
