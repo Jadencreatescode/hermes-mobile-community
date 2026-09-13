@@ -24,8 +24,8 @@ vi.mock('./data', async importOriginal => ({
   listA2AAgents
 }))
 
-vi.mock('./forge-data', () => ({
-  FORGE_BOARD_SLUG: 'hermes-forge',
+vi.mock('./forge-data', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   fetchForgeBoard: vi.fn(async () => forgeBoard)
 }))
 
@@ -53,6 +53,8 @@ vi.mock('@hermes/plugin-sdk', async importOriginal => {
       state: {
         connectionId: atom('local'),
         gateway: atom('open'),
+        // Kanban enabled so the forge section renders its board in tests.
+        plugins: atom({ kanban: { id: 'kanban', kind: 'bundled', name: 'Kanban', status: 'loaded' } }),
         profile: atom('default'),
         subagents: atom({})
       },

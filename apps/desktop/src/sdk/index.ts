@@ -32,8 +32,9 @@ import {
   revealTreePane
 } from '@/components/pane-shell/tree/store'
 import { onGatewayEvent } from '@/contrib/events'
+import { $pluginRecords } from '@/contrib/plugins-store'
 import { registry } from '@/contrib/registry'
-import { deleteProfile, getLogs, getStatus, type HermesGateway } from '@/hermes'
+import { deleteProfile, getLogs, getStatus, type HermesGateway, pluginRest } from '@/hermes'
 import {
   $gateway,
   activeGatewayConnectionId,
@@ -422,6 +423,11 @@ export const host = {
     gateway: readonlyAtom<string>($gatewayState),
     /** Current main model slug. */
     model: readonlyAtom<string>($currentModel),
+    /** Plugin inventory: id → record (`status: 'loaded'` when enabled +
+     *  registered, `'disabled'` otherwise — live as the user toggles in
+     *  Settings → Plugins). Read a record's status to gate a feature that
+     *  depends on another plugin (e.g. Operations Forge ← Kanban). */
+    plugins: readonlyAtom($pluginRecords),
     /** Profile the live gateway is routed to. */
     profile: readonlyAtom<string>($activeGatewayProfile),
     /** Existing delegated-agent progress grouped by its parent runtime session. */
@@ -444,6 +450,19 @@ export const host = {
   /** Navigate the app router (hash routes, e.g. '/command-center?section=system'). */
   navigate: (path: string) => {
     window.location.hash = path.startsWith('#') ? path : `#${path}`
+  },
+
+  /** Read one Kanban board through a constrained, read-only cross-plugin
+   *  capability. Raw cross-plugin REST stays private so plugins cannot use the
+   *  SDK to address arbitrary plugin namespaces or mutation routes. */
+  readKanbanBoard: async <T>(boardSlug: string): Promise<T> => {
+    const board = boardSlug.trim().toLowerCase()
+
+    if (!/^[a-z0-9][a-z0-9-_]{0,63}$/.test(board)) {
+      throw new Error('Invalid Kanban board slug.')
+    }
+
+    return pluginRest<T>('kanban', `/board?board=${encodeURIComponent(board)}`)
   },
 
   /** Pre-dial a profile's gateway socket in the background — pool-only, no
