@@ -5,29 +5,28 @@ import { fetchForgeBoard, FORGE_BOARD_SLUG, isForgeUnavailable } from './forge-d
 
 afterEach(cleanup)
 
-const mockPluginRest = vi.hoisted(() => vi.fn())
+const mockReadKanbanBoard = vi.hoisted(() => vi.fn())
 
 vi.mock('@hermes/plugin-sdk', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>()
+  const actualHost = actual.host as Record<string, unknown>
 
   return {
     ...actual,
-    pluginRest: mockPluginRest
+    host: {
+      ...actualHost,
+      readKanbanBoard: mockReadKanbanBoard
+    }
   }
 })
 
 describe('forge-data', () => {
   it('calls the kanban plugin’s own REST door pinned to the hermes-forge board', async () => {
-    mockPluginRest.mockResolvedValue({ columns: [], assignees: [], tenants: [] })
+    mockReadKanbanBoard.mockResolvedValue({ columns: [], assignees: [], tenants: [] })
 
     await fetchForgeBoard()
 
-    expect(mockPluginRest).toHaveBeenCalledTimes(1)
-    const [pluginId, path] = mockPluginRest.mock.calls[0]
-
-    expect(pluginId).toBe('kanban')
-    expect(path).toContain('/board')
-    expect(path).toContain(`board=${encodeURIComponent(FORGE_BOARD_SLUG)}`)
+    expect(mockReadKanbanBoard).toHaveBeenCalledExactlyOnceWith(FORGE_BOARD_SLUG)
   })
 
   it('exposes the canonical board slug', () => {
@@ -42,7 +41,8 @@ describe('isForgeUnavailable', () => {
     expect(isForgeUnavailable('no such api endpoint')).toBe(true)
   })
 
-  it('does not match transient failures', () => {
+  it('does not match transient failures or a missing Forge board', () => {
+    expect(isForgeUnavailable(new Error("404: board 'hermes-forge' does not exist"))).toBe(false)
     expect(isForgeUnavailable(new Error('500: Internal Server Error'))).toBe(false)
     expect(isForgeUnavailable(new Error('request timed out'))).toBe(false)
     expect(isForgeUnavailable(new Error('ECONNREFUSED'))).toBe(false)

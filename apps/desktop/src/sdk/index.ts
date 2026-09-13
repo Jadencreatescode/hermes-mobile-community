@@ -34,7 +34,7 @@ import {
 import { onGatewayEvent } from '@/contrib/events'
 import { $pluginRecords } from '@/contrib/plugins-store'
 import { registry } from '@/contrib/registry'
-import { deleteProfile, getLogs, getStatus, type HermesGateway } from '@/hermes'
+import { deleteProfile, getLogs, getStatus, type HermesGateway, pluginRest } from '@/hermes'
 import {
   $gateway,
   activeGatewayConnectionId,
@@ -450,6 +450,19 @@ export const host = {
   /** Navigate the app router (hash routes, e.g. '/command-center?section=system'). */
   navigate: (path: string) => {
     window.location.hash = path.startsWith('#') ? path : `#${path}`
+  },
+
+  /** Read one Kanban board through a constrained, read-only cross-plugin
+   *  capability. Raw cross-plugin REST stays private so plugins cannot use the
+   *  SDK to address arbitrary plugin namespaces or mutation routes. */
+  readKanbanBoard: async <T>(boardSlug: string): Promise<T> => {
+    const board = boardSlug.trim().toLowerCase()
+
+    if (!/^[a-z0-9][a-z0-9-_]{0,63}$/.test(board)) {
+      throw new Error('Invalid Kanban board slug.')
+    }
+
+    return pluginRest<T>('kanban', `/board?board=${encodeURIComponent(board)}`)
   },
 
   /** Pre-dial a profile's gateway socket in the background — pool-only, no
@@ -1013,14 +1026,6 @@ export type { Contribution } from '@/contrib/types'
 /** The live gateway instance type — for typing the `gateway` prop `McpTab`
  *  takes; obtain the instance from `host.getGateway()`. */
 export type { HermesGateway } from '@/hermes'
-/** Cross-plugin REST door. `ctx.rest` is scoped by construction to the CALLING
- *  plugin's own namespace; `pluginRest` takes the target namespace explicitly,
- *  so it is the sanctioned seam for a deliberate plugin-to-plugin dependency
- *  (e.g. the Operations Forge view reading the kanban plugin's `/board`).
- *  When the target plugin is disabled its router is not mounted, so calls
- *  reject with the backend's 404 "No such API endpoint" — treat that as the
- *  target's capability verdict, not a transient failure. */
-export { pluginRest } from '@/hermes'
 /** Grab-to-pan for overflow containers (boards, timelines, wide tables) —
  *  the shared scrub primitive; don't hand-roll drag-to-scroll. */
 export { type GrabScroll, useGrabScroll } from '@/hooks/use-grab-scroll'

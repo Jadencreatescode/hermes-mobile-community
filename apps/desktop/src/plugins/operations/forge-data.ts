@@ -4,8 +4,8 @@
  * The Operations plugin surfaces the active Forge pipeline (the `hermes-forge`
  * Kanban board) as a compact, read-only section. This module owns the single
  * REST call, made through the KANBAN plugin's own REST door
- * (`/api/plugins/kanban/board?board=hermes-forge`) via the SDK's cross-plugin
- * `pluginRest` — the Forge section renders the same board the standalone
+ * (`/api/plugins/kanban/board?board=hermes-forge`) via the SDK's narrow,
+ * read-only `host.readKanbanBoard` capability — the Forge section renders the same board the standalone
  * kanban page does, pinned to `?board=hermes-forge` so we never flip the
  * server-wide current-board pointer.
  *
@@ -21,7 +21,7 @@
  * only @hermes/plugin-sdk (and react), never ../kanban/* internals.
  */
 
-import { pluginRest } from '@hermes/plugin-sdk'
+import { host } from '@hermes/plugin-sdk'
 
 import type { ForgeBoard } from './forge-types'
 
@@ -40,12 +40,12 @@ export const KANBAN_PLUGIN_ID = 'kanban'
 export function isForgeUnavailable(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
 
-  return /no such api endpoint/i.test(message) || /endpoint is likely missing/i.test(message) || /(?:^\s*|error:\s*)404\b/i.test(message)
+  return /no such api endpoint/i.test(message) || /endpoint is likely missing/i.test(message)
 }
 
 /** Fetch the Forge board through the kanban plugin's REST door. Rejects with a
  *  404-style error when the kanban plugin is disabled (see
  *  `isForgeUnavailable`); other rejections are ordinary load failures. */
 export async function fetchForgeBoard(): Promise<ForgeBoard> {
-  return pluginRest<ForgeBoard>(KANBAN_PLUGIN_ID, `/board?board=${encodeURIComponent(FORGE_BOARD_SLUG)}`)
+  return host.readKanbanBoard<ForgeBoard>(FORGE_BOARD_SLUG)
 }
