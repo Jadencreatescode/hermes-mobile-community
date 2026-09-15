@@ -6,8 +6,7 @@ export const OPERATIONS_SECTIONS = [
   { id: 'mailroom', label: 'Mailroom' },
   { id: 'meetings', label: 'Meetings' },
   { id: 'workspace', label: 'Agent Workspace' },
-  { id: 'forge', label: 'Forge' },
-  { id: 'training', label: 'Training' }
+  { id: 'forge', label: 'Forge' }
 ] as const
 
 export type OperationsSection = (typeof OPERATIONS_SECTIONS)[number]['id']

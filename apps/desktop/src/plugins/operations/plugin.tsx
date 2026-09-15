@@ -23,7 +23,7 @@ const LOCALES = {
 const plugin: HermesPlugin = {
   id: 'operations',
   name: 'Operations',
-  description: 'Public control room for Hermes Bots, active work, Mailroom, meetings, workspaces, Forge, and Training.',
+  description: 'Public control room for Hermes Bots, active work, Mailroom, meetings, workspaces, and Forge.',
   defaultEnabled: true,
   register(ctx) {
     ctx.i18n.register(LOCALES)

@@ -1,12 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { loadConnectedAgents, loadOperationsRoutines, loadOperationsSnapshot, listA2AAgents, navigate } = vi.hoisted(() => ({
+const { loadConnectedAgents, loadOperationsRoutines, loadOperationsSnapshot, listA2AAgents } = vi.hoisted(() => ({
   loadConnectedAgents: vi.fn(),
   loadOperationsRoutines: vi.fn(),
   loadOperationsSnapshot: vi.fn(),
-  listA2AAgents: vi.fn(async () => [] as unknown[]),
-  navigate: vi.fn()
+  listA2AAgents: vi.fn(async () => [] as unknown[])
 }))
 
 const forgeBoard = vi.hoisted(() => ({
@@ -44,7 +43,7 @@ vi.mock('@hermes/plugin-sdk', async importOriginal => {
       agents: vi.fn(),
       connections: vi.fn(),
       ensureAgent: vi.fn(),
-      navigate,
+      navigate: vi.fn(),
       newChat: vi.fn(),
       notifyError: vi.fn(),
       openSession: vi.fn(),
@@ -107,18 +106,16 @@ describe('OperationsPage', () => {
     expect(screen.getByText(/Bots, delegated workers, assignments, routines, and source health/i)).toBeTruthy()
   })
 
-  it('links Training to the existing public Training Mode rather than a private capture implementation', async () => {
+  it('does not advertise Training as an Operations capability', async () => {
     loadConnectedAgents.mockResolvedValue([])
     loadOperationsSnapshot.mockResolvedValue(snapshot)
     loadOperationsRoutines.mockResolvedValue(routines)
 
     render(<OperationsPage />)
     await screen.findByText('Release Bot')
-    fireEvent.change(screen.getByLabelText('Operations section'), { target: { value: 'training' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Open Training Mode' }))
-
-    expect(navigate).toHaveBeenCalledWith('/training')
-    expect(screen.getByText(/does not run or schedule the task/i)).toBeTruthy()
+    expect(screen.queryByRole('option', { name: 'Training' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Open Training Mode' })).toBeNull()
+    expect(screen.queryByText(/review first Training Mode/i)).toBeNull()
   })
 
   it('renders the touch-safe Mailroom only for profiles local to its authenticated API host', async () => {

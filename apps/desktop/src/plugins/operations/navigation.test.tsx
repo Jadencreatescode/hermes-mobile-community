@@ -16,8 +16,7 @@ describe('Operations responsive navigation', () => {
       'mailroom',
       'meetings',
       'workspace',
-      'forge',
-      'training'
+      'forge'
     ])
 
     const compact = screen.getByLabelText('Operations section')
@@ -29,6 +28,8 @@ describe('Operations responsive navigation', () => {
     expect(Array.from((compact as HTMLSelectElement).options, option => option.textContent)).toEqual(
       OPERATIONS_SECTIONS.map(section => section.label)
     )
+    expect(Array.from((compact as HTMLSelectElement).options, option => option.textContent)).not.toContain('Training')
+    expect(screen.queryByRole('tab', { name: 'Training' })).toBeNull()
     expect(container.firstElementChild?.className).toContain('min-w-0')
 
     fireEvent.change(compact, { target: { value: 'mailroom' } })
