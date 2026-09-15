@@ -195,8 +195,7 @@ function Room({ definition, agents, onQuickSettings, onSelect, expanded = false 
 const DEPARTMENT_DOORS: Array<{ description: string; icon: string; id: Exclude<OperationsSection, 'overview' | 'control-room'>; label: string }> = [
   { id: 'mailroom', label: 'Mailroom', description: 'Durable Bot messages', icon: 'mail' },
   { id: 'meetings', label: 'Meetings', description: 'Structured decisions', icon: 'organization' },
-  { id: 'workspace', label: 'Agent Workspace', description: 'Chat, screen, and work', icon: 'remote-explorer' },
-  { id: 'training', label: 'Teach a Task', description: 'Record a safe workflow', icon: 'record' }
+  { id: 'workspace', label: 'Agent Workspace', description: 'Chat, screen, and work', icon: 'remote-explorer' }
 ]
 
 function DepartmentDoors({ onOpenSection }: { onOpenSection?: (section: Exclude<OperationsSection, 'overview' | 'control-room'>) => void }) {
@@ -208,7 +207,7 @@ function DepartmentDoors({ onOpenSection }: { onOpenSection?: (section: Exclude<
         <p className="text-xs font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">Departments</p>
         <p className="text-xs text-(--ui-text-quaternary)">Swipe for more →</p>
       </div>
-      <div className="flex min-w-0 gap-2 overflow-x-auto pb-2 md:grid md:grid-cols-4 md:overflow-visible md:pb-0">
+      <div className="flex min-w-0 gap-2 overflow-x-auto pb-2 md:grid md:grid-cols-3 md:overflow-visible md:pb-0">
         {DEPARTMENT_DOORS.map(department => (
           <button
             aria-label={`Open ${department.label}`}

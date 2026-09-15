@@ -20,23 +20,6 @@ const EMPTY_ROUTINES: OperationsRoutinesSnapshot = {
   successfulSources: 0
 }
 
-function TrainingPanel() {
-  return (
-    <section className="mx-auto max-w-2xl space-y-3 rounded-xl border border-(--ui-stroke-secondary) p-4">
-      <div className="flex items-center gap-2">
-        <Codicon name="mortar-board" size="1.1rem" />
-        <h2 className="text-base font-semibold">Training</h2>
-      </div>
-      <p className="text-sm text-(--ui-text-secondary)">
-        Use the public review first Training Mode to turn semantic steps into a reusable skill. It does not run or schedule the task.
-      </p>
-      <Button className="min-h-11 w-full sm:w-auto" onClick={() => host.navigate('/training')}>
-        Open Training Mode
-      </Button>
-    </section>
-  )
-}
-
 export function OperationsPage() {
   const activeConnectionId = useValue(host.state.connectionId)
   const activeProfile = useValue(host.state.profile)
@@ -188,7 +171,6 @@ export function OperationsPage() {
           {section === 'meetings' && <MeetingsView snapshot={stableSnapshot} />}
           {section === 'workspace' && <WorkspaceView agents={stableSnapshot.agents} />}
           {section === 'forge' && <ForgeView />}
-          {section === 'training' && <TrainingPanel />}
         </section>
       </div>
     </main>
