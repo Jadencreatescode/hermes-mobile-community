@@ -119,9 +119,8 @@ describe('ControlRoomView visual shell', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Agent Workspace' }))
     expect(onOpenSection).toHaveBeenCalledWith('workspace')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Open Teach a Task' }))
-    expect(onOpenSection).toHaveBeenCalledWith('training')
+    expect(screen.queryByRole('button', { name: 'Open Teach a Task' })).toBeNull()
+    expect(screen.getByLabelText('Operations departments').lastElementChild?.className).toContain('md:grid-cols-3')
   })
 
   it('places idle and working agents in their rooms with station cards', async () => {

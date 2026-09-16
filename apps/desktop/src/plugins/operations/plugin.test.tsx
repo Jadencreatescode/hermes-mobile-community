@@ -22,6 +22,7 @@ describe('public Operations plugin registration', () => {
       name: 'Operations',
       defaultEnabled: true
     })
+    expect(plugin.description).not.toMatch(/teach|training/i)
     expect(registerLocales).toHaveBeenCalledOnce()
     expect(onDispose).toHaveBeenCalledOnce()
     expect(contributions).toEqual(
