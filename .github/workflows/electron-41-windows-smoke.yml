@@ -27,8 +27,13 @@ jobs:
       - name: Verify release pins and install-script policy
         run: npm exec -- vitest run tests-js/allow-scripts-sync.test.ts apps/desktop/electron/desktop-electron-pin.test.ts --reporter=verbose
       - name: Verify Electron binary
-        shell: bash
+        shell: pwsh
         run: |
-          test -f node_modules/electron/dist/electron.exe
-          version="$(node node_modules/electron/cli.js --version)"
-          test "$version" = "v41.10.3"
+          if (-not (Test-Path 'node_modules/electron/dist/electron.exe')) {
+            throw 'Electron Windows binary is missing after npm ci'
+          }
+          $version = (& node node_modules/electron/cli.js --version).Trim()
+          Write-Output "electron_version=$version"
+          if ($version -ne 'v41.10.3') {
+            throw "Expected Electron v41.10.3, got $version"
+          }
