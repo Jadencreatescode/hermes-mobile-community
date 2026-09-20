@@ -909,6 +909,39 @@ export {
 
 export { PALETTE_AREA, type PaletteContribution } from '@/app/command-palette/contrib'
 export { type RouteContribution, ROUTES_AREA, SIDEBAR_NAV_AREA, type SidebarNavContribution } from '@/app/routes'
+
+/** Data-contribution area consumed by Bot roster surfaces. Providers retain
+ * authority over listing, opening, refreshing, and configuring their agents. */
+export const BOTS_ROSTER_PROVIDERS_AREA = 'bots.roster.providers'
+
+/** Transport-neutral, verified Bot identity exposed by a roster provider.
+ * The contract contains only the display and chat fields the public roster
+ * consumes. Provider credentials, endpoint configuration, native sessions,
+ * and private mirror identities stay behind the contributing plugin. */
+export interface BotsRosterProviderAgent {
+  capabilities: string[]
+  description?: string
+  handle?: string
+  harness?: string
+  host_id?: string
+  host_label?: string
+  id: string
+  model?: { id?: string; provider?: string }
+  name: string
+  runtime_state?: 'idle' | 'working' | 'waiting' | 'reviewing' | 'blocked' | 'offline' | 'unknown'
+  verification_state: 'verified'
+  work_summary?: string
+}
+
+/** Provider-owned actions keep agent-specific transports behind the plugin
+ * boundary while generic Bot roster UI works against one public contract. */
+export interface BotsRosterProvider {
+  is_agent_selected?(agent: BotsRosterProviderAgent): boolean
+  list_verified_agents(): Promise<BotsRosterProviderAgent[]>
+  open_bot_chat(agent: BotsRosterProviderAgent): void
+  open_settings?(agent: BotsRosterProviderAgent): void
+  refresh_agent?(agent: BotsRosterProviderAgent): Promise<void>
+}
 /** THE full per-toolset config panel core Settings renders — provider picker,
  *  env vars / API keys, model catalog picker, and post-setup runners. Route-
  *  decoupled (the "manage keys" deep link is a no-op outside the router); pass
@@ -1019,6 +1052,7 @@ export type {
  *  `ctx.register` stays the door for permanent contributions. Namespace the
  *  id with your plugin slug (`kanban:board-switcher`). */
 export { Contribute, type ContributeProps } from '@/contrib/react/contribute'
+export { useContributions } from '@/contrib/react/use-contributions'
 
 // -- contracts ----------------------------------------------------------------
 

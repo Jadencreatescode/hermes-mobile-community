@@ -456,7 +456,9 @@ function AgentInspector({
 export function ControlRoomView({
   a2aError,
   layoutMode,
+  onboardingOpen: controlledOnboardingOpen,
   onChanged,
+  onOnboardingOpenChange,
   onOpenAgent,
   onOpenSection,
   onShowDetails,
@@ -464,13 +466,22 @@ export function ControlRoomView({
 }: {
   a2aError?: string
   layoutMode?: 'map' | 'phone'
+  onboardingOpen?: boolean
   onChanged?: () => void
+  onOnboardingOpenChange?: (open: boolean) => void
   onOpenAgent?: (agent: OperationsAgentModel) => void
   onOpenSection?: (section: Exclude<OperationsSection, 'overview' | 'control-room'>) => void
   onShowDetails?: () => void
   snapshot: OperationsSnapshot
 }) {
-  const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const [localOnboardingOpen, setLocalOnboardingOpen] = useState(false)
+  const onboardingOpen = controlledOnboardingOpen ?? localOnboardingOpen
+
+  const setOnboardingOpen = useCallback((open: boolean) => {
+    setLocalOnboardingOpen(open)
+    onOnboardingOpenChange?.(open)
+  }, [onOnboardingOpenChange])
+
   const [inspectorPanel, setInspectorPanel] = useState<'overview' | 'settings'>('overview')
   const [selectedAgent, setSelectedAgent] = useState<OperationsAgentModel | null>(null)
 

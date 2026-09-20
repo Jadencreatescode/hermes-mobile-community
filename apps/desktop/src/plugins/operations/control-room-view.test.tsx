@@ -142,6 +142,12 @@ describe('ControlRoomView visual shell', () => {
     expect(screen.getByLabelText('Agent card URL')).toBeTruthy()
   })
 
+  it('opens its existing onboarding dialog when the route controls it', () => {
+    render(<ControlRoomView onboardingOpen snapshot={emptySnapshot} />)
+
+    expect(screen.getByLabelText('Agent card URL')).toBeTruthy()
+  })
+
   it('shows the Details action when requested and routes it through the callback', async () => {
     const onShowDetails = vi.fn()
 

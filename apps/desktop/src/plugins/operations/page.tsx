@@ -20,7 +20,13 @@ const EMPTY_ROUTINES: OperationsRoutinesSnapshot = {
   successfulSources: 0
 }
 
-export function OperationsPage() {
+export function OperationsPage({
+  onboardingOpen,
+  onOnboardingOpenChange
+}: {
+  onboardingOpen?: boolean
+  onOnboardingOpenChange?: (open: boolean) => void
+} = {}) {
   const activeConnectionId = useValue(host.state.connectionId)
   const activeProfile = useValue(host.state.profile)
   const gatewayState = useValue(host.state.gateway)
@@ -148,7 +154,9 @@ export function OperationsPage() {
           {section === 'control-room' && (
             <ControlRoomView
               a2aError={a2aError}
+              onboardingOpen={onboardingOpen}
               onChanged={() => void refresh(true)}
+              onOnboardingOpenChange={onOnboardingOpenChange}
               onOpenAgent={agent => {
                 void openAgentWorkspace(host, agent).catch(cause => host.notifyError(cause, `Could not open ${agent.displayName}`))
               }}

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { disposeA2ABotWorkspaces } from './bot-roster-provider'
 import plugin from './plugin'
 
 describe('public Operations plugin registration', () => {
@@ -24,7 +25,8 @@ describe('public Operations plugin registration', () => {
     })
     expect(plugin.description).not.toMatch(/teach|training/i)
     expect(registerLocales).toHaveBeenCalledOnce()
-    expect(onDispose).toHaveBeenCalledOnce()
+    expect(onDispose).toHaveBeenCalledTimes(2)
+    expect(onDispose).toHaveBeenCalledWith(disposeA2ABotWorkspaces)
     expect(contributions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ area: 'routes', data: { path: '/operations' }, id: 'page' }),

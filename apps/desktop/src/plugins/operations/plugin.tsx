@@ -1,4 +1,5 @@
 import {
+  BOTS_ROSTER_PROVIDERS_AREA,
   type HermesPlugin,
   host,
   PALETTE_AREA,
@@ -8,8 +9,10 @@ import {
   SIDEBAR_NAV_AREA,
   type SidebarNavContribution
 } from '@hermes/plugin-sdk'
+import { useCallback, useEffect, useState } from 'react'
 
 import { bindOperationsApi } from './api'
+import { a2aBotRosterProvider, disposeA2ABotWorkspaces } from './bot-roster-provider'
 import { OperationsPage } from './page'
 
 const LOCALES = {
@@ -20,6 +23,38 @@ const LOCALES = {
   }
 }
 
+export function routeRequestsOnboarding(): boolean {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  const query = window.location.hash.split('?', 2)[1] ?? ''
+
+  return new URLSearchParams(query).get('onboard') === '1'
+}
+
+export function OperationsRoute() {
+  const [onboardingOpen, setOnboardingOpen] = useState(routeRequestsOnboarding)
+
+  useEffect(() => {
+    const syncRoute = () => setOnboardingOpen(routeRequestsOnboarding())
+
+    window.addEventListener('hashchange', syncRoute)
+
+    return () => window.removeEventListener('hashchange', syncRoute)
+  }, [])
+
+  const setOpen = useCallback((open: boolean) => {
+    setOnboardingOpen(open)
+
+    if (!open && routeRequestsOnboarding()) {
+      host.navigate('/operations')
+    }
+  }, [])
+
+  return <OperationsPage onboardingOpen={onboardingOpen} onOnboardingOpenChange={setOpen} />
+}
+
 const plugin: HermesPlugin = {
   id: 'operations',
   name: 'Operations',
@@ -28,13 +63,14 @@ const plugin: HermesPlugin = {
   register(ctx) {
     ctx.i18n.register(LOCALES)
     ctx.onDispose(bindOperationsApi(ctx.rest))
+    ctx.onDispose(disposeA2ABotWorkspaces)
 
     ctx.registerMany([
       {
         id: 'page',
         area: ROUTES_AREA,
         data: { path: '/operations' } satisfies RouteContribution,
-        render: () => <OperationsPage />
+        render: () => <OperationsRoute />
       },
       {
         id: 'nav',
@@ -51,6 +87,11 @@ const plugin: HermesPlugin = {
           keywords: ['operations', 'agents', 'bots', 'work', 'mailroom', 'meetings', 'forge', 'kanban'],
           run: () => host.navigate('/operations')
         } satisfies PaletteContribution
+      },
+      {
+        id: 'verified-a2a-agents',
+        area: BOTS_ROSTER_PROVIDERS_AREA,
+        data: a2aBotRosterProvider
       }
     ])
   }
