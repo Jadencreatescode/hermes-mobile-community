@@ -81,6 +81,10 @@ const blobatarSvg = typeof sdk === 'undefined' ? undefined : sdk.blobatarSvg
 // Budgeted render loop (fps cap + observability pause + dormancy + teardown).
 // Feature-detected: older desktops fall back to the hand-rolled clock below.
 const createBudgetedLoop = typeof sdk === 'undefined' ? undefined : sdk.createBudgetedLoop
+const useContributions =
+  typeof sdk === 'undefined' || typeof sdk.useContributions !== 'function' ? () => [] : sdk.useContributions
+const BOTS_ROSTER_PROVIDERS_AREA =
+  typeof sdk === 'undefined' ? 'bots.roster.providers' : sdk.BOTS_ROSTER_PROVIDERS_AREA || 'bots.roster.providers'
 
 const ID = 'hermes-bots'
 const ROSTER_KEY = [ID, 'roster']
@@ -3552,6 +3556,40 @@ function PetTab({ image, onImage }) {
  *  Gates every SOUL.md protocol append below. */
 let serverInjectsProtocol = false
 
+async function loadProviderRoster(contributions) {
+  const providerRoster = await import('./provider-roster.mjs')
+  return providerRoster.loadProviderRoster(contributions)
+}
+
+function openProviderBot(row) {
+  return row.provider.open_bot_chat(row.agent)
+}
+
+function providerBotMatches(row, query) {
+  const needle = String(query || '').trim().toLowerCase()
+
+  if (!needle) {
+    return true
+  }
+
+  const agent = row?.agent || {}
+
+  return [agent.name, agent.handle, agent.harness, agent.host_label, agent.description]
+    .some(value => String(value || '').toLowerCase().includes(needle))
+}
+
+function providerBotSelected(row) {
+  if (typeof row?.provider?.is_agent_selected !== 'function') {
+    return false
+  }
+
+  try {
+    return Boolean(row.provider.is_agent_selected(row.agent))
+  } catch {
+    return false
+  }
+}
+
 function useRoster() {
   const activeConnectionId = useValue(host.state.connectionId)
 
@@ -5930,6 +5968,102 @@ function activeBots(roster, activeProfile, gatewayState, now = Date.now()) {
 }
 
 // ── bot row ──────────────────────────────────────────────────────────────────
+
+function ProviderBotRow({ row, onRefresh }) {
+  const agent = row.agent
+  const source = [agent.host_label, agent.harness].filter(Boolean).join(' · ')
+  const model = [agent.model?.provider, agent.model?.id].filter(Boolean).join(' · ')
+  const selected = providerBotSelected(row)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const refresh = async () => {
+    if (refreshing || typeof row.provider?.refresh_agent !== 'function') {
+      return
+    }
+
+    setRefreshing(true)
+    try {
+      await row.provider.refresh_agent(agent)
+      await onRefresh?.()
+    } catch (error) {
+      host.notifyError?.(error, `Could not refresh ${agent.name}`)
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  return jsxs('div', {
+    className: cn(
+      'group flex w-full min-w-0 items-center rounded-md transition-colors',
+      selected ? 'bg-(--ui-row-active-background)' : 'hover:bg-(--chrome-action-hover)'
+    ),
+    children: [
+      jsxs('button', {
+        'aria-pressed': selected,
+        type: 'button',
+        className: 'flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left',
+        onClick: () => openProviderBot(row),
+        children: [
+          jsx('span', {
+            className:
+              'flex size-8 shrink-0 items-center justify-center rounded-xl border border-(--ui-stroke-secondary) bg-(--ui-surface-secondary) text-(--ui-accent)',
+            children: jsx(Codicon, { name: 'hubot' })
+          }),
+          jsxs('span', {
+            className: 'min-w-0 flex-1',
+            children: [
+              jsxs('span', {
+                className: 'flex min-w-0 items-center gap-1.5',
+                children: [
+                  jsx('span', {
+                    className: 'min-w-0 flex-1 truncate text-xs font-medium text-foreground',
+                    children: agent.name
+                  }),
+                  jsx('span', {
+                    className:
+                      'shrink-0 rounded-full border border-(--ui-stroke-secondary) bg-(--ui-surface-secondary) px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-(--ui-text-tertiary)',
+                    children: 'Connected'
+                  })
+                ]
+              }),
+              jsx('span', {
+                className: 'block truncate text-[0.6875rem] text-(--ui-text-tertiary)',
+                children: model || source || agent.handle
+              }),
+              source && model
+                ? jsx('span', {
+                    className: 'block truncate text-[0.625rem] text-(--ui-text-quaternary)',
+                    children: source
+                  })
+                : null
+            ]
+          })
+        ]
+      }),
+      typeof row.provider?.open_settings === 'function'
+        ? jsx('button', {
+            'aria-label': `Manage ${agent.name}`,
+            className:
+              'flex size-8 shrink-0 items-center justify-center rounded-md text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-(--ui-text-primary)',
+            onClick: () => row.provider.open_settings(agent),
+            type: 'button',
+            children: jsx(Codicon, { name: 'settings-gear' })
+          })
+        : null,
+      typeof row.provider?.refresh_agent === 'function'
+        ? jsx('button', {
+            'aria-label': `Refresh ${agent.name}`,
+            className:
+              'mr-1 flex size-8 shrink-0 items-center justify-center rounded-md text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-(--ui-text-primary) disabled:opacity-50',
+            disabled: refreshing,
+            onClick: () => void refresh(),
+            type: 'button',
+            children: jsx(Codicon, { name: refreshing ? 'loading~spin' : 'refresh' })
+          })
+        : null
+    ]
+  })
+}
 
 function BotRow({ bot, onDelete, onEdit, onGroup }) {
   const activeProfile = useValue(host.state.profile)
@@ -10865,6 +10999,21 @@ function GroupRow({ active, group, members, needsYou, onOpen, onDisband }) {
 
 function BotsPane() {
   const { data, error, isLoading, refetch } = useRoster()
+  const providerContributions = useContributions(BOTS_ROSTER_PROVIDERS_AREA)
+  const providerQueryKey = providerContributions
+    .map(contribution => `${contribution.source || 'core'}:${contribution.id}`)
+    .join('|')
+  const {
+    data: providerRoster = [],
+    error: providerError,
+    isLoading: providerLoading,
+    refetch: refetchProviderRoster
+  } = useQuery({
+    queryKey: [ID, 'provider-roster', providerQueryKey],
+    queryFn: () => loadProviderRoster(providerContributions),
+    refetchInterval: 5000,
+    staleTime: 5000
+  })
   const gatewayState = useValue(host.state.gateway)
   const gatewayUp = gatewayState === 'open'
   const activeProfile = (useValue(host.state.profile) || 'default').trim() || 'default'
@@ -10890,8 +11039,9 @@ function BotsPane() {
   useEffect(() => {
     if (gatewayUp) {
       void refetch()
+      void refetchProviderRoster()
     }
-  }, [gatewayUp, refetch])
+  }, [gatewayUp, refetch, refetchProviderRoster])
   const allMeta = useValue($botMeta)
   // Messaging-app order: most recent activity first, where "activity" is
   // the newest of (bot created, last message in any of its sessions). A
@@ -10947,9 +11097,11 @@ function BotsPane() {
       members: groupChatMemberBots(name, roster, allMeta),
       activity: groupLastActivity(groupRooms[name])
     }))
+  const providerRows = providerRoster.filter(row => providerBotMatches(row, query))
   const rosterRows = [
     ...filteredRoster.map(bot => ({ kind: 'bot', bot, pinned: isPinned(bot), activity: activityOf(bot) })),
-    ...groupRows
+    ...groupRows,
+    ...providerRows
   ].sort((a, b) => {
     const pa = a.pinned ? 1 : 0
     const pb = b.pinned ? 1 : 0
@@ -11131,7 +11283,7 @@ function BotsPane() {
           })()
         }
       }),
-      roster.length
+      roster.length || providerRoster.length
         ? jsx('div', {
             className: 'px-2.5 pb-1.5',
             children: jsx(SearchField, {
@@ -11150,36 +11302,36 @@ function BotsPane() {
             children: staleNotice
           })
         : null,
-      isLoading && !roster.length
+      (isLoading || providerLoading) && !roster.length && !providerRoster.length
         ? jsx('div', {
             className: 'flex flex-1 items-center justify-center',
             children: jsx(GlyphSpinner, { spinner: 'breathe', className: 'text-(--ui-text-tertiary)' })
           })
-        : error && !roster.length
+        : (error || providerError) && !roster.length && !providerRoster.length
           ? jsxs('div', {
               className: 'grid gap-2 px-3 py-4 text-xs text-(--ui-text-tertiary)',
               children: [
                 jsx('div', {
                   children: gatewayUp
-                    ? `Roster unavailable: ${error instanceof Error ? error.message : 'gateway error'}. If your gateway predates profiles.list, update Hermes and restart the gateway.`
+                    ? `Roster unavailable: ${(error || providerError) instanceof Error ? (error || providerError).message : 'gateway error'}. If your gateway predates profiles.list, update Hermes and restart the gateway.`
                     : 'Waiting for the gateway connection… (remote gateways can take a few seconds; retries automatically)'
                 }),
                 jsx(Button, {
                   variant: 'secondary',
                   size: 'sm',
                   className: 'justify-self-start',
-                  onClick: () => void refetch(),
+                  onClick: () => void Promise.all([refetch(), refetchProviderRoster()]),
                   children: 'Retry now'
                 })
               ]
             })
-          : roster.length === 0
+          : roster.length === 0 && providerRoster.length === 0
             ? jsx(EmptyState, {
                 icon: 'hubot',
                 title: 'No agents yet',
                 description: 'Create your first teammate.'
               })
-            : filteredRoster.length === 0 && rosterRows.length === 0
+            : rosterRows.length === 0
               ? jsx('div', {
                   'aria-live': 'polite',
                   className:
@@ -11193,8 +11345,8 @@ function BotsPane() {
                   className: 'hermes-bots-roster min-h-0 flex-1',
                   children: jsx('div', {
                     className: 'grid w-full min-w-0 gap-0.5 px-1.5 pb-2',
-                    // Flat, Discord-style list: bot rows and group rows
-                    // interleaved by recency — no section headers.
+                    // This public architecture has no gateway-section shell,
+                    // so connected agents join its existing flat ordering.
                     children: rosterRows.map(row =>
                       row.kind === 'group'
                         ? jsx(
@@ -11209,11 +11361,17 @@ function BotsPane() {
                             },
                             `group:${row.name}`
                           )
-                        : jsx(
-                            BotRow,
-                            { bot: row.bot, onDelete: setDeleting, onEdit: setEditing, onGroup: setGrouping },
-                            botRosterKey(row.bot)
-                          )
+                        : row.kind === 'provider-bot'
+                          ? jsx(
+                              ProviderBotRow,
+                              { onRefresh: refetchProviderRoster, row },
+                              `provider:${row.providerKey}:${row.agent.id}`
+                            )
+                          : jsx(
+                              BotRow,
+                              { bot: row.bot, onDelete: setDeleting, onEdit: setEditing, onGroup: setGrouping },
+                              botRosterKey(row.bot)
+                            )
                     )
                   })
                 }),
@@ -11308,6 +11466,7 @@ export default {
   id: ID,
   name: 'Bots',
   description: 'Bot Mode — a one-chat-per-agent roster with avatars, routines, group chats, and bot-to-bot messaging. Ships with the app; disable here if unwanted.',
+  __test: { ProviderBotRow },
   register(ctx) {
     pluginCtx = ctx
     groupChatSyncDisposed = false
