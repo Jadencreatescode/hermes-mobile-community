@@ -21,6 +21,7 @@ MAX_PARTICIPANTS = 6
 MIN_PARTICIPANTS = 2
 MAX_ROUNDS = 5
 MAX_HISTORY_ITEMS = 128
+MAX_SAFE_INTEGER = 9_007_199_254_740_991
 
 STATES = frozenset({"draft", "running", "waiting", "completed", "cancelled", "failed"})
 TERMINAL_STATES = frozenset({"completed", "cancelled", "failed"})
@@ -255,7 +256,7 @@ def validate_meeting(value: object) -> dict[str, Any]:
         "max_rounds", "current_round", "contributions", "evidence", "decisions",
         "dissent", "action_items",
     }
-    optional = {"pending", "runner_sessions"}
+    optional = {"pending", "runner_sessions", "round_run"}
     if not required.issubset(row) or not set(row).issubset(required | optional):
         raise ValueError("meeting fields are invalid")
 
@@ -316,12 +317,50 @@ def validate_meeting(value: object) -> dict[str, Any]:
     if "runner_sessions" in row:
         raw_sessions = _record(row["runner_sessions"], "runner_sessions")
         runner_sessions = {}
+        participant_session_keys = {
+            f'{participant["connection"]}::{participant["profile"]}'
+            for participant in participants
+        }
         for key, value in raw_sessions.items():
-            runner_sessions[_bounded_text(key, "runner_sessions key", 256)] = _bounded_text(
+            normalized_key = _bounded_text(key, "runner_sessions key", 256)
+            if normalized_key not in participant_session_keys:
+                raise ValueError("runner session key must be a meeting participant")
+            runner_sessions[normalized_key] = _bounded_text(
                 value,
                 f"runner_sessions[{key}]",
                 256,
             )
+
+    round_run = None
+    if "round_run" in row:
+        if state != "running":
+            raise ValueError("round run requires running state")
+        round_run_row = _record(row["round_run"], "round_run")
+        if set(round_run_row) != {"participant", "round", "started_at"}:
+            raise ValueError("round_run fields are invalid")
+        round_run_participant = _route(round_run_row["participant"], "round_run.participant")
+        if _route_key(round_run_participant) not in participant_keys:
+            raise ValueError("round run participant must be in the meeting")
+        round_run_round = round_run_row["round"]
+        if (
+            isinstance(round_run_round, bool)
+            or not isinstance(round_run_round, int)
+            or not 1 <= round_run_round <= max_rounds
+            or round_run_round != current_round
+        ):
+            raise ValueError("round_run.round is invalid")
+        started_at = round_run_row["started_at"]
+        if (
+            isinstance(started_at, bool)
+            or not isinstance(started_at, int)
+            or not 0 < started_at <= MAX_SAFE_INTEGER
+        ):
+            raise ValueError("round_run.started_at is invalid")
+        round_run = {
+            "participant": round_run_participant,
+            "round": round_run_round,
+            "started_at": started_at,
+        }
 
     normalized = {
         "id": meeting_id,
@@ -340,6 +379,7 @@ def validate_meeting(value: object) -> dict[str, Any]:
         "action_items": action_items,
         **({"pending": pending} if pending is not None else {}),
         **({"runner_sessions": runner_sessions} if runner_sessions is not None else {}),
+        **({"round_run": round_run} if round_run is not None else {}),
     }
     encoded = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     if len(encoded) > MAX_RECORD_BYTES:
@@ -357,6 +397,10 @@ def _validate_transition(previous: Mapping[str, Any], proposed: Mapping[str, Any
         raise ValueError("meeting state transition is invalid")
     for field in ("contributions", "decisions", "dissent", "action_items"):
         _assert_prefix(previous[field], proposed[field], field)
+    previous_sessions = previous.get("runner_sessions", {})
+    proposed_sessions = proposed.get("runner_sessions", {})
+    if any(proposed_sessions.get(key) != value for key, value in previous_sessions.items()):
+        raise ImmutableMeetingHistory("runner session bindings cannot change or be removed")
     for field in ("id", "source", "title", "agenda", "chair", "participants", "max_rounds"):
         if proposed[field] != previous[field]:
             raise ImmutableMeetingHistory(f"{field} cannot change after creation")

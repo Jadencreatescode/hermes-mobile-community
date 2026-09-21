@@ -1,5 +1,5 @@
-import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { OperationsAgentModel } from './data'
 import { MeetingRoom } from './meeting-room'
@@ -85,6 +85,16 @@ describe('graphical Bot meeting room', () => {
     expect(screen.getByRole('button', { name: 'Open Review Bot workspace' })).toBeTruthy()
   })
 
+  it('opens a participant meeting conversation from a seated Bot desk when provided', () => {
+    const onOpenConversation = vi.fn()
+
+    render(<MeetingRoom agents={agents} meeting={meeting} onOpenConversation={onOpenConversation} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Research Bot meeting conversation' }))
+
+    expect(onOpenConversation).toHaveBeenCalledWith(meeting.participants[1])
+  })
+
   it('places the first participant at the head of the table as chair', () => {
     render(<MeetingRoom agents={agents} meeting={meeting} />)
 
@@ -108,8 +118,124 @@ describe('graphical Bot meeting room', () => {
     expect(screen.getAllByTestId('meeting-room-seat').filter(seat => seat.dataset.speaker === 'latest')).toHaveLength(1)
   })
 
+  it('shows thinking, latest-speaker, and idle activity cues at their desks', () => {
+    render(<MeetingRoom
+      agents={agents}
+      meeting={{
+        ...meeting,
+        contributions: [
+          { id: 'review-r1', round: 1, participant: meeting.participants[2], kind: 'speak', text: 'Latest evidence', evidenceRefs: [] }
+        ]
+      }}
+      thinkingParticipant={meeting.participants[1]}
+    />)
+
+    const thinkingSeat = screen.getByRole('button', { name: 'Open Research Bot workspace' })
+    const lastSpeakerSeat = screen.getByRole('button', { name: 'Open Review Bot workspace' })
+    const idleSeat = screen.getByRole('button', { name: 'Open Chair Bot workspace' })
+
+    expect(thinkingSeat.dataset.activity).toBe('thinking')
+    expect(thinkingSeat.className).toContain('drop-shadow-[0_0_24px_rgba(103,232,249,1)]')
+    expect(thinkingSeat.innerHTML).toContain('ring-2 ring-cyan-200')
+    expect(thinkingSeat.innerHTML).toContain('motion-safe:animate-ping')
+    expect(thinkingSeat.textContent).toContain('Thinking')
+    expect(screen.getByRole('status', { name: 'Research Bot is thinking' })).toBeTruthy()
+    expect(lastSpeakerSeat.dataset.activity).toBe('last-spoke')
+    expect(lastSpeakerSeat.textContent).toContain('Last spoke')
+    expect(idleSeat.dataset.activity).toBe('listening')
+    expect(idleSeat.textContent).toContain('Tap desk')
+  })
+
+  it('opens meeting conversations from the touch-sized center table without a native title', () => {
+    const onOpenConversations = vi.fn()
+
+    render(<MeetingRoom agents={agents} meeting={meeting} onOpenConversations={onOpenConversations} />)
+
+    const table = screen.getByRole('button', { name: 'Open meeting conversations' })
+    const console = screen.getByTestId('meeting-room-console')
+
+    expect(table.className).toContain('min-h-11')
+    expect(table.getAttribute('title')).toBeNull()
+    expect(console.className).toContain('pointer-events-none')
+    fireEvent.click(table)
+    expect(onOpenConversations).toHaveBeenCalledOnce()
+  })
+
+  it('replaces the round console with a completed meeting wrap up preview', () => {
+    render(<MeetingRoom
+      agents={agents}
+      meeting={{
+        ...meeting,
+        actionItems: [{ title: 'Publish the verified release' }],
+        decisions: [{ text: 'Proceed with the verified release plan.' }],
+        state: 'completed'
+      }}
+    />)
+
+    const wrapUp = screen.getByRole('region', { name: 'Meeting wrap up' })
+
+    expect(wrapUp.textContent).toContain('Meeting wrap up')
+    expect(wrapUp.textContent).toContain('Proceed with the verified release plan.')
+    expect(wrapUp.textContent).toContain('Publish the verified release')
+    expect(screen.queryByTestId('meeting-room-console')).toBeNull()
+    expect(screen.getByTestId('meeting-room-table')).toBeTruthy()
+    expect(screen.getAllByTestId('meeting-room-seat')).toHaveLength(meeting.participants.length)
+  })
+
+  it('shows touch-sized completed actions only for provided callbacks and invokes them', () => {
+    const onCreateTasks = vi.fn()
+    const onOpenConversations = vi.fn()
+    const onOpenDetails = vi.fn()
+    const completedMeeting = {
+      ...meeting,
+      actionItems: [{ title: 'Publish release' }, { title: 'Notify reviewers' }],
+      state: 'completed' as const
+    }
+    const { unmount } = render(<MeetingRoom
+      agents={agents}
+      meeting={completedMeeting}
+      onCreateTasks={onCreateTasks}
+      onOpenConversations={onOpenConversations}
+      onOpenDetails={onOpenDetails}
+    />)
+
+    const conversations = screen.getByRole('button', { name: 'Conversations' })
+    const details = screen.getByRole('button', { name: 'Full wrap up' })
+    const tasks = screen.getByRole('button', { name: 'Create 2 tasks' })
+
+    for (const button of [conversations, details, tasks]) {
+      expect(button.className).toContain('min-h-11')
+      expect(button.className).toContain('min-w-11')
+      expect(button.getAttribute('title')).toBeNull()
+      fireEvent.click(button)
+    }
+    expect(onOpenConversations).toHaveBeenCalledOnce()
+    expect(onOpenDetails).toHaveBeenCalledOnce()
+    expect(onCreateTasks).toHaveBeenCalledOnce()
+
+    unmount()
+    render(<MeetingRoom agents={agents} meeting={completedMeeting} />)
+    expect(screen.queryByRole('button', { name: 'Conversations' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Full wrap up' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Create 2 tasks' })).toBeNull()
+  })
+
+  it('uses public-safe fallback previews when a completed meeting has no decision or action', () => {
+    render(<MeetingRoom
+      agents={agents}
+      meeting={{ ...meeting, actionItems: [], decisions: [], state: 'completed' }}
+      onCreateTasks={vi.fn()}
+    />)
+
+    const wrapUp = screen.getByRole('region', { name: 'Meeting wrap up' })
+
+    expect(wrapUp.textContent).toContain('The meeting closed without a recorded conclusion.')
+    expect(wrapUp.textContent).toContain('No next action was assigned.')
+    expect(screen.queryByRole('button', { name: /Create \d+ tasks?/ })).toBeNull()
+  })
+
   it.each([
-    ['waiting', 'attention', 'Meeting waiting for owner input'],
+    ['waiting', 'attention', 'Meeting waiting for your input'],
     ['completed', 'settled', 'Meeting completed']
   ] as const)('renders a static %s state cue sourced from the meeting record', (state, lighting, label) => {
     render(<MeetingRoom agents={agents} meeting={{ ...meeting, state }} />)
@@ -196,7 +322,7 @@ describe('graphical Bot meeting room', () => {
   it('shows waiting state label', () => {
     render(<MeetingRoom agents={agents} meeting={{ ...meeting, state: 'waiting' }} />)
 
-    expect(screen.getByRole('status').textContent).toContain('Meeting waiting for owner input')
+    expect(screen.getByRole('status').textContent).toContain('Meeting waiting for your input')
   })
 
   it('shows completed state label', () => {
