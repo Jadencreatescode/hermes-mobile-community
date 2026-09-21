@@ -14,6 +14,55 @@ function routeKey(route) {
   return `${route.connectionId}::${route.profile}`
 }
 
+export function meetingMarker(meetingId) {
+  return `<hermes-meeting id=${JSON.stringify(String(meetingId))}>`
+}
+
+function messageContent(message) {
+  if (typeof message?.content === 'string') return message.content
+  if (Array.isArray(message?.content)) {
+    return message.content.map(part => (typeof part === 'string' ? part : part?.text || '')).join('')
+  }
+  return typeof message?.text === 'string' ? message.text : ''
+}
+
+export function stripMeetingMarkers(messages, meetingId) {
+  if (!Array.isArray(messages)) return []
+  const marker = meetingMarker(meetingId)
+
+  return messages.map(message => {
+    if (message?.role !== 'user') return message
+    const content = messageContent(message)
+    const [firstLine, ...rest] = content.split('\n')
+
+    return firstLine === marker ? { ...message, content: rest.join('\n').trim() } : message
+  })
+}
+
+export function filterMeetingHistory(messages, meetingId) {
+  if (!Array.isArray(messages)) return []
+  const marker = meetingMarker(meetingId)
+  const filtered = []
+  let inMeetingSegment = false
+
+  for (const message of messages) {
+    const role = message?.role
+    const content = messageContent(message)
+
+    if (role === 'user') {
+      const [firstLine, ...rest] = content.split('\n')
+      inMeetingSegment = firstLine === marker
+      if (inMeetingSegment && rest.join('\n').trim()) {
+        filtered.push(stripMeetingMarkers([message], meetingId)[0])
+      }
+      continue
+    }
+    if (inMeetingSegment && (role === 'assistant' || role === 'system')) filtered.push(message)
+  }
+
+  return filtered
+}
+
 function assistantText(message) {
   if (!message || message.role !== 'assistant') return ''
   if (typeof message.content === 'string') return message.content.trim()
@@ -69,6 +118,7 @@ function untrustedMeetingData(meeting) {
 
 function turnPrompt(meeting, participant) {
   return [
+    meetingMarker(meeting.id),
     'You are participating in a structured specialist meeting.',
     `Meeting: ${meeting.title}`,
     `Agenda: ${meeting.agenda}`,
@@ -226,6 +276,13 @@ export async function runStructuredMeetingRound(meeting, options) {
   const maxPolls = Math.max(1, Math.min(Number(options.maxPolls || DEFAULT_MAX_POLLS), DEFAULT_MAX_POLLS))
   const pollMs = Math.max(0, Number(options.pollMs ?? DEFAULT_POLL_MS))
   const sessions = { ...(options.sessions || {}) }
+  const onParticipantStart = typeof options.onParticipantStart === 'function' ? options.onParticipantStart : null
+  const onCheckpoint = typeof options.onCheckpoint === 'function' ? options.onCheckpoint : null
+  const checkpoint = async (checkpointMeeting, pending) => {
+    if (onCheckpoint) {
+      await onCheckpoint({ meeting: checkpointMeeting, pending, sessions: { ...sessions } })
+    }
+  }
   let current = meeting
 
   if (meeting.pending) {
@@ -235,9 +292,13 @@ export async function runStructuredMeetingRound(meeting, options) {
       maxPolls,
       pollMs
     })
-    if (recovered?.pending) return { meeting: recovered.meeting, sessions, pending: recovered.pending }
+    if (recovered?.pending) {
+      await checkpoint(recovered.meeting, recovered.pending)
+      return { meeting: recovered.meeting, sessions, pending: recovered.pending }
+    }
     if (recovered?.meeting) {
       current = recovered.meeting
+      await checkpoint(current, null)
       if (current.state !== 'running' || current.currentRound !== meeting.currentRound) {
         return { meeting: current, sessions, pending: null }
       }
@@ -250,6 +311,7 @@ export async function runStructuredMeetingRound(meeting, options) {
       entry => entry.round === current.currentRound && routeKey(entry.participant) === routeKey(participant)
     )
     if (alreadyContributed) continue
+    if (onParticipantStart) await onParticipantStart(participant)
     const turn = await participantTurn(current, participant, sessions, {
       request,
       sleep,
@@ -257,13 +319,16 @@ export async function runStructuredMeetingRound(meeting, options) {
       pollMs
     })
     if (turn.kind === 'waiting') {
-      return { meeting: waitMeeting(current), sessions, pending: turn.pending }
+      const waitingMeeting = waitMeeting(current)
+      await checkpoint(waitingMeeting, turn.pending)
+      return { meeting: waitingMeeting, sessions, pending: turn.pending }
     }
     current = submitContribution(current, {
       participant,
       kind: turn.kind,
       ...(turn.kind === 'speak' ? { text: turn.text } : {})
     })
+    await checkpoint(current, null)
   }
 
   return { meeting: current, sessions, pending: null }

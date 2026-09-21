@@ -598,6 +598,229 @@ def test_meeting_store_accepts_harness_agent_participants(tmp_path):
     assert stored["meeting"]["contributions"][0]["participant"]["connection"] == "a2a"
 
 
+def test_meeting_store_rejects_runner_session_for_nonparticipant(tmp_path):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+
+    with pytest.raises(ValueError, match="runner session key must be a meeting participant"):
+        store.put(
+            meeting_record(runner_sessions={"remote::stranger": "session-1"}),
+            expected_version=0,
+        )
+
+
+def test_meeting_store_cannot_replace_or_remove_runner_session_bindings(tmp_path):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+    base = meeting_record(
+        state="running",
+        current_round=1,
+        runner_sessions={"local::reviewer": "session-reviewer"},
+    )
+    store.put(base, expected_version=0)
+
+    invalid_updates = [
+        {**base, "runner_sessions": {"local::reviewer": "replacement-session"}},
+        meeting_record(state="waiting", current_round=1),
+        meeting_record(
+            state="cancelled",
+            current_round=1,
+            runner_sessions={"local::reviewer": "replacement-session"},
+        ),
+    ]
+    for update in invalid_updates:
+        with pytest.raises(
+            api.ImmutableMeetingHistory,
+            match="runner session bindings cannot change or be removed",
+        ):
+            store.put(update, expected_version=1)
+
+
+def test_meeting_store_adds_runner_session_binding_for_another_participant(tmp_path):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+    base = meeting_record(
+        state="running",
+        current_round=1,
+        runner_sessions={"local::reviewer": "session-reviewer"},
+    )
+    store.put(base, expected_version=0)
+
+    runner_sessions = {
+        "local::reviewer": "session-reviewer",
+        "local::builder": "session-builder",
+    }
+    updated = store.put({**base, "runner_sessions": runner_sessions}, expected_version=1)
+
+    assert updated["version"] == 2
+    assert updated["meeting"]["runner_sessions"] == runner_sessions
+    assert store.get("meeting_release_1")["meeting"]["runner_sessions"] == runner_sessions
+
+
+def test_meeting_store_persists_active_round_run(tmp_path):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+    round_run = {
+        "participant": {"connectionId": "local", "profile": "reviewer"},
+        "round": 1,
+        "started_at": 1_800_000_000_123,
+    }
+    normalized_round_run = {
+        "participant": {"connection": "local", "profile": "reviewer"},
+        "round": 1,
+        "started_at": 1_800_000_000_123,
+    }
+
+    stored = store.put(
+        meeting_record(state="running", current_round=1, round_run=round_run),
+        expected_version=0,
+    )
+
+    assert stored["meeting"]["round_run"] == normalized_round_run
+    assert store.get("meeting_release_1")["meeting"]["round_run"] == normalized_round_run
+
+
+def test_meeting_store_rejects_round_run_unless_running(tmp_path):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+    round_run = {
+        "participant": {"connection": "local", "profile": "reviewer"},
+        "round": 1,
+        "started_at": 1_800_000_000_123,
+    }
+
+    with pytest.raises(ValueError, match="round run requires running state"):
+        store.put(meeting_record(round_run=round_run), expected_version=0)
+
+
+@pytest.mark.parametrize(
+    "round_run",
+    [
+        {"round": 1, "started_at": 1_800_000_000_123},
+        {
+            "participant": {"connection": "local", "profile": "reviewer"},
+            "round": 1,
+            "started_at": 1_800_000_000_123,
+            "unexpected": True,
+        },
+    ],
+)
+def test_meeting_store_requires_exact_round_run_fields(tmp_path, round_run):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+
+    with pytest.raises(ValueError, match="round_run fields are invalid"):
+        store.put(
+            meeting_record(state="running", current_round=1, round_run=round_run),
+            expected_version=0,
+        )
+
+
+def test_meeting_store_rejects_round_run_for_nonparticipant(tmp_path):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+    round_run = {
+        "participant": {"connection": "remote", "profile": "stranger"},
+        "round": 1,
+        "started_at": 1_800_000_000_123,
+    }
+
+    with pytest.raises(ValueError, match="round run participant must be in the meeting"):
+        store.put(
+            meeting_record(state="running", current_round=1, round_run=round_run),
+            expected_version=0,
+        )
+
+
+@pytest.mark.parametrize("round_number", [True, 1.0, 0, 2, 4])
+def test_meeting_store_rejects_invalid_round_run_round(tmp_path, round_number):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+    round_run = {
+        "participant": {"connection": "local", "profile": "reviewer"},
+        "round": round_number,
+        "started_at": 1_800_000_000_123,
+    }
+
+    with pytest.raises(ValueError, match="round_run.round is invalid"):
+        store.put(
+            meeting_record(state="running", current_round=1, round_run=round_run),
+            expected_version=0,
+        )
+
+
+@pytest.mark.parametrize("started_at", [True, 1.5, 0, -1, float("inf"), float("nan")])
+def test_meeting_store_rejects_invalid_round_run_started_at(tmp_path, started_at):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+    round_run = {
+        "participant": {"connection": "local", "profile": "reviewer"},
+        "round": 1,
+        "started_at": started_at,
+    }
+
+    with pytest.raises(ValueError, match="round_run.started_at is invalid"):
+        store.put(
+            meeting_record(state="running", current_round=1, round_run=round_run),
+            expected_version=0,
+        )
+
+
+def test_meeting_store_allows_round_run_add_change_and_clear_versions(tmp_path):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+    contribution = {
+        "id": "turn_1",
+        "round": 1,
+        "participant": {"connection": "local", "profile": "reviewer"},
+        "kind": "speak",
+        "text": "The tests pass.",
+        "evidenceRefs": ["run:tests"],
+    }
+    base = meeting_record(state="running", current_round=1, contributions=[contribution])
+    reviewer_run = {
+        "participant": {"connection": "local", "profile": "reviewer"},
+        "round": 1,
+        "started_at": 1_800_000_000_123,
+    }
+    builder_run = {
+        "participant": {"connection": "local", "profile": "builder"},
+        "round": 1,
+        "started_at": 1_800_000_000_456,
+    }
+
+    assert store.put(base, expected_version=0)["version"] == 1
+    assert store.put({**base, "round_run": reviewer_run}, expected_version=1)["version"] == 2
+    changed = store.put({**base, "round_run": builder_run}, expected_version=2)
+    cleared = store.put(base, expected_version=3)
+
+    assert changed["meeting"]["round_run"] == builder_run
+    assert cleared["version"] == 4
+    assert "round_run" not in cleared["meeting"]
+    assert "round_run" not in store.get("meeting_release_1")["meeting"]
+    with pytest.raises(api.ImmutableMeetingHistory):
+        store.put(
+            meeting_record(state="running", current_round=1, round_run=reviewer_run),
+            expected_version=4,
+        )
+
+
+def test_meeting_store_rejects_round_run_started_at_beyond_javascript_safe_integer(tmp_path):
+    api = load_meeting_store()
+    store = api.MeetingStore(tmp_path / "meetings.db")
+    round_run = {
+        "participant": {"connection": "local", "profile": "reviewer"},
+        "round": 1,
+        "started_at": 9_007_199_254_740_992,
+    }
+
+    with pytest.raises(ValueError, match="round_run.started_at is invalid"):
+        store.put(
+            meeting_record(state="running", current_round=1, round_run=round_run),
+            expected_version=0,
+        )
+
+
 def test_meeting_api_persists_versioned_records_and_returns_conflicts(tmp_path, monkeypatch):
     api = load_api()
     monkeypatch.setattr(api, "_meeting_db_path", lambda: tmp_path / "meetings.db")

@@ -10,7 +10,7 @@ const MEETING_CUES: Record<MeetingRecord['state'], { accent: string; label: stri
   draft: { accent: 'bg-sky-300', label: 'Meeting draft', lighting: 'standby', orb: 'bg-sky-300/70' },
   failed: { accent: 'bg-red-400', label: 'Meeting failed', lighting: 'alert', orb: 'bg-red-400/80' },
   running: { accent: 'bg-cyan-300', label: 'Meeting in progress', lighting: 'live', orb: 'bg-cyan-300/90' },
-  waiting: { accent: 'bg-amber-300', label: 'Meeting waiting for owner input', lighting: 'attention', orb: 'bg-amber-300/90' }
+  waiting: { accent: 'bg-amber-300', label: 'Meeting waiting for your input', lighting: 'attention', orb: 'bg-amber-300/90' }
 }
 
 const SEAT_POSITIONS = [
@@ -61,17 +61,38 @@ function seatStyle(index: number): CSSProperties {
   return { zIndex: index === 0 ? 40 : index >= 3 ? 35 : 25 }
 }
 
+function recordText(value: unknown, key: 'text' | 'title'): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {return ''}
+  const candidate = (value as Record<string, unknown>)[key]
+
+  return typeof candidate === 'string' ? candidate.trim() : ''
+}
+
 export function MeetingRoom({
   agents,
   meeting,
-  onOpenAgent
+  onCreateTasks,
+  onOpenAgent,
+  onOpenConversation,
+  onOpenConversations,
+  onOpenDetails,
+  thinkingParticipant
 }: {
   agents: OperationsAgentModel[]
   meeting: MeetingRecord
+  onCreateTasks?: () => void
   onOpenAgent?: (agent: OperationsAgentModel) => void
+  onOpenConversation?: (participant: MeetingRecord['participants'][number]) => void
+  onOpenConversations?: () => void
+  onOpenDetails?: () => void
+  thinkingParticipant?: MeetingRecord['participants'][number] | null
 }) {
   const speaker = latestSpeaker(meeting)
   const cue = MEETING_CUES[meeting.state]
+  const thinkingAgent = thinkingParticipant ? participantAgent(agents, thinkingParticipant) : undefined
+  const thinkingName = thinkingAgent?.displayName ?? thinkingParticipant?.profile ?? ''
+  const conclusion = recordText(meeting.decisions[0], 'text') || 'The meeting closed without a recorded conclusion.'
+  const nextAction = recordText(meeting.actionItems[0], 'title') || 'No next action was assigned.'
 
   return (
     <section
@@ -107,62 +128,144 @@ export function MeetingRoom({
         <span role="status">{cue.label}</span>
       </div>
 
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-[16%] top-[38%] z-20 h-[39%] rounded-[50%] border border-white/15 bg-gradient-to-b from-slate-500/70 via-slate-800/95 to-black shadow-[0_34px_42px_rgba(0,0,0,.58),inset_0_5px_7px_rgba(255,255,255,.16),inset_0_-18px_24px_rgba(0,0,0,.5),0_0_65px_rgba(34,211,238,.1)] md:inset-x-[18%] md:top-[37%] md:h-[41%]"
-        data-testid="meeting-room-table"
-      >
-        <div className="absolute inset-[7%] rounded-[50%] border border-cyan-100/10 bg-[radial-gradient(ellipse_at_center,rgba(34,211,238,.08),transparent_62%)]" />
-        <div className="absolute inset-x-[24%] bottom-[-9%] h-[18%] rounded-b-[50%] bg-black/75 blur-[1px]" />
-      </div>
-
-      <div
-        aria-label={`Round ${meeting.currentRound} of ${meeting.maxRounds}`}
-        className="absolute left-1/2 top-[52%] z-30 grid size-20 -translate-x-1/2 place-items-center rounded-full border border-cyan-100/20 bg-slate-950/90 shadow-[0_8px_24px_rgba(0,0,0,.5),0_0_35px_rgba(34,211,238,.2),inset_0_0_18px_rgba(255,255,255,.05)] md:top-[51%] md:size-28"
-        data-testid="meeting-room-console"
-        role="img"
-      >
-        <div className={`absolute size-9 rounded-full blur-sm ${cue.orb} ${meeting.state === 'running' || meeting.state === 'waiting' ? 'motion-safe:animate-pulse' : ''}`} />
-        <div className="absolute inset-x-3 bottom-3 flex justify-center gap-1.5 md:bottom-4">
-          {Array.from({ length: Math.max(1, meeting.maxRounds) }, (_, index) => (
-            <span
-              className={`h-1.5 min-w-3 flex-1 rounded-full ${index < meeting.currentRound ? cue.accent : 'bg-white/15'}`}
-              data-illuminated={index < meeting.currentRound ? 'true' : 'false'}
-              data-round-segment={index + 1}
-              key={index}
-            />
-          ))}
+      {thinkingParticipant ? (
+        <div
+          aria-label={`${thinkingName} is thinking`}
+          className="absolute right-3 top-3 z-50 flex max-w-[58%] items-center gap-2 rounded-full border border-cyan-200/20 bg-cyan-950/85 px-3 py-1.5 text-[0.68rem] font-semibold text-cyan-100 shadow-[0_8px_28px_rgba(8,145,178,.3)] backdrop-blur-md md:right-5 md:top-5"
+          role="status"
+        >
+          <span aria-hidden className="size-2 shrink-0 animate-pulse rounded-full bg-cyan-300" />
+          <span className="truncate">{thinkingName} is thinking</span>
         </div>
-      </div>
+      ) : null}
+
+      {onOpenConversations ? (
+        <button
+          aria-label="Open meeting conversations"
+          className="absolute inset-x-[16%] top-[38%] z-20 h-[39%] min-h-11 rounded-[50%] border border-white/15 bg-gradient-to-b from-slate-500/70 via-slate-800/95 to-black shadow-[0_34px_42px_rgba(0,0,0,.58),inset_0_5px_7px_rgba(255,255,255,.16),inset_0_-18px_24px_rgba(0,0,0,.5),0_0_65px_rgba(34,211,238,.1)] outline-none transition-[filter,scale] duration-150 hover:brightness-110 active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-cyan-300 md:inset-x-[18%] md:top-[37%] md:h-[41%]"
+          data-testid="meeting-room-table"
+          onClick={onOpenConversations}
+          type="button"
+        >
+          <span aria-hidden className="absolute inset-[7%] rounded-[50%] border border-cyan-100/10 bg-[radial-gradient(ellipse_at_center,rgba(34,211,238,.08),transparent_62%)]" />
+          <span aria-hidden className="absolute inset-x-[24%] bottom-[-9%] h-[18%] rounded-b-[50%] bg-black/75 blur-[1px]" />
+        </button>
+      ) : (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-[16%] top-[38%] z-20 h-[39%] rounded-[50%] border border-white/15 bg-gradient-to-b from-slate-500/70 via-slate-800/95 to-black shadow-[0_34px_42px_rgba(0,0,0,.58),inset_0_5px_7px_rgba(255,255,255,.16),inset_0_-18px_24px_rgba(0,0,0,.5),0_0_65px_rgba(34,211,238,.1)] md:inset-x-[18%] md:top-[37%] md:h-[41%]"
+          data-testid="meeting-room-table"
+        >
+          <div className="absolute inset-[7%] rounded-[50%] border border-cyan-100/10 bg-[radial-gradient(ellipse_at_center,rgba(34,211,238,.08),transparent_62%)]" />
+          <div className="absolute inset-x-[24%] bottom-[-9%] h-[18%] rounded-b-[50%] bg-black/75 blur-[1px]" />
+        </div>
+      )}
+
+      {meeting.state === 'completed' ? (
+        <section
+          aria-label="Meeting wrap up"
+          className="absolute left-1/2 top-[41%] z-30 w-[62%] -translate-x-1/2 rounded-[1.25rem] border border-emerald-200/20 bg-slate-950/95 p-3 text-left shadow-[0_16px_44px_rgba(0,0,0,.55),0_0_38px_rgba(52,211,153,.14)] backdrop-blur-md md:top-[42%] md:w-[48%] md:p-4"
+          data-testid="meeting-room-wrap-up"
+        >
+          <p className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-emerald-300">Meeting wrap up</p>
+          <p className="mt-1 line-clamp-2 text-xs font-medium leading-5 text-white md:text-sm">{conclusion}</p>
+          <p className="mt-2 line-clamp-1 text-[0.65rem] text-white/65"><span className="font-semibold text-white/85">Next action:</span> {nextAction}</p>
+          <div className="mt-2 flex min-w-0 flex-wrap gap-1.5">
+            {onOpenConversations ? (
+              <button
+                className="min-h-11 min-w-11 rounded-full border border-cyan-200/20 bg-cyan-300/10 px-3 text-[0.65rem] font-semibold text-cyan-100 transition-[background-color,scale] duration-150 hover:bg-cyan-300/20 active:scale-[0.96]"
+                onClick={onOpenConversations}
+                type="button"
+              >
+                Conversations
+              </button>
+            ) : null}
+            {onOpenDetails ? (
+              <button
+                className="min-h-11 min-w-11 rounded-full border border-white/15 bg-white/5 px-3 text-[0.65rem] font-semibold text-white/85 transition-[background-color,scale] duration-150 hover:bg-white/10 active:scale-[0.96]"
+                onClick={onOpenDetails}
+                type="button"
+              >
+                Full wrap up
+              </button>
+            ) : null}
+            {meeting.actionItems.length > 0 && onCreateTasks ? (
+              <button
+                className="min-h-11 min-w-11 rounded-full bg-cyan-300 px-3 text-[0.65rem] font-semibold text-slate-950 transition-[background-color,scale] duration-150 hover:bg-cyan-200 active:scale-[0.96]"
+                onClick={onCreateTasks}
+                type="button"
+              >
+                Create {meeting.actionItems.length} {meeting.actionItems.length === 1 ? 'task' : 'tasks'}
+              </button>
+            ) : null}
+          </div>
+        </section>
+      ) : (
+        <div
+          aria-label={`Round ${meeting.currentRound} of ${meeting.maxRounds}`}
+          className={`absolute left-1/2 top-[52%] z-30 grid size-20 -translate-x-1/2 place-items-center rounded-full border border-cyan-100/20 bg-slate-950/90 shadow-[0_8px_24px_rgba(0,0,0,.5),0_0_35px_rgba(34,211,238,.2),inset_0_0_18px_rgba(255,255,255,.05)] md:top-[51%] md:size-28 ${onOpenConversations ? 'pointer-events-none' : ''}`}
+          data-testid="meeting-room-console"
+          role="img"
+        >
+          <div className={`absolute size-9 rounded-full blur-sm ${cue.orb} ${meeting.state === 'running' || meeting.state === 'waiting' ? 'motion-safe:animate-pulse' : ''}`} />
+          <div className="absolute inset-x-3 bottom-3 flex justify-center gap-1.5 md:bottom-4">
+            {Array.from({ length: Math.max(1, meeting.maxRounds) }, (_, index) => (
+              <span
+                className={`h-1.5 min-w-3 flex-1 rounded-full ${index < meeting.currentRound ? cue.accent : 'bg-white/15'}`}
+                data-illuminated={index < meeting.currentRound ? 'true' : 'false'}
+                data-round-segment={index + 1}
+                key={index}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {meeting.participants.slice(0, 6).map((participant, index) => {
         const agent = participantAgent(agents, participant)
         const name = agent?.displayName ?? participant.profile
         const chair = index === 0
         const speaking = speaker?.connectionId === participant.connectionId && speaker.profile === participant.profile
+        const thinking = thinkingParticipant?.connectionId === participant.connectionId && thinkingParticipant.profile === participant.profile
+        const opensConversation = Boolean(onOpenConversation)
 
         return (
           <button
             aria-description={chair ? 'Meeting chair' : undefined}
-            aria-label={`Open ${name} workspace`}
-            className={`absolute ${SEAT_POSITIONS[index]} group grid min-h-11 min-w-11 place-items-center gap-1 bg-transparent p-1 text-center outline-none transition-[scale,filter] duration-150 active:scale-[0.96] focus-visible:ring-2 focus-visible:ring-cyan-300 ${speaking ? 'drop-shadow-[0_0_18px_rgba(103,232,249,.95)]' : ''}`}
+            aria-label={opensConversation ? `Open ${name} meeting conversation` : `Open ${name} workspace`}
+            className={`absolute ${SEAT_POSITIONS[index]} group grid min-h-11 min-w-11 place-items-center gap-1 bg-transparent p-1 text-center outline-none transition-[scale,filter] duration-150 active:scale-[0.96] focus-visible:ring-2 focus-visible:ring-cyan-300 ${thinking ? 'drop-shadow-[0_0_24px_rgba(103,232,249,1)]' : speaking ? 'drop-shadow-[0_0_12px_rgba(52,211,153,.7)]' : ''}`}
+            data-activity={thinking ? 'thinking' : speaking ? 'last-spoke' : 'listening'}
             data-seat-position={chair ? 'head' : `seat-${index + 1}`}
             data-speaker={speaking ? 'latest' : undefined}
             data-testid="meeting-room-seat"
             key={`${participant.connectionId}:${participant.profile}`}
-            onClick={() => agent && onOpenAgent?.(agent)}
+            onClick={() => {
+              if (onOpenConversation) {onOpenConversation(participant)}
+              else if (agent) {onOpenAgent?.(agent)}
+            }}
             style={seatStyle(index)}
             type="button"
           >
             <span aria-hidden className="absolute top-7 h-16 w-16 rounded-t-[48%] rounded-b-[32%] border border-white/15 bg-gradient-to-b from-slate-600/65 to-slate-950 shadow-[0_14px_18px_rgba(0,0,0,.5)] md:h-20 md:w-20" />
             <span aria-hidden className="absolute top-[4.7rem] h-3 w-16 rounded-[50%] bg-black/55 blur-[2px] md:top-[5.4rem] md:w-20" />
-            <span className={`relative grid place-items-center rounded-full p-1.5 ${speaking ? 'ring-2 ring-cyan-200 ring-offset-2 ring-offset-slate-950' : chair ? 'ring-1 ring-amber-200/70' : 'ring-1 ring-white/15'}`}>
-              {speaking ? <span aria-hidden className="absolute -inset-3 rounded-full border border-cyan-200/35 motion-safe:animate-ping" /> : null}
+            <span className={`relative grid place-items-center rounded-full p-1.5 ${thinking ? 'ring-2 ring-cyan-200 ring-offset-2 ring-offset-slate-950' : speaking ? 'ring-2 ring-emerald-300/80 ring-offset-2 ring-offset-slate-950' : chair ? 'ring-1 ring-amber-200/70' : 'ring-1 ring-white/15'}`}>
+              {thinking ? (
+                <>
+                  <span aria-hidden className="absolute -inset-3 rounded-full border border-cyan-200/45 motion-safe:animate-ping" />
+                  <span aria-hidden className="absolute -inset-6 rounded-full border border-cyan-300/20 motion-safe:animate-pulse" />
+                </>
+              ) : null}
               {chair ? <span aria-hidden className="absolute -top-5 text-base text-amber-200 drop-shadow-[0_0_7px_rgba(253,230,138,.7)]">♛</span> : null}
               {agent ? <BotAvatar name={agent.displayName} size="lg" /> : <span aria-hidden className="grid size-14 place-items-center rounded-[34%] bg-slate-600 text-xl text-white md:size-16">{name.slice(0, 1).toUpperCase()}</span>}
             </span>
             <span className="max-w-24 truncate text-[0.65rem] font-semibold text-white/85 drop-shadow-[0_2px_3px_rgba(0,0,0,.9)] md:max-w-32 md:text-xs">{name}</span>
-            {speaking ? <span aria-hidden className="flex h-3 items-end gap-1 rounded-full bg-cyan-950/70 px-2 py-0.5"><i className="h-1.5 w-0.5 bg-cyan-100 motion-safe:animate-pulse" /><i className="h-2.5 w-0.5 bg-cyan-100 motion-safe:animate-pulse [animation-delay:100ms]" /><i className="h-2 w-0.5 bg-cyan-100 motion-safe:animate-pulse [animation-delay:200ms]" /><i className="h-1 w-0.5 bg-cyan-100 motion-safe:animate-pulse [animation-delay:300ms]" /></span> : null}
+            {thinking ? (
+              <span className="rounded-full border border-cyan-200/25 bg-cyan-950/85 px-2 py-0.5 text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-cyan-100">Thinking</span>
+            ) : speaking ? (
+              <span className="rounded-full border border-emerald-200/20 bg-emerald-950/80 px-2 py-0.5 text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-emerald-100">Last spoke</span>
+            ) : (
+              <span className="rounded-full bg-slate-950/70 px-2 py-0.5 text-[0.58rem] text-white/55">Tap desk</span>
+            )}
           </button>
         )
       })}
