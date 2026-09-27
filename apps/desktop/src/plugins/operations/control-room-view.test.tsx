@@ -1,15 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { loadQuickSettings, removeA2AAgent, saveQuickSettings } = vi.hoisted(() => ({
+const { loadQuickSettings, removeA2AAgent, renameA2AAgent, saveQuickSettings } = vi.hoisted(() => ({
   loadQuickSettings: vi.fn(),
   removeA2AAgent: vi.fn(),
+  renameA2AAgent: vi.fn(),
   saveQuickSettings: vi.fn()
 }))
 
 vi.mock('./data', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  removeA2AAgent
+  removeA2AAgent,
+  renameA2AAgent
 }))
 
 vi.mock('./control-room-actions', async importOriginal => ({
@@ -83,6 +85,24 @@ const populatedSnapshot: OperationsSnapshot = {
   ],
   partialFailures: [],
   sources: [{ id: 'local', kind: 'local', label: 'Local Hermes', reachable: true, status: 'online' }]
+}
+
+const duplicateNameSnapshot: OperationsSnapshot = {
+  ...populatedSnapshot,
+  agents: [
+    ...populatedSnapshot.agents,
+    {
+      assignments: [],
+      displayName: 'Agent Two',
+      id: 'a2a::a2a:two',
+      profile: 'a2a:two',
+      sourceId: 'a2a',
+      sourceKind: 'a2a',
+      sourceLabel: 'A2A Harness',
+      state: 'idle',
+      workSummary: 'chat'
+    }
+  ]
 }
 
 describe('ControlRoomView visual shell', () => {
@@ -204,5 +224,95 @@ describe('ControlRoomView visual shell', () => {
     render(<ControlRoomView a2aError="Could not load A2A agents" snapshot={emptySnapshot} />)
 
     expect(screen.getByRole('alert').textContent).toContain('Could not load A2A agents')
+  })
+
+  it('seeds the name field with the Bot current name and saves a new one', async () => {
+    loadQuickSettings.mockResolvedValue(null)
+    renameA2AAgent.mockResolvedValue({ agent: { agentId: 'a2a:one', name: 'Darrell' }, warnings: [] })
+    const onChanged = vi.fn()
+
+    render(<ControlRoomView onChanged={onChanged} snapshot={populatedSnapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Agent One workspace' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Agent One Quick Settings' }))
+
+    const field = (await screen.findByLabelText('Bot display name')) as HTMLInputElement
+
+    expect(field.value).toBe('Agent One')
+
+    fireEvent.change(field, { target: { value: 'Darrell' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Bot name' }))
+
+    await waitFor(() => expect(renameA2AAgent).toHaveBeenCalledWith('a2a:one', 'Darrell'))
+    expect(onChanged).toHaveBeenCalled()
+    expect((await screen.findByRole('status')).textContent).toBe('Saved. This Bot is now Darrell.')
+  })
+
+  it('carries the backend duplicate name warning into the saved line', async () => {
+    loadQuickSettings.mockResolvedValue(null)
+    renameA2AAgent.mockResolvedValue({
+      agent: { agentId: 'a2a:one', name: 'Agent Two' },
+      warnings: ['Another Bot already uses the name Agent Two, so the two look the same in the roster and the rooms.']
+    })
+
+    render(<ControlRoomView snapshot={populatedSnapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Agent One workspace' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Agent One Quick Settings' }))
+
+    fireEvent.change(await screen.findByLabelText('Bot display name'), { target: { value: 'Agent Two' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Bot name' }))
+
+    const status = await screen.findByRole('status')
+
+    expect(status.textContent).toContain('Saved. This Bot is now Agent Two.')
+    expect(status.textContent).toContain('Another Bot already uses the name Agent Two')
+  })
+
+  it('refuses a name the rules reject before it reaches the backend', async () => {
+    loadQuickSettings.mockResolvedValue(null)
+
+    render(<ControlRoomView snapshot={populatedSnapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Agent One workspace' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Agent One Quick Settings' }))
+
+    fireEvent.change(await screen.findByLabelText('Bot display name'), { target: { value: 'Agent 2!' } })
+
+    expect(screen.getByRole('alert').textContent).toContain('letters, spaces, apostrophes, or hyphens')
+
+    const save = screen.getByRole('button', { name: 'Save Bot name' }) as HTMLButtonElement
+
+    expect(save.disabled).toBe(true)
+
+    fireEvent.click(save)
+    expect(renameA2AAgent).not.toHaveBeenCalled()
+  })
+
+  it('previews a duplicate name warning before the operator saves', async () => {
+    loadQuickSettings.mockResolvedValue(null)
+
+    render(<ControlRoomView snapshot={duplicateNameSnapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Agent One workspace' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Agent One Quick Settings' }))
+    fireEvent.change(await screen.findByLabelText('Bot display name'), { target: { value: 'Agent Two' } })
+
+    expect(screen.getByText(/Another Bot already uses the name Agent Two/)).toBeTruthy()
+  })
+
+  it('reports a name the backend refused', async () => {
+    loadQuickSettings.mockResolvedValue(null)
+    renameA2AAgent.mockRejectedValue(new Error('a2a_name_rejected'))
+
+    render(<ControlRoomView snapshot={populatedSnapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Agent One workspace' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Agent One Quick Settings' }))
+    fireEvent.change(await screen.findByLabelText('Bot display name'), { target: { value: 'Darrell' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Bot name' }))
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('a2a_name_rejected'))
+    expect(screen.queryByRole('status')).toBeNull()
   })
 })

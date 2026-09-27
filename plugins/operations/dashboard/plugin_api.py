@@ -429,6 +429,10 @@ class A2ARegisterRequest(BaseModel):
     confirm: bool = False
 
 
+class A2ARenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=96)
+
+
 def _normalize_a2a_url(url: str) -> str:
     stripped = url.strip()
     lowered = stripped.lower()
@@ -555,6 +559,63 @@ def register_a2a_agent(request: Request, body: A2ARegisterRequest):
 
     agent = reg.get_agent(agent_id)
     return _public_agent_summary(agent)
+
+
+@router.patch("/agents/a2a/{agent_id}")
+def rename_a2a_agent(request: Request, agent_id: str, body: A2ARenameRequest):
+    """Rename one connected agent.
+
+    The id and the handle stay stable, so the connector, the verification state,
+    and the audit trail keep pointing at the same Bot; only the displayed name
+    moves.  A name the operator's other Bots already use is reported back as a
+    warning and the rename still lands, because the operator may mean it.
+    """
+    user_id = _user_id_from_request(request)
+    if not _a2a_rate_limiter.allow(user_id):
+        raise HTTPException(status_code=429, detail="a2a_rate_limited")
+
+    from plugins.harness_agents.registry import HarnessRegistry, _bot_name
+
+    reg = HarnessRegistry(_a2a_registry_path())
+    try:
+        reg.get_agent(agent_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="a2a_agent_not_found")
+
+    try:
+        name = _bot_name(body.name)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "a2a_name_rejected", "reason": str(exc)},
+        ) from exc
+
+    warnings: list[str] = []
+    conflicts = reg.name_conflicts(name, exclude_id=agent_id)
+    if conflicts:
+        labels = ", ".join(sorted(conflict["label"] for conflict in conflicts))
+        warnings.append(
+            "another Bot already uses this name ("
+            + labels
+            + "), so the two are hard to tell apart in the roster and the rooms"
+        )
+
+    try:
+        agent = reg.rename_agent(agent_id, name)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "a2a_name_rejected", "reason": str(exc)},
+        ) from exc
+
+    reg.record_event(
+        agent_id,
+        principal=user_id,
+        event_type="rename",
+        outcome="succeeded",
+        detail={"name": name, "conflicts": len(conflicts)},
+    )
+    return {**_public_agent_summary(agent), "warnings": warnings}
 
 
 @router.get("/agents/a2a")

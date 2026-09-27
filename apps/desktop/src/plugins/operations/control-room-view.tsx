@@ -16,8 +16,9 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { BotAvatar } from './bot-avatar'
+import { BOT_NAME_MAX_CHARS, botRenameConfirmation, checkBotName, normalizeBotName } from './bot-name'
 import { clearQuickSettings, loadQuickSettings, type QuickSettings, saveQuickSettings } from './control-room-actions'
-import { type OperationsAgentModel, type OperationsSnapshot, removeA2AAgent } from './data'
+import { type OperationsAgentModel, type OperationsSnapshot, removeA2AAgent, renameA2AAgent } from './data'
 import type { OperationsSection } from './navigation'
 import { TrustedBridgeOnboarding } from './trusted-bridge-onboarding'
 
@@ -347,18 +348,100 @@ function QuickSettingsPanel({
   )
 }
 
+function BotNamePanel({
+  agentId,
+  currentName,
+  otherNames,
+  onChanged
+}: {
+  agentId: string
+  currentName: string
+  otherNames: string[]
+  onChanged?: () => void
+}) {
+  const [draft, setDraft] = useState(currentName)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [confirmation, setConfirmation] = useState('')
+
+  useEffect(() => {
+    setDraft(currentName)
+    setError('')
+    setConfirmation('')
+  }, [agentId, currentName])
+
+  const check = checkBotName(draft, otherNames)
+  const changed = normalizeBotName(draft) !== normalizeBotName(currentName)
+
+  const handleSave = useCallback(async () => {
+    if (!check.valid || !changed || saving) {return}
+
+    setSaving(true)
+    setError('')
+    setConfirmation('')
+
+    try {
+      const result = await renameA2AAgent(agentId, check.name)
+
+      setConfirmation(botRenameConfirmation(result.agent.name || check.name, result.warnings))
+      onChanged?.()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setSaving(false)
+    }
+  }, [agentId, changed, check.name, check.valid, onChanged, saving])
+
+  return (
+    <section aria-label="Bot name" className="space-y-2 rounded-xl border border-(--ui-stroke-tertiary) bg-(--ui-bg-secondary) p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-xs font-semibold text-(--ui-text-secondary)">Name</span>
+        <span className="min-w-0 truncate text-xs text-(--ui-text-quaternary)">Shown as {currentName}</span>
+      </div>
+      <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+        <Input
+          aria-label="Bot display name"
+          className="min-h-11 min-w-0 flex-1"
+          onChange={event => setDraft(event.currentTarget.value)}
+          value={draft}
+        />
+        <Button
+          aria-label="Save Bot name"
+          className="min-h-11 shrink-0"
+          disabled={!check.valid || !changed || saving}
+          onClick={() => void handleSave()}
+          variant="outline"
+        >
+          {saving ? 'Saving…' : 'Save name'}
+        </Button>
+      </div>
+      {check.error ? <p className="text-xs text-destructive" role="alert">{check.error}</p> : null}
+      {check.valid && changed
+        ? check.warnings.map(warning => <p className="text-xs text-(--ui-text-tertiary)" key={warning}>{warning}</p>)
+        : null}
+      <p className="text-xs text-(--ui-text-quaternary)">
+        Up to {BOT_NAME_MAX_CHARS} characters, and up to five words. Letters, spaces, apostrophes, and hyphens only.
+      </p>
+      {confirmation ? <p className="text-xs text-(--ui-text-secondary)" role="status">{confirmation}</p> : null}
+      {error ? <p className="text-xs text-destructive" role="alert">{error}</p> : null}
+    </section>
+  )
+}
+
 function AgentInspector({
   agent,
   initialPanel,
   onChanged,
   onClose,
-  onOpenAgent
+  onOpenAgent,
+  otherBotNames = []
 }: {
   agent: OperationsAgentModel | null
   initialPanel: 'overview' | 'settings'
   onChanged?: () => void
   onClose: () => void
   onOpenAgent?: (agent: OperationsAgentModel) => void
+  otherBotNames?: string[]
 }) {
   const [panel, setPanel] = useState<'overview' | 'settings'>(initialPanel)
   const [removing, setRemoving] = useState(false)
@@ -442,6 +525,7 @@ function AgentInspector({
 
             {panel === 'settings' && isA2APeer ? (
               <section aria-label="Bot Quick Settings" className="space-y-3">
+                <BotNamePanel agentId={agentId} currentName={agent.displayName} onChanged={onChanged} otherNames={otherBotNames} />
                 <QuickSettingsPanel agent={{ agentId, displayName: agent.displayName }} onUpdated={onChanged} />
                 {error ? <p className="text-xs text-destructive" role="alert">{error}</p> : null}
               </section>
@@ -506,6 +590,14 @@ export function ControlRoomView({
     setInspectorPanel('overview')
     setSelectedAgent(agent)
   }
+
+  const otherBotNames = useMemo(
+    () =>
+      snapshot.agents
+        .filter(candidate => candidate.sourceKind === 'a2a' && candidate.id !== selectedAgent?.id)
+        .map(candidate => candidate.displayName),
+    [selectedAgent, snapshot.agents]
+  )
 
   const inspectQuickSettings = (agent: OperationsAgentModel) => {
     setInspectorPanel('settings')
@@ -593,6 +685,7 @@ export function ControlRoomView({
         onChanged={handleInspectorChanged}
         onClose={() => setSelectedAgent(null)}
         onOpenAgent={openAgent}
+        otherBotNames={otherBotNames}
       />
 
       <TrustedBridgeOnboarding onOpenChange={setOnboardingOpen} onRegistered={handleRegistered} open={onboardingOpen} />
