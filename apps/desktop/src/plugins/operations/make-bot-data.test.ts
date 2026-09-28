@@ -32,6 +32,7 @@ describe('fetchMakeBotCatalog', () => {
       id: 'hermes',
       label: 'Hermes',
       detected: true,
+      selectable: false,
       source: 'native'
     })
     expect(catalog.models).toHaveLength(1)
@@ -67,6 +68,50 @@ describe('fetchMakeBotCatalog', () => {
 
     expect(catalog.harnesses).toEqual([])
     expect(catalog.models).toEqual([])
+  })
+
+  it('reads selectable and downloadUrl from the backend', async () => {
+    vi.mocked(hermesApi).mockResolvedValueOnce({
+      harnesses: [
+        { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native', download_url: 'https://github.com/NousResearch/Hermes-Agent#readme' },
+        { id: 'codex', label: 'Codex', detected: false, selectable: false, source: 'none', download_url: 'https://www.npmjs.com/package/@openai/codex' }
+      ],
+      models: []
+    })
+
+    const catalog = await fetchMakeBotCatalog()
+
+    expect(catalog.harnesses).toHaveLength(2)
+    expect(catalog.harnesses[0]).toEqual({
+      id: 'hermes',
+      label: 'Hermes',
+      detected: true,
+      selectable: true,
+      source: 'native',
+      downloadUrl: 'https://github.com/NousResearch/Hermes-Agent#readme'
+    })
+    expect(catalog.harnesses[1]).toEqual({
+      id: 'codex',
+      label: 'Codex',
+      detected: false,
+      selectable: false,
+      source: 'none',
+      downloadUrl: 'https://www.npmjs.com/package/@openai/codex'
+    })
+  })
+
+  it('treats missing selectable as false and missing download_url as undefined', async () => {
+    vi.mocked(hermesApi).mockResolvedValueOnce({
+      harnesses: [
+        { id: 'generic_a2a', label: 'Generic A2A', detected: false, source: 'none' }
+      ],
+      models: []
+    })
+
+    const catalog = await fetchMakeBotCatalog()
+
+    expect(catalog.harnesses[0].selectable).toBe(false)
+    expect(catalog.harnesses[0].downloadUrl).toBeUndefined()
   })
 
   it('filters out harness entries with missing ids', async () => {
@@ -243,6 +288,22 @@ describe('loadMakeBotState', () => {
     expect(state.degradedReason).toBe('no_model')
   })
 
+  it('does not degrade when harnesses exist but none are selectable', async () => {
+    vi.mocked(hermesApi).mockResolvedValueOnce({
+      harnesses: [
+        { id: 'codex', label: 'Codex', detected: false, selectable: false, source: 'none', download_url: 'https://www.npmjs.com/package/@openai/codex' }
+      ],
+      models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+    })
+
+    const state = await loadMakeBotState()
+
+    expect(state.degraded).toBe(false)
+    expect(state.degradedReason).toBeUndefined()
+    expect(state.harnesses).toHaveLength(1)
+    expect(state.harnesses[0].selectable).toBe(false)
+  })
+
   it('returns no machine when the backend is unreachable', async () => {
     vi.mocked(hermesApi).mockRejectedValueOnce(new Error('offline'))
 
@@ -281,7 +342,7 @@ describe('installCommandForHarness', () => {
 
 describe('suggestedInstallCommands', () => {
   it('returns commands for harnesses that are not detected', () => {
-    const harnesses = [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }]
+    const harnesses = [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }]
     const commands = suggestedInstallCommands(harnesses)
 
     expect(commands.length).toBeGreaterThan(0)
@@ -297,7 +358,7 @@ describe('suggestedInstallCommands', () => {
       github_copilot: '',
       opencode: '',
       pi: ''
-    }).map(id => ({ id, label: id, detected: true, source: 'native' }))
+    }).map(id => ({ id, label: id, detected: true, selectable: true, source: 'native' }))
 
     expect(suggestedInstallCommands(harnesses)).toEqual([])
   })

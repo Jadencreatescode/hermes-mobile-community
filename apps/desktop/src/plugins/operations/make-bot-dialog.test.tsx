@@ -28,13 +28,13 @@ afterEach(() => {
 function resolvedState(options: {
   degraded?: boolean
   degradedReason?: 'no_harness' | 'no_machine' | 'no_model'
-  harnesses?: { id: string; label: string; detected: boolean; source: string }[]
+  harnesses?: { id: string; label: string; detected: boolean; selectable?: boolean; source: string; downloadUrl?: string | null }[]
   models?: { id: string; label: string; provider: string }[]
 }) {
   return {
     degraded: options.degraded ?? false,
     degradedReason: options.degradedReason,
-    harnesses: options.harnesses ?? [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }],
+    harnesses: options.harnesses ?? [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
     machine: { id: 'local', label: 'This machine', reachable: true },
     models: options.models ?? [{ id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' }]
   }
@@ -141,8 +141,8 @@ describe('MakeBotDialog', () => {
   it('submits createBot with selected harness and model', async () => {
     loadMakeBotState.mockResolvedValue(resolvedState({
       harnesses: [
-        { id: 'hermes', label: 'Hermes', detected: true, source: 'native' },
-        { id: 'claude_code', label: 'Claude Code', detected: true, source: 'native' }
+        { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
+        { id: 'claude_code', label: 'Claude Code', detected: true, selectable: true, source: 'native' }
       ],
       models: [
         { id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' },
@@ -229,8 +229,8 @@ describe('MakeBotDialog', () => {
   it('shows harness list with labels and detected status', async () => {
     loadMakeBotState.mockResolvedValue(resolvedState({
       harnesses: [
-        { id: 'hermes', label: 'Hermes', detected: true, source: 'native' },
-        { id: 'claude_code', label: 'Claude Code', detected: false, source: 'native' }
+        { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
+        { id: 'claude_code', label: 'Claude Code', detected: false, selectable: false, source: 'native' }
       ]
     }))
 
@@ -238,10 +238,90 @@ describe('MakeBotDialog', () => {
     await waitFor(() => expect(screen.getByLabelText(/Harness/i)).toBeTruthy())
 
     const harnessSelect = screen.getByLabelText(/Harness/i) as HTMLSelectElement
-    expect([...harnessSelect.options].map(option => option.value)).toEqual(['hermes', 'claude_code'])
-    expect([...harnessSelect.options].map(option => option.textContent)).toEqual(['Hermes', 'Claude Code'])
-    expect(screen.getByText(/Detected/i)).toBeTruthy()
-    expect(screen.getByText(/native/i)).toBeTruthy()
+    expect([...harnessSelect.options].map(option => option.value)).toEqual(['hermes'])
+    expect([...harnessSelect.options].map(option => option.textContent)).toEqual(['Hermes'])
+    expect(screen.getByText(/Detected · native/i)).toBeTruthy()
+  })
+
+  it('shows non-selectable harnesses outside the select with download links', async () => {
+    loadMakeBotState.mockResolvedValue(resolvedState({
+      harnesses: [
+        { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
+        { id: 'codex', label: 'Codex', detected: false, selectable: false, source: 'none', downloadUrl: 'https://www.npmjs.com/package/@openai/codex' },
+        { id: 'cursor', label: 'Cursor', detected: false, selectable: false, source: 'none', downloadUrl: 'https://cursor.com' }
+      ]
+    }))
+
+    render(<MakeBotDialog onOpenChange={vi.fn()} open />)
+    await waitFor(() => expect(screen.getByLabelText(/Harness/i)).toBeTruthy())
+
+    expect(screen.getByText(/Available to download/i)).toBeTruthy()
+    expect(screen.getByText(/Codex/i)).toBeTruthy()
+    expect(screen.getByText(/Cursor/i)).toBeTruthy()
+
+    const codexLink = screen.getByLabelText(/Download Codex/i) as HTMLAnchorElement
+    expect(codexLink.href).toBe('https://www.npmjs.com/package/@openai/codex')
+    expect(codexLink.target).toBe('_blank')
+
+    const cursorLink = screen.getByLabelText(/Download Cursor/i) as HTMLAnchorElement
+    expect(cursorLink.href).toContain('https://cursor.com')
+  })
+
+  it('does not show download link when downloadUrl is missing', async () => {
+    loadMakeBotState.mockResolvedValue(resolvedState({
+      harnesses: [
+        { id: 'generic_a2a', label: 'Generic A2A', detected: false, selectable: false, source: 'none' }
+      ]
+    }))
+
+    render(<MakeBotDialog onOpenChange={vi.fn()} open />)
+    await waitFor(() => expect(screen.getByText(/Available to download/i)).toBeTruthy())
+
+    expect(screen.queryByLabelText(/Download Generic A2A/i)).toBeNull()
+  })
+
+  it('shows no selectable harness placeholder when none are selectable', async () => {
+    loadMakeBotState.mockResolvedValue(resolvedState({
+      harnesses: [
+        { id: 'codex', label: 'Codex', detected: false, selectable: false, source: 'none', downloadUrl: 'https://www.npmjs.com/package/@openai/codex' }
+      ]
+    }))
+
+    render(<MakeBotDialog onOpenChange={vi.fn()} open />)
+    await waitFor(() => expect(screen.getByLabelText(/Harness/i)).toBeTruthy())
+
+    const harnessSelect = screen.getByLabelText(/Harness/i) as HTMLSelectElement
+    expect([...harnessSelect.options].map(option => option.textContent)).toEqual(['No harness detected'])
+    expect(harnessSelect.value).toBe('')
+  })
+
+  it('re-fetches catalog when refresh is clicked', async () => {
+    loadMakeBotState.mockResolvedValue(resolvedState({
+      harnesses: [
+        { id: 'codex', label: 'Codex', detected: false, selectable: false, source: 'none', downloadUrl: 'https://www.npmjs.com/package/@openai/codex' }
+      ]
+    }))
+
+    render(<MakeBotDialog onOpenChange={vi.fn()} open />)
+    await waitFor(() => expect(screen.getByText(/Available to download/i)).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', { name: /Refresh/i }))
+
+    await waitFor(() => expect(loadMakeBotState).toHaveBeenCalledTimes(2))
+  })
+
+  it('states that Hermes never installs a harness automatically', async () => {
+    loadMakeBotState.mockResolvedValue(resolvedState({
+      harnesses: [
+        { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
+        { id: 'codex', label: 'Codex', detected: false, selectable: false, source: 'none', downloadUrl: 'https://www.npmjs.com/package/@openai/codex' }
+      ]
+    }))
+
+    render(<MakeBotDialog onOpenChange={vi.fn()} open />)
+    await waitFor(() => expect(screen.getByLabelText(/Harness/i)).toBeTruthy())
+
+    expect(screen.getByText(/Hermes never installs a harness automatically/i)).toBeTruthy()
   })
 
   it('shows model list grouped by provider', async () => {

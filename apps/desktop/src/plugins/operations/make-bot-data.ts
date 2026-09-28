@@ -12,7 +12,9 @@ export interface MakeBotHarness {
   id: string
   label: string
   detected: boolean
+  selectable: boolean
   source: string
+  downloadUrl?: string | null
 }
 
 export interface MakeBotModel {
@@ -114,7 +116,9 @@ function normalizeHarness(entry: unknown): MakeBotHarness | null {
     id,
     label: isString(row.label) ? row.label : id,
     detected: isBoolean(row.detected) ? row.detected : false,
-    source: isString(row.source) ? row.source : 'unknown'
+    selectable: isBoolean(row.selectable) ? row.selectable : false,
+    source: isString(row.source) ? row.source : 'unknown',
+    downloadUrl: isString(row.download_url) ? row.download_url : undefined
   }
 }
 

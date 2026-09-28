@@ -76,7 +76,7 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
     try {
       const next = await loadMakeBotState()
       setState(next)
-      setHarness(next.harnesses[0]?.id ?? '')
+      setHarness(next.harnesses.find(h => h.selectable)?.id ?? '')
       setModel(next.models[0]?.id ?? '')
     } catch {
       setState({ degraded: true, degradedReason: 'no_machine', harnesses: [], models: [] })
@@ -229,17 +229,67 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
                     onChange={event => setHarness(event.target.value)}
                     value={harness}
                   >
-                    {state.harnesses.map(h => (
-                      <option key={h.id} value={h.id}>{h.label}</option>
-                    ))}
+                    {state.harnesses.some(h => h.selectable) ? (
+                      state.harnesses.filter(h => h.selectable).map(h => (
+                        <option key={h.id} value={h.id}>{h.label}</option>
+                      ))
+                    ) : (
+                      <option disabled value="">No harness detected</option>
+                    )}
                   </select>
                   {selectedHarness ? (
                     <span className="text-xs text-(--ui-text-tertiary)">
-                      {selectedHarness.detected ? 'Detected' : 'Not detected'} · {selectedHarness.source}
+                      Detected · {selectedHarness.source}
                     </span>
                   ) : null}
                 </Field>
               </div>
+
+              {state.harnesses.some(h => !h.selectable) ? (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-(--ui-text-secondary)">Available to download</p>
+                  <div className="space-y-2">
+                    {state.harnesses.filter(h => !h.selectable).map(h => (
+                      <div
+                        className="flex min-w-0 items-center justify-between gap-2 rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-surface-secondary) px-3 py-2"
+                        key={h.id}
+                      >
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-(--ui-text-primary)">{h.label}</p>
+                          <p className="text-[0.68rem] text-(--ui-text-tertiary)">{h.source}</p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {h.downloadUrl ? (
+                            <a
+                              aria-label={`Download ${h.label}`}
+                              className="grid size-7 place-items-center rounded-md text-(--ui-text-secondary) transition-colors hover:bg-white/5 hover:text-(--ui-text-primary)"
+                              href={h.downloadUrl}
+                              rel="noopener noreferrer"
+                              target="_blank"
+                              title={`Download ${h.label}`}
+                            >
+                              <Codicon name="link-external" size="0.875rem" />
+                            </a>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[0.68rem] text-(--ui-text-tertiary)">
+                      Hermes never installs a harness automatically.
+                    </p>
+                    <Button
+                      className="h-7 px-2 text-xs"
+                      onClick={() => void load()}
+                      size="sm"
+                      variant="ghost"
+                    >
+                      <Codicon name="refresh" size="0.875rem" /> Refresh
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
 
               <Field hint="The model this Bot runs." label="Model">
                 <select
