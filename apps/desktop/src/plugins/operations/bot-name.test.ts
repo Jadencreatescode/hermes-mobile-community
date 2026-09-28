@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BOT_NAME_MAX_CHARS,
   BOT_NAME_MAX_WORDS,
+  botNameKey,
   botRenameConfirmation,
   checkBotName,
   normalizeBotName
@@ -54,8 +55,63 @@ describe('normalizeBotName', () => {
     expect(normalizeBotName('  Mary   Jane  ')).toBe('Mary Jane')
   })
 
+  it('treats Python whitespace the same as the registry', () => {
+    // U+001C..U+001F and U+0085 are whitespace in Python str.split() but not in JS \s
+    expect(normalizeBotName('A\u001CB')).toBe('A B')
+    expect(normalizeBotName('A\u001DB')).toBe('A B')
+    expect(normalizeBotName('A\u001EB')).toBe('A B')
+    expect(normalizeBotName('A\u001FB')).toBe('A B')
+    expect(normalizeBotName('A\u0085B')).toBe('A B')
+  })
+
+  it('does not treat U+FEFF as whitespace', () => {
+    expect(normalizeBotName('A\uFEFFB')).toBe('A\uFEFFB')
+  })
+
   it('reads a missing value as empty', () => {
     expect(normalizeBotName(undefined as unknown as string)).toBe('')
+  })
+})
+
+describe('botNameKey', () => {
+  it('collapses spacing like the registry', () => {
+    expect(botNameKey('  Darrell jones  ')).toBe('darrell jones')
+  })
+
+  it('matches the sharp-s pair (Strasse vs Stra\u00dfe)', () => {
+    expect(botNameKey('Strasse')).toBe(botNameKey('Stra\u00dfe'))
+  })
+
+  it('matches the sharp s on its own', () => {
+    expect(botNameKey('\u00df')).toBe('ss')
+  })
+
+  it('matches the ff ligature', () => {
+    expect(botNameKey('\ufb00')).toBe('ff')
+  })
+
+  it('matches the fi ligature', () => {
+    expect(botNameKey('\ufb01')).toBe('fi')
+  })
+
+  it('matches Greek Sigma in its three forms', () => {
+    const sigma = botNameKey('\u03a3') // Σ
+    expect(botNameKey('\u03c3')).toBe(sigma) // σ
+    expect(botNameKey('\u03c2')).toBe(sigma) // ς
+  })
+
+  it('matches Turkish dotted and dotless i', () => {
+    expect(botNameKey('\u0130')).toBe('i\u0307')
+    expect(botNameKey('I')).toBe('i')
+    expect(botNameKey('\u0131')).toBe('\u0131')
+  })
+
+  it('leaves fullwidth Darrell different from ASCII', () => {
+    expect(botNameKey('\uff24arrell')).not.toBe(botNameKey('darrell'))
+  })
+
+  it('leaves composed and decomposed e acute different', () => {
+    expect(botNameKey('\u00e9')).not.toBe(botNameKey('e\u0301'))
   })
 })
 
@@ -124,6 +180,18 @@ describe('checkBotName', () => {
     expect(checkBotName('Darrell', ['Goose', 'Pi']).warnings).toEqual([])
   })
 
+  it('does not warn about a name no other Bot holds', () => {
+    expect(checkBotName('Darrell', ['Goose']).warnings).toEqual([])
+  })
+
+  it('warns about a case variant of another Bot\u2019s name', () => {
+    const result = checkBotName('darrell', ['Darrell'])
+
+    expect(result.valid).toBe(true)
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toMatch(/already uses the name darrell/)
+  })
+
   it('notes that apostrophes and hyphens read harder, without refusing them', () => {
     const result = checkBotName("O'Brien", [])
 
@@ -141,6 +209,19 @@ describe('checkBotName', () => {
     expect(copy.toLowerCase()).not.toContain('wake')
     expect(copy.toLowerCase()).not.toContain('ear')
     expect(copy).not.toContain('hey ')
+  })
+
+  it('counts astral characters the same as the registry', () => {
+    const astral = '\u{10400}'.repeat(25)
+
+    expect(checkBotName(astral).valid).toBe(true)
+  })
+
+  it('refuses an astral name past the character limit', () => {
+    const astral = '\u{10400}'.repeat(49)
+
+    expect(checkBotName(astral).valid).toBe(false)
+    expect(checkBotName(astral).error).toContain(`${BOT_NAME_MAX_CHARS} characters`)
   })
 })
 

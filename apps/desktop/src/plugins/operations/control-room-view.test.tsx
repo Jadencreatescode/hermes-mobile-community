@@ -301,6 +301,19 @@ describe('ControlRoomView visual shell', () => {
     expect(screen.getByText(/Another Bot already uses the name Agent Two/)).toBeTruthy()
   })
 
+  it('does not warn when renaming a Bot to a case variant of its own name', async () => {
+    loadQuickSettings.mockResolvedValue(null)
+
+    render(<ControlRoomView snapshot={duplicateNameSnapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Agent One workspace' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Agent One Quick Settings' }))
+
+    fireEvent.change(await screen.findByLabelText('Bot display name'), { target: { value: 'agent one' } })
+
+    expect(screen.queryByText(/Another Bot already uses the name/)).toBeNull()
+  })
+
   it('reports a name the backend refused', async () => {
     loadQuickSettings.mockResolvedValue(null)
     renameA2AAgent.mockRejectedValue(new Error('a2a_name_rejected'))
