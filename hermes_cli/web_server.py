@@ -14838,6 +14838,8 @@ def _disable_unselected_skills(profile_dir: Path, keep: List[str]) -> int:
 
 
 app.include_router(_profiles_routes.router)
+from hermes_cli.web_routers import bots as _bots_routes  # noqa: E402,F401
+app.include_router(_bots_routes.router)
 from hermes_cli.web_routers.profiles import (  # noqa: E402,F401 — legacy re-exports; tests call these via web_server.<name>
     list_profiles_endpoint,
     create_profile_endpoint,
