@@ -56,7 +56,7 @@ for ch in ["\U0001E4D0", "\U0001E4D1", "\U0001E4D2", "\U0001E4D3", "\U00016D40",
 
 # Generate a compact JSON representation of alpha ranges
 output_path = Path(__file__).resolve().parents[1] / "apps/desktop/src/plugins/operations/bot-name-alpha-ranges.json"
-with open(output_path, "w") as f:
+with open(output_path, "w", encoding="utf-8") as f:
     json.dump(alpha_ranges, f)
 
 print(f"\nWrote alpha ranges to {output_path}")

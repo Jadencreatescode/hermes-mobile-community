@@ -33,7 +33,7 @@ mapping = {cp: casefold for cp, casefold in differences.items()}
 
 # Write as a JSON object
 output_path = Path(__file__).resolve().parents[1] / "apps/desktop/src/plugins/operations/bot-name-casefold.json"
-with open(output_path, "w") as f:
+with open(output_path, "w", encoding="utf-8") as f:
     json.dump(mapping, f, ensure_ascii=False)
 
 print(f"\nWrote casefold mapping to {output_path} ({len(mapping)} entries)")
