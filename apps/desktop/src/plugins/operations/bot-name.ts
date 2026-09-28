@@ -12,6 +12,10 @@
  * the rooms, so the collision is reported rather than hidden.
  */
 
+import alphaRanges from './bot-name-alpha-ranges.json'
+import casefoldMap from './bot-name-casefold.json'
+import whitespaceRanges from './bot-name-whitespace-ranges.json'
+
 export const BOT_NAME_MAX_CHARS = 48
 export const BOT_NAME_MAX_WORDS = 5
 
@@ -22,15 +26,90 @@ export interface BotNameCheck {
   warnings: string[]
 }
 
+function isWhitespaceCodePoint(cp: number): boolean {
+  for (const [start, end] of whitespaceRanges) {
+    if (cp < start) {
+      return false
+    }
+
+    if (cp <= end) {
+      return true
+    }
+  }
+
+  return false
+}
+
 /** Collapse whitespace and trim, the way the registry stores a name. */
 export function normalizeBotName(value: string): string {
-  return String(value ?? '')
-    .replace(/\s+/g, ' ')
-    .trim()
+  const name = String(value ?? '')
+  const words: string[] = []
+  let current = ''
+
+  for (const ch of name) {
+    const cp = ch.codePointAt(0) ?? 0
+
+    if (isWhitespaceCodePoint(cp)) {
+      if (current) {
+        words.push(current)
+        current = ''
+      }
+    } else {
+      current += ch
+    }
+  }
+
+  if (current) {
+    words.push(current)
+  }
+
+  return words.join(' ')
+}
+
+/** Count Unicode code points the way the registry counts characters. */
+function countBotNameCharacters(value: string): number {
+  return Array.from(value).length
+}
+
+/** True when the code point is a letter on the Python interpreter the backend runs. */
+function isAlphaCodePoint(cp: number): boolean {
+  for (const [start, end] of alphaRanges) {
+    if (cp < start) {
+      return false
+    }
+
+    if (cp <= end) {
+      return true
+    }
+  }
+
+  return false
 }
 
 function isBotNameCharacter(character: string): boolean {
-  return /\p{L}/u.test(character) || character === "'" || character === '-'
+  const cp = character.codePointAt(0) ?? 0
+
+  return isAlphaCodePoint(cp) || character === "'" || character === '-'
+}
+
+/** Return the comparison key used to spot two Bots that display the same name.
+ *
+ * This mirrors Python's str.casefold() on the serving interpreter so the
+ * renderer and the registry agree. Characters that casefold differently from
+ * JS toLowerCase() are driven by a table generated from the pinned interpreter.
+ */
+export function botNameKey(value: string): string {
+  const name = normalizeBotName(value)
+  let key = ''
+
+  for (const ch of name) {
+    const cp = ch.codePointAt(0) ?? 0
+    const mapped = (casefoldMap as Record<string, string>)[String(cp)] ?? ch.toLowerCase()
+
+    key += mapped
+  }
+
+  return key
 }
 
 export function checkBotName(value: string, otherBotNames: string[] = []): BotNameCheck {
@@ -41,7 +120,7 @@ export function checkBotName(value: string, otherBotNames: string[] = []): BotNa
     return fail('Enter a name, like Darrell.')
   }
 
-  if (name.length > BOT_NAME_MAX_CHARS) {
+  if (countBotNameCharacters(name) > BOT_NAME_MAX_CHARS) {
     return fail(`Keep the name to ${BOT_NAME_MAX_CHARS} characters or fewer.`)
   }
 
@@ -49,7 +128,7 @@ export function checkBotName(value: string, otherBotNames: string[] = []): BotNa
     return fail(`Keep the name to ${BOT_NAME_MAX_WORDS} words or fewer.`)
   }
 
-  if (!/\p{L}/u.test(name)) {
+  if (!Array.from(name).some(character => isAlphaCodePoint(character.codePointAt(0) ?? 0))) {
     return fail('The name needs at least one letter.')
   }
 
@@ -66,10 +145,11 @@ export function checkBotName(value: string, otherBotNames: string[] = []): BotNa
   }
 
   const warnings: string[] = []
-  const lowered = name.toLowerCase()
+  const key = botNameKey(name)
+
   const duplicates = otherBotNames
     .map(candidate => normalizeBotName(candidate))
-    .filter(candidate => candidate.toLowerCase() === lowered)
+    .filter(candidate => botNameKey(candidate) === key)
 
   if (duplicates.length) {
     warnings.push(

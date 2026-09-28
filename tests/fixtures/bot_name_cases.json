@@ -114,9 +114,39 @@
       "why": "a tab reads as spacing"
     },
     {
-      "name": "Darrell Byrne",
+      "name": "Darrell\u00a0Byrne",
       "valid": true,
       "why": "a non-breaking space reads as spacing"
+    },
+    {
+      "name": "A\u001CB",
+      "valid": true,
+      "why": "U+001C reads as spacing like Python str.split()"
+    },
+    {
+      "name": "A\u001DB",
+      "valid": true,
+      "why": "U+001D reads as spacing like Python str.split()"
+    },
+    {
+      "name": "A\u001EB",
+      "valid": true,
+      "why": "U+001E reads as spacing like Python str.split()"
+    },
+    {
+      "name": "A\u001FB",
+      "valid": true,
+      "why": "U+001F reads as spacing like Python str.split()"
+    },
+    {
+      "name": "A\u0085B",
+      "valid": true,
+      "why": "U+0085 reads as spacing like Python str.split()"
+    },
+    {
+      "name": "A\uFEFFB",
+      "valid": false,
+      "why": "U+FEFF is not whitespace in Python str.split()"
     }
   ]
 }

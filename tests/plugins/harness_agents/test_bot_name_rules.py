@@ -63,9 +63,45 @@ class TestBotNameRules:
         with pytest.raises(ValueError, match="48 characters or fewer"):
             registry._bot_name("Darrell " + "a" * 45)
 
+    def test_accepts_an_astral_name_at_the_limit(self) -> None:
+        # U+10400 is outside the BMP; 25 of them is 25 characters, well under 48
+        name = "\U00010400" * 25
+        assert registry._bot_name(name) == name
+
+    def test_rejects_an_astral_name_past_the_limit(self) -> None:
+        name = "\U00010400" * 49
+        with pytest.raises(ValueError, match="48 characters or fewer"):
+            registry._bot_name(name)
+
     def test_comparison_key_ignores_case_and_spacing(self) -> None:
         assert registry._bot_name_key("  Darrell jones ") == "darrell jones"
         assert registry._bot_name_key("DARRELL JONES") == registry._bot_name_key("darrell jones")
+
+    def test_casefold_key_matches_strasse_pair(self) -> None:
+        assert registry._bot_name_key("Strasse") == registry._bot_name_key("Stra\u00dfe")
+
+    def test_casefold_key_matches_sharp_s(self) -> None:
+        assert registry._bot_name_key("\u00df") == "ss"
+
+    def test_casefold_key_matches_ff_ligature(self) -> None:
+        assert registry._bot_name_key("\ufb00") == "ff"
+
+    def test_casefold_key_matches_fi_ligature(self) -> None:
+        assert registry._bot_name_key("\ufb01") == "fi"
+
+    def test_casefold_key_matches_greek_sigma_forms(self) -> None:
+        sigma = registry._bot_name_key("\u03a3")
+        assert registry._bot_name_key("\u03c3") == sigma
+        assert registry._bot_name_key("\u03c2") == sigma
+
+    def test_casefold_key_matches_turkish_dotted_i(self) -> None:
+        assert registry._bot_name_key("\u0130") == "i\u0307"
+
+    def test_casefold_key_leaves_fullwidth_darrell_different(self) -> None:
+        assert registry._bot_name_key("\uff24arrell") != registry._bot_name_key("darrell")
+
+    def test_casefold_key_leaves_composed_decomposed_different(self) -> None:
+        assert registry._bot_name_key("\u00e9") != registry._bot_name_key("e\u0301")
 
 
 class TestSharedNameCases:
@@ -94,6 +130,106 @@ class TestSharedNameCases:
         else:
             with pytest.raises(ValueError):
                 registry._bot_name(raw)
+
+
+class TestRendererTablesMatchTheInterpreter:
+    """The checked-in JSON tables must match the interpreter that generates them."""
+
+    def test_alpha_ranges_match_the_running_interpreter(self) -> None:
+        import unicodedata
+
+        alpha_ranges_path = (
+            Path(__file__).resolve().parents[3]
+            / "apps"
+            / "desktop"
+            / "src"
+            / "plugins"
+            / "operations"
+            / "bot-name-alpha-ranges.json"
+        )
+        stored = json.loads(alpha_ranges_path.read_text(encoding="utf-8"))
+
+        expected = []
+        start = None
+        prev = None
+        for cp in range(0x110000):
+            if 0xD800 <= cp <= 0xDFFF:
+                continue
+            ch = chr(cp)
+            if ch.isalpha():
+                if start is None:
+                    start = cp
+                    prev = cp
+                elif cp == prev + 1:
+                    prev = cp
+                else:
+                    expected.append([start, prev])
+                    start = cp
+                    prev = cp
+        if start is not None:
+            expected.append([start, prev])
+
+        assert stored == expected, f"Regenerate with scripts/generate_tables.py on Python {unicodedata.unidata_version}"
+
+    def test_whitespace_ranges_match_the_running_interpreter(self) -> None:
+        import unicodedata
+
+        whitespace_ranges_path = (
+            Path(__file__).resolve().parents[3]
+            / "apps"
+            / "desktop"
+            / "src"
+            / "plugins"
+            / "operations"
+            / "bot-name-whitespace-ranges.json"
+        )
+        stored = json.loads(whitespace_ranges_path.read_text(encoding="utf-8"))
+
+        expected = []
+        start = None
+        prev = None
+        for cp in range(0x110000):
+            if 0xD800 <= cp <= 0xDFFF:
+                continue
+            ch = chr(cp)
+            if ch.isspace():
+                if start is None:
+                    start = cp
+                    prev = cp
+                elif cp == prev + 1:
+                    prev = cp
+                else:
+                    expected.append([start, prev])
+                    start = cp
+                    prev = cp
+        if start is not None:
+            expected.append([start, prev])
+
+        assert stored == expected, f"Regenerate with scripts/check_whitespace.py on Python {unicodedata.unidata_version}"
+
+    def test_casefold_map_matches_the_running_interpreter(self) -> None:
+        casefold_path = (
+            Path(__file__).resolve().parents[3]
+            / "apps"
+            / "desktop"
+            / "src"
+            / "plugins"
+            / "operations"
+            / "bot-name-casefold.json"
+        )
+        stored = json.loads(casefold_path.read_text(encoding="utf-8"))
+
+        expected = {}
+        for cp in range(0x110000):
+            if 0xD800 <= cp <= 0xDFFF:
+                continue
+            ch = chr(cp)
+            lower = ch.lower()
+            casefold = ch.casefold()
+            if lower != casefold:
+                expected[str(cp)] = casefold
+
+        assert stored == expected, "Regenerate with scripts/generate_tables.py"
 
 
 class TestRenameAgent:

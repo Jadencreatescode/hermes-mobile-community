@@ -196,9 +196,9 @@ class TestSharedNameCasesAtTheRoute:
                 request_json(app, "PATCH", "/agents/a2a/a2a:one", {"name": case["name"]})
             )
             assert resp.status_code in (400, 422), case["why"]
+            api_module._a2a_rate_limiter._user_buckets.clear()
+            api_module._a2a_rate_limiter._global_bucket.clear()
 
-        api_module._a2a_rate_limiter._user_buckets.clear()
-        api_module._a2a_rate_limiter._global_bucket.clear()
         listing = asyncio.run(request_json(app, "GET", "/agents/a2a"))
         names = {row["agent_id"]: row["name"] for row in listing.json()["agents"]}
         assert names == {"a2a:one": "Bridge Goose", "a2a:two": "Goose"}
