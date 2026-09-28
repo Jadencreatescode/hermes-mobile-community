@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { createBot, fetchMakeBotCatalog, loadMakeBotState } from './make-bot-data'
+import { createBot, fetchMakeBotCatalog, installCommandForHarness, loadMakeBotState, suggestedInstallCommands } from './make-bot-data'
 
 vi.mock('@/api/client', () => ({
   hermesApi: vi.fn()
@@ -265,5 +265,40 @@ describe('loadMakeBotState', () => {
 
     expect(state.degraded).toBe(true)
     expect(state.degradedReason).toBe('no_harness')
+  })
+})
+
+describe('installCommandForHarness', () => {
+  it('returns the install command for a known harness', () => {
+    expect(installCommandForHarness('claude_code')).toBe('npm install -g @anthropic-ai/claude-code')
+    expect(installCommandForHarness('codex')).toBe('npm install -g @openai/codex')
+  })
+
+  it('returns null for an unknown harness', () => {
+    expect(installCommandForHarness('unknown_harness')).toBeNull()
+  })
+})
+
+describe('suggestedInstallCommands', () => {
+  it('returns commands for harnesses that are not detected', () => {
+    const harnesses = [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }]
+    const commands = suggestedInstallCommands(harnesses)
+
+    expect(commands.length).toBeGreaterThan(0)
+    expect(commands).toContain('npm install -g @anthropic-ai/claude-code')
+    expect(commands).toContain('npm install -g opencode-ai')
+  })
+
+  it('returns an empty array when all well-known harnesses are present', () => {
+    const harnesses = Object.keys({
+      claude_code: '',
+      codex: '',
+      cursor: '',
+      github_copilot: '',
+      opencode: '',
+      pi: ''
+    }).map(id => ({ id, label: id, detected: true, source: 'native' }))
+
+    expect(suggestedInstallCommands(harnesses)).toEqual([])
   })
 })

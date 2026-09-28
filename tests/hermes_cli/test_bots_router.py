@@ -216,6 +216,35 @@ class TestPostBots:
         assert response.status_code == 400
         assert "unknown-model" in response.json()["detail"]
 
+    def test_create_rejects_duplicate_name(self, client, monkeypatch):
+        """POST /api/bots returns 400 when the profile name already exists."""
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._build_harness_catalog",
+            lambda: [
+                {
+                    "id": "hermes",
+                    "label": "Hermes",
+                    "detected": True,
+                    "source": "native",
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._build_model_catalog",
+            lambda: [],
+        )
+
+        create_profile_mock = MagicMock(side_effect=FileExistsError("Profile 'testbot' already exists"))
+        monkeypatch.setattr("hermes_cli.profiles.create_profile", create_profile_mock)
+
+        response = client.post(
+            "/api/bots",
+            headers=_auth_headers(),
+            json={"name": "testbot", "harness": "hermes"},
+        )
+        assert response.status_code == 400
+        assert "testbot" in response.json()["detail"]
+
     def test_create_allows_empty_harness_and_model(self, client, monkeypatch, tmp_path):
         """POST /api/bots accepts empty harness/model (user decides later)."""
         profile_dir = tmp_path / "profiles" / "emptybot"

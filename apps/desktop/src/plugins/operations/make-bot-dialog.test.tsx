@@ -212,4 +212,77 @@ describe('MakeBotDialog', () => {
     expect(dialog.className.includes('overflow-y-auto')).toBe(true)
     expect(dialog.className.includes('max-w-2xl')).toBe(true)
   })
+
+  it('shows the machine list with This machine selected and disabled', async () => {
+    loadMakeBotState.mockResolvedValue(resolvedState({}))
+
+    render(<MakeBotDialog onOpenChange={vi.fn()} open />)
+    await waitFor(() => expect(screen.getByLabelText(/Machine/i)).toBeTruthy())
+
+    const machineSelect = screen.getByLabelText(/Machine/i) as HTMLSelectElement
+    expect(machineSelect.disabled).toBe(true)
+    expect(machineSelect.value).toBe('local')
+    expect([...machineSelect.options].map(option => option.value)).toContain('local')
+    expect([...machineSelect.options].map(option => option.textContent)).toContain('This machine')
+  })
+
+  it('shows harness list with labels and detected status', async () => {
+    loadMakeBotState.mockResolvedValue(resolvedState({
+      harnesses: [
+        { id: 'hermes', label: 'Hermes', detected: true, source: 'native' },
+        { id: 'claude_code', label: 'Claude Code', detected: false, source: 'native' }
+      ]
+    }))
+
+    render(<MakeBotDialog onOpenChange={vi.fn()} open />)
+    await waitFor(() => expect(screen.getByLabelText(/Harness/i)).toBeTruthy())
+
+    const harnessSelect = screen.getByLabelText(/Harness/i) as HTMLSelectElement
+    expect([...harnessSelect.options].map(option => option.value)).toEqual(['hermes', 'claude_code'])
+    expect([...harnessSelect.options].map(option => option.textContent)).toEqual(['Hermes', 'Claude Code'])
+    expect(screen.getByText(/Detected/i)).toBeTruthy()
+    expect(screen.getByText(/native/i)).toBeTruthy()
+  })
+
+  it('shows model list grouped by provider', async () => {
+    loadMakeBotState.mockResolvedValue(resolvedState({
+      models: [
+        { id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' },
+        { id: 'gpt-4', label: 'gpt-4', provider: 'openai' }
+      ]
+    }))
+
+    render(<MakeBotDialog onOpenChange={vi.fn()} open />)
+    await waitFor(() => expect(screen.getByLabelText(/Model/i)).toBeTruthy())
+
+    const modelSelect = screen.getByLabelText(/Model/i) as HTMLSelectElement
+    const optgroups = [...modelSelect.querySelectorAll('optgroup')]
+    expect(optgroups.map(group => group.getAttribute('label'))).toEqual(['anthropic', 'openai'])
+    expect([...optgroups[0].querySelectorAll('option')].map(option => option.value)).toContain('claude-sonnet-4')
+    expect([...optgroups[1].querySelectorAll('option')].map(option => option.value)).toContain('gpt-4')
+  })
+
+  it('shows duplicate name error from the backend', async () => {
+    loadMakeBotState.mockResolvedValue(resolvedState({}))
+    createBot.mockRejectedValue(new Error('A Bot named testbot already exists'))
+
+    render(<MakeBotDialog onOpenChange={vi.fn()} open />)
+    await waitFor(() => expect(screen.getByLabelText(/Bot name/i)).toBeTruthy())
+
+    fireEvent.change(screen.getByLabelText(/Bot name/i), { target: { value: 'testbot' } })
+    fireEvent.click(screen.getByRole('button', { name: /Create Bot/i }))
+
+    await waitFor(() => expect(screen.getByText(/A Bot named testbot already exists/i)).toBeTruthy())
+  })
+
+  it('uses full viewport width on phone and wider on desktop', async () => {
+    loadMakeBotState.mockResolvedValue(resolvedState({}))
+
+    render(<MakeBotDialog onOpenChange={vi.fn()} open />)
+    await waitFor(() => expect(screen.getByLabelText(/Bot name/i)).toBeTruthy())
+
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.className.includes('w-[calc(100vw-1rem)]')).toBe(true)
+    expect(dialog.className.includes('sm:w-[calc(100vw-2rem)]')).toBe(true)
+  })
 })
