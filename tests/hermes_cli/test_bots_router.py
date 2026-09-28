@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from hermes_cli import web_server
+from hermes_cli.web_routers import bots
 
 
 @pytest.fixture
@@ -81,6 +82,121 @@ class TestGetBotsCatalog:
         assert response.status_code == 200
         install_mock.assert_not_called()
         exec_mock.assert_not_called()
+
+
+class TestHarnessCatalogInvariants:
+    """Invariant tests for the real _build_harness_catalog helper."""
+
+    def test_all_harnesses_reported(self, monkeypatch):
+        """Every known harness appears in the catalog, even when absent."""
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_native_harnesses",
+            lambda: {"hermes": "native"},
+        )
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_registry_harnesses",
+            lambda: {},
+        )
+        catalog = bots._build_harness_catalog()
+        ids = {h["id"] for h in catalog}
+        assert ids == set(bots._HARNESS_BINARIES.keys())
+
+    def test_selectable_implies_detected(self, monkeypatch):
+        """A harness marked selectable must also be detected."""
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_native_harnesses",
+            lambda: {"hermes": "native", "codex": "native"},
+        )
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_registry_harnesses",
+            lambda: {"generic_a2a": "registry"},
+        )
+        catalog = bots._build_harness_catalog()
+        for h in catalog:
+            if h.get("selectable"):
+                assert h.get("detected") is True
+
+    def test_every_entry_has_id_and_label(self, monkeypatch):
+        """Every catalog entry carries a non-empty id and label."""
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_native_harnesses",
+            lambda: {},
+        )
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_registry_harnesses",
+            lambda: {},
+        )
+        catalog = bots._build_harness_catalog()
+        assert catalog
+        for h in catalog:
+            assert isinstance(h.get("id"), str) and h["id"]
+            assert isinstance(h.get("label"), str) and h["label"]
+
+    def test_every_entry_has_download_url_or_is_protocol(self, monkeypatch):
+        """Entries without a download_url must be explicitly protocol-only."""
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_native_harnesses",
+            lambda: {},
+        )
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_registry_harnesses",
+            lambda: {},
+        )
+        catalog = bots._build_harness_catalog()
+        assert catalog
+        for h in catalog:
+            if h.get("download_url") is None:
+                assert h["id"] in bots._PROTOCOL_HARNESSES
+
+    def test_undetected_harness_is_reported(self, monkeypatch):
+        """A harness that is not present is still listed with detected=False."""
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_native_harnesses",
+            lambda: {},
+        )
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_registry_harnesses",
+            lambda: {},
+        )
+        catalog = bots._build_harness_catalog()
+        claude = next((h for h in catalog if h["id"] == "claude_code"), None)
+        assert claude is not None
+        assert claude["detected"] is False
+        assert claude["selectable"] is False
+
+    def test_endpoint_no_installer_shellout(self, client, monkeypatch):
+        """The catalog endpoint never calls an installer or external shell."""
+        import os
+        import subprocess
+
+        run_mock = MagicMock()
+        popen_mock = MagicMock()
+        system_mock = MagicMock()
+        call_mock = MagicMock()
+
+        monkeypatch.setattr(subprocess, "run", run_mock)
+        monkeypatch.setattr(subprocess, "Popen", popen_mock)
+        monkeypatch.setattr(subprocess, "call", call_mock)
+        monkeypatch.setattr(os, "system", system_mock)
+
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_native_harnesses",
+            lambda: {},
+        )
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_registry_harnesses",
+            lambda: {},
+        )
+
+        response = client.get("/api/bots/catalog", headers=_auth_headers())
+        assert response.status_code == 200
+        data = response.json()
+        assert "harnesses" in data
+
+        run_mock.assert_not_called()
+        popen_mock.assert_not_called()
+        call_mock.assert_not_called()
+        system_mock.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
