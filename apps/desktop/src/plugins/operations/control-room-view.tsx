@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BotAvatar } from './bot-avatar'
 import { clearQuickSettings, loadQuickSettings, type QuickSettings, saveQuickSettings } from './control-room-actions'
 import { type OperationsAgentModel, type OperationsSnapshot, removeA2AAgent } from './data'
+import { MakeBotDialog } from './make-bot-dialog'
 import type { OperationsSection } from './navigation'
 import { TrustedBridgeOnboarding } from './trusted-bridge-onboarding'
 
@@ -482,6 +483,8 @@ export function ControlRoomView({
     onOnboardingOpenChange?.(open)
   }, [onOnboardingOpenChange])
 
+  const [makeBotOpen, setMakeBotOpen] = useState(false)
+
   const [inspectorPanel, setInspectorPanel] = useState<'overview' | 'settings'>('overview')
   const [selectedAgent, setSelectedAgent] = useState<OperationsAgentModel | null>(null)
 
@@ -540,6 +543,7 @@ export function ControlRoomView({
             <p className="mt-1 max-w-2xl text-sm text-(--ui-text-secondary)">Every room is driven by real session, task, review, input, and source evidence.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Button aria-label="Make a Bot" className="min-h-11" onClick={() => setMakeBotOpen(true)} size="sm"><Codicon name="add" /> Make a Bot</Button>
             <Button aria-label="Connect a Bot" className="min-h-11" onClick={() => setOnboardingOpen(true)} size="sm"><Codicon name="plug" /> Connect a Bot</Button>
             {onShowDetails ? <Button aria-label="View detailed Operations" className="min-h-11" onClick={onShowDetails} size="sm" variant="outline"><Codicon name="list-tree" /> Details</Button> : null}
           </div>
@@ -596,6 +600,8 @@ export function ControlRoomView({
       />
 
       <TrustedBridgeOnboarding onOpenChange={setOnboardingOpen} onRegistered={handleRegistered} open={onboardingOpen} />
+
+      <MakeBotDialog onCreated={() => onChanged?.()} onOpenChange={setMakeBotOpen} open={makeBotOpen} />
     </div>
   )
 }

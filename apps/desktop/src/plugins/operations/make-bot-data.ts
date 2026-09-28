@@ -57,6 +57,35 @@ export interface MakeBotState {
 }
 
 // ---------------------------------------------------------------------------
+// Install commands for well-known harnesses (public knowledge, not Owner
+// private logic). Shown when a harness is missing so the user can install it
+// and check again — the public rule is: never auto-install.
+// ---------------------------------------------------------------------------
+
+export const HARNESS_INSTALL_COMMANDS: Record<string, string> = {
+  claude_code: 'npm install -g @anthropic-ai/claude-code',
+  codex: 'npm install -g @openai/codex',
+  cursor: 'Install Cursor from https://cursor.com',
+  github_copilot: 'Install GitHub CLI and run: gh extension install github/copilot',
+  opencode: 'npm install -g opencode-ai',
+  pi: 'curl -fsSL https://pi.dev/install.sh | sh'
+}
+
+export function installCommandForHarness(harnessId: string): string | null {
+  return HARNESS_INSTALL_COMMANDS[harnessId] ?? null
+}
+
+export function suggestedInstallCommands(harnesses: MakeBotHarness[]): string[] {
+  const known = Object.keys(HARNESS_INSTALL_COMMANDS)
+  const present = new Set(harnesses.map(h => h.id))
+
+  return known
+    .filter(id => !present.has(id))
+    .map(id => HARNESS_INSTALL_COMMANDS[id])
+    .filter((cmd): cmd is string => Boolean(cmd))
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
