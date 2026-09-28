@@ -1,5 +1,6 @@
 import unicodedata
 import json
+from pathlib import Path
 
 # Find all code points where Python casefold differs from lower()
 differences = {}
@@ -31,7 +32,8 @@ for cp in list(differences.keys())[:20]:
 mapping = {cp: casefold for cp, casefold in differences.items()}
 
 # Write as a JSON object
-with open("/opt/data/workspace/hermes-public-bot-naming/apps/desktop/src/plugins/operations/bot-name-casefold.json", "w") as f:
+output_path = Path(__file__).resolve().parents[1] / "apps/desktop/src/plugins/operations/bot-name-casefold.json"
+with open(output_path, "w") as f:
     json.dump(mapping, f, ensure_ascii=False)
 
-print(f"\nWrote casefold mapping to bot-name-casefold.json ({len(mapping)} entries)")
+print(f"\nWrote casefold mapping to {output_path} ({len(mapping)} entries)")

@@ -1,6 +1,7 @@
 import unicodedata
 import sys
 import json
+from pathlib import Path
 
 print(f"Python {sys.version}")
 print(f"unicodedata version: {unicodedata.unidata_version}")
@@ -54,7 +55,8 @@ for ch in ["\U0001E4D0", "\U0001E4D1", "\U0001E4D2", "\U0001E4D3", "\U00016D40",
     print(f"U+{ord(ch):04X}: isalpha={ch.isalpha()}, category={unicodedata.category(ch)}")
 
 # Generate a compact JSON representation of alpha ranges
-with open("/opt/data/workspace/hermes-public-bot-naming/apps/desktop/src/plugins/operations/bot-name-alpha-ranges.json", "w") as f:
+output_path = Path(__file__).resolve().parents[1] / "apps/desktop/src/plugins/operations/bot-name-alpha-ranges.json"
+with open(output_path, "w") as f:
     json.dump(alpha_ranges, f)
 
-print(f"\nWrote alpha ranges to bot-name-alpha-ranges.json")
+print(f"\nWrote alpha ranges to {output_path}")
