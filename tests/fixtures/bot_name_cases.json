@@ -1,0 +1,152 @@
+{
+  "note": "Boundary names shared by the backend rule (plugins/harness_agents/registry.py::_bot_name) and the renderer rule (apps/desktop/src/plugins/operations/bot-name.ts::checkBotName). Both suites read this file, so a rule that drifts on either side fails its own tests. Only the verdict is shared here; each side keeps its own normalized output and its own copy.",
+  "max_chars": 48,
+  "max_words": 5,
+  "cases": [
+    {
+      "name": "Darrell",
+      "valid": true,
+      "why": "a plain name"
+    },
+    {
+      "name": "  Darrell  ",
+      "valid": true,
+      "why": "surrounding space is trimmed"
+    },
+    {
+      "name": "Mary   Jane",
+      "valid": true,
+      "why": "a run of inner spaces collapses"
+    },
+    {
+      "name": "O'Brien",
+      "valid": true,
+      "why": "an apostrophe inside a word"
+    },
+    {
+      "name": "Anne-Marie",
+      "valid": true,
+      "why": "a hyphen inside a word"
+    },
+    {
+      "name": "Müller",
+      "valid": true,
+      "why": "letters outside ASCII"
+    },
+    {
+      "name": "中文名",
+      "valid": true,
+      "why": "letters outside ASCII"
+    },
+    {
+      "name": "Big Friendly Blue Helper Bot",
+      "valid": true,
+      "why": "exactly five words"
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true,
+      "why": "exactly 48 characters"
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false,
+      "why": "49 characters, one too many"
+    },
+    {
+      "name": "Darrell aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false,
+      "why": "a second word pushes it to 49 characters"
+    },
+    {
+      "name": "one two three four five",
+      "valid": true,
+      "why": "five short words"
+    },
+    {
+      "name": "one two three four five six",
+      "valid": false,
+      "why": "six words"
+    },
+    {
+      "name": "R2 Unit",
+      "valid": false,
+      "why": "a digit"
+    },
+    {
+      "name": "Darrell!",
+      "valid": false,
+      "why": "a symbol"
+    },
+    {
+      "name": "agent_1",
+      "valid": false,
+      "why": "an underscore and a digit"
+    },
+    {
+      "name": "Darrell;drop",
+      "valid": false,
+      "why": "a semicolon"
+    },
+    {
+      "name": "",
+      "valid": false,
+      "why": "nothing at all"
+    },
+    {
+      "name": "   ",
+      "valid": false,
+      "why": "spaces only"
+    },
+    {
+      "name": "12 34",
+      "valid": false,
+      "why": "digits only, so no letters"
+    },
+    {
+      "name": "'-",
+      "valid": false,
+      "why": "punctuation only, so no letters"
+    },
+    {
+      "name": "Darrell\tByrne",
+      "valid": true,
+      "why": "a tab reads as spacing"
+    },
+    {
+      "name": "Darrell\u00a0Byrne",
+      "valid": true,
+      "why": "a non-breaking space reads as spacing"
+    },
+    {
+      "name": "A\u001CB",
+      "valid": true,
+      "why": "U+001C reads as spacing like Python str.split()"
+    },
+    {
+      "name": "A\u001DB",
+      "valid": true,
+      "why": "U+001D reads as spacing like Python str.split()"
+    },
+    {
+      "name": "A\u001EB",
+      "valid": true,
+      "why": "U+001E reads as spacing like Python str.split()"
+    },
+    {
+      "name": "A\u001FB",
+      "valid": true,
+      "why": "U+001F reads as spacing like Python str.split()"
+    },
+    {
+      "name": "A\u0085B",
+      "valid": true,
+      "why": "U+0085 reads as spacing like Python str.split()"
+    },
+    {
+      "name": "A\uFEFFB",
+      "valid": false,
+      "why": "U+FEFF is not whitespace in Python str.split()"
+    }
+  ]
+}
