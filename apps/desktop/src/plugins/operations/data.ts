@@ -420,20 +420,24 @@ export async function renameA2AAgent(agentId: string, name: string): Promise<Ren
       const match = cause.message.match(/^\d+:\s*(.+)$/)
 
       if (match) {
+        let parsed: unknown
         try {
-          const parsed = JSON.parse(match[1])
-          const detail = parsed.detail
-
-          if (detail && typeof detail === 'object' && detail.reason) {
-            throw new Error(detail.reason)
-          }
-
-          if (typeof detail === 'string') {
-            throw new Error(detail)
-          }
+          parsed = JSON.parse(match[1])
         } catch {
           // Not structured JSON — surface the raw body as a fallback.
         }
+
+        if (parsed && typeof parsed === 'object' && parsed !== null && 'detail' in parsed) {
+          const detail = (parsed as Record<string, unknown>).detail
+          if (detail && typeof detail === 'object' && detail !== null && (detail as Record<string, unknown>).reason) {
+            throw new Error(String((detail as Record<string, unknown>).reason))
+          }
+          if (typeof detail === 'string') {
+            throw new Error(detail)
+          }
+        }
+
+        throw new Error(match[1])
       }
     }
 

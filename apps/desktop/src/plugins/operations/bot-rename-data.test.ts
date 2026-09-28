@@ -74,16 +74,46 @@ describe('renameA2AAgent', () => {
     )
     unbind = bindOperationsApi(rest)
 
-    await expect(renameA2AAgent('a2a:one', 'Darrell!')).rejects.toThrow(
-      'agent name must use letters, spaces, apostrophes, or hyphens'
-    )
+    let caught: unknown
+    try {
+      await renameA2AAgent('a2a:one', 'Darrell!')
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).toBe('agent name must use letters, spaces, apostrophes, or hyphens')
+    expect((caught as Error).message).not.toMatch(/^\d+:/)
+    expect((caught as Error).message).not.toContain('{')
   })
 
   it('surfaces a plain string detail when no reason is present', async () => {
     const rest = vi.fn().mockRejectedValue(new Error('404: {"detail":"a2a_agent_not_found"}'))
     unbind = bindOperationsApi(rest)
 
-    await expect(renameA2AAgent('a2a:one', 'Darrell')).rejects.toThrow('a2a_agent_not_found')
+    let caught: unknown
+    try {
+      await renameA2AAgent('a2a:one', 'Darrell')
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).toBe('a2a_agent_not_found')
+    expect((caught as Error).message).not.toMatch(/^\d+:/)
+    expect((caught as Error).message).not.toContain('{')
+  })
+
+  it('falls back to the raw body when the response is not structured JSON', async () => {
+    const rest = vi.fn().mockRejectedValue(new Error('400: plain error text'))
+    unbind = bindOperationsApi(rest)
+
+    let caught: unknown
+    try {
+      await renameA2AAgent('a2a:one', 'Darrell')
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).toBe('plain error text')
   })
 
   it('falls back to a degraded status when the backend omits one', async () => {
