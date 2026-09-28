@@ -68,11 +68,22 @@ describe('renameA2AAgent', () => {
     expect(rest).not.toHaveBeenCalled()
   })
 
-  it('reports a refused name from the backend as a failure', async () => {
-    const rest = vi.fn().mockRejectedValue(new Error('a2a_name_rejected'))
+  it('reports a refused name from the backend as a human reason', async () => {
+    const rest = vi.fn().mockRejectedValue(
+      new Error('400: {"detail":{"error":"a2a_name_rejected","reason":"agent name must use letters, spaces, apostrophes, or hyphens"}}')
+    )
     unbind = bindOperationsApi(rest)
 
-    await expect(renameA2AAgent('a2a:one', 'Darrell!')).rejects.toThrow('a2a_name_rejected')
+    await expect(renameA2AAgent('a2a:one', 'Darrell!')).rejects.toThrow(
+      'agent name must use letters, spaces, apostrophes, or hyphens'
+    )
+  })
+
+  it('surfaces a plain string detail when no reason is present', async () => {
+    const rest = vi.fn().mockRejectedValue(new Error('404: {"detail":"a2a_agent_not_found"}'))
+    unbind = bindOperationsApi(rest)
+
+    await expect(renameA2AAgent('a2a:one', 'Darrell')).rejects.toThrow('a2a_agent_not_found')
   })
 
   it('falls back to a degraded status when the backend omits one', async () => {

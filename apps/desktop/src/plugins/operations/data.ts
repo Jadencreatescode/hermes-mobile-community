@@ -402,16 +402,42 @@ export async function renameA2AAgent(agentId: string, name: string): Promise<Ren
     throw new Error('Enter a name for this Bot.')
   }
 
-  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}`, {
-    method: 'PATCH',
-    body: { name: trimmed }
-  })
-  const row = record(response)
-  const rawWarnings = Array.isArray(row.warnings) ? row.warnings : []
+  try {
+    const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}`, {
+      method: 'PATCH',
+      body: { name: trimmed }
+    })
 
-  return {
-    agent: normalizeHarnessAgent(response),
-    warnings: rawWarnings.filter((warning: unknown): warning is string => typeof warning === 'string')
+    const row = record(response)
+    const rawWarnings = Array.isArray(row.warnings) ? row.warnings : []
+
+    return {
+      agent: normalizeHarnessAgent(response),
+      warnings: rawWarnings.filter((warning: unknown): warning is string => typeof warning === 'string')
+    }
+  } catch (cause) {
+    if (cause instanceof Error) {
+      const match = cause.message.match(/^\d+:\s*(.+)$/)
+
+      if (match) {
+        try {
+          const parsed = JSON.parse(match[1])
+          const detail = parsed.detail
+
+          if (detail && typeof detail === 'object' && detail.reason) {
+            throw new Error(detail.reason)
+          }
+
+          if (typeof detail === 'string') {
+            throw new Error(detail)
+          }
+        } catch {
+          // Not structured JSON — surface the raw body as a fallback.
+        }
+      }
+    }
+
+    throw cause
   }
 }
 
