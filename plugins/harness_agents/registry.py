@@ -56,6 +56,12 @@ _AGENT_RESULT_FIELDS = (
 _MAX_CAPABILITY_INPUTS = 64
 _AUDIT_OUTCOMES = frozenset({"allowed", "denied", "succeeded", "failed"})
 _VERIFICATION_TTL_SECONDS = 300
+# A Bot name is shown in the roster, in the rooms, and above the connected chat,
+# so it stays short and plainly typed: letters, single spaces, and an apostrophe
+# or hyphen inside a word.  Digits and symbols are refused so the name stays
+# readable everywhere it is displayed.
+_BOT_NAME_MAX_CHARS = 48
+_BOT_NAME_MAX_WORDS = 5
 
 
 class _AgentOperationFileLock:
@@ -126,6 +132,36 @@ def _optional_text(value: Any, field: str, maximum: int) -> str:
     if not isinstance(value, str) or len(value) > maximum or "\x00" in value:
         raise ValueError(f"{field} is invalid or too long")
     return value
+
+
+def _bot_name(value: Any) -> str:
+    """Return the display name the operator gave one of their own Bots.
+
+    The name is what the roster, the rooms, and the connected chat show, so it is
+    kept to short plain words: letters, single spaces, and an apostrophe or hyphen
+    inside a word.  Digits and symbols are refused because they read badly and are
+    duplicated easily by accident, and a name has to hold at least one letter so a
+    bare number is not accepted as a name.
+    """
+    name = " ".join(_optional_text(value, "agent name", 96).split())
+    if not name:
+        raise ValueError("agent name is required")
+    if len(name) > _BOT_NAME_MAX_CHARS:
+        raise ValueError(f"agent name must be {_BOT_NAME_MAX_CHARS} characters or fewer")
+    if len(name.split(" ")) > _BOT_NAME_MAX_WORDS:
+        raise ValueError(f"agent name must be {_BOT_NAME_MAX_WORDS} words or fewer")
+    if not any(character.isalpha() for character in name):
+        raise ValueError("agent name must contain letters")
+    for character in name:
+        if character.isalpha() or character == " " or character in "'-":
+            continue
+        raise ValueError("agent name must use letters, spaces, apostrophes, or hyphens")
+    return name
+
+
+def _bot_name_key(name: Any) -> str:
+    """Return the comparison key used to spot two Bots that display the same name."""
+    return " ".join(_optional_text(name, "agent name", 96).split()).casefold()
 
 
 def _string_list(value: Any, field: str) -> list[str]:
@@ -467,6 +503,51 @@ class HarnessRegistry:
                 "DELETE FROM connected_agents WHERE id = ?", (agent_id,)
             )
             return cursor.rowcount > 0
+
+    def name_conflicts(self, name: Any, *, exclude_id: str = "") -> list[dict[str, str]]:
+        """Return the other Bots that already display this name.
+
+        The registry does not forbid the collision, because the operator may have a
+        real reason to run two Bots with the same label.  It reports them instead so
+        the caller can warn before the rename lands.
+        """
+        key = _bot_name_key(name)
+        if not key:
+            return []
+        excluded = _optional_text(exclude_id, "agent id", 256)
+        conflicts: list[dict[str, str]] = []
+        for row in self.list_agents():
+            if excluded and row.get("id") == excluded:
+                continue
+            if _bot_name_key(row.get("name")) != key:
+                continue
+            label = str(row.get("host_label") or row.get("host_id") or "").strip()
+            conflicts.append({"agent_id": str(row["id"]), "label": label or str(row["id"])})
+        return sorted(conflicts, key=lambda item: item["agent_id"])
+
+    def rename_agent(self, agent_id: str, name: Any) -> dict[str, Any]:
+        """Rename one connected agent, which changes only how it is displayed.
+
+        The id and the handle stay stable, so the connector, the verification state,
+        the audit trail, and the operator's own chat keep pointing at the same Bot.
+        The caller owns the duplicate name warning and any capability check.
+        """
+        agent_id = _optional_text(agent_id, "agent id", 256)
+        if not agent_id:
+            raise ValueError("agent id is required")
+        renamed_to = _bot_name(name)
+        with self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE connected_agents
+                SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?
+                """,
+                (renamed_to, agent_id),
+            )
+        if cursor.rowcount == 0:
+            raise ValueError(f"unknown agent: {agent_id}")
+        return self.get_agent(agent_id)
 
     def mark_verified(
         self,

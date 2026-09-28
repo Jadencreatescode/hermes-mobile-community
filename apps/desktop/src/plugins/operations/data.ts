@@ -1,4 +1,5 @@
 import { operationsApi } from './api'
+import { normalizeBotName } from './bot-name'
 import { record } from './contracts'
 import { mapOperationsAgentState, type OperationsAgentState, type OperationsAssignmentEvidence } from './state'
 
@@ -385,6 +386,62 @@ export async function removeA2AAgent(agentId: string): Promise<{ agentId: string
   return {
     agentId: typeof response.agent_id === 'string' ? response.agent_id : agentId,
     deleted: response.deleted === true
+  }
+}
+
+export interface RenameA2AAgentResult {
+  agent: HarnessAgent
+  warnings: string[]
+}
+
+/** Rename one connected Bot. Only the display name moves; the id and handle stay. */
+export async function renameA2AAgent(agentId: string, name: string): Promise<RenameA2AAgentResult> {
+  const trimmed = normalizeBotName(name)
+
+  if (!trimmed) {
+    throw new Error('Enter a name for this Bot.')
+  }
+
+  try {
+    const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}`, {
+      method: 'PATCH',
+      body: { name: trimmed }
+    })
+
+    const row = record(response)
+    const rawWarnings = Array.isArray(row.warnings) ? row.warnings : []
+
+    return {
+      agent: normalizeHarnessAgent(response),
+      warnings: rawWarnings.filter((warning: unknown): warning is string => typeof warning === 'string')
+    }
+  } catch (cause) {
+    if (cause instanceof Error) {
+      const match = cause.message.match(/^\d+:\s*(.+)$/)
+
+      if (match) {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(match[1])
+        } catch {
+          // Not structured JSON — surface the raw body as a fallback.
+        }
+
+        if (parsed && typeof parsed === 'object' && parsed !== null && 'detail' in parsed) {
+          const detail = (parsed as Record<string, unknown>).detail
+          if (detail && typeof detail === 'object' && detail !== null && (detail as Record<string, unknown>).reason) {
+            throw new Error(String((detail as Record<string, unknown>).reason))
+          }
+          if (typeof detail === 'string') {
+            throw new Error(detail)
+          }
+        }
+
+        throw new Error(match[1])
+      }
+    }
+
+    throw cause
   }
 }
 
