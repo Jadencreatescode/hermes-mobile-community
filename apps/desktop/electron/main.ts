@@ -101,7 +101,6 @@ import {
   backendScopePrefix,
   buildAgentRoster,
   connectionDialFieldsChanged,
-  labelKey,
   mergeConnectionInput,
   migrateV1ToRegistry,
   normalizeConnectionInput,
@@ -187,6 +186,7 @@ import { snapHudBounds } from './hud-snap'
 import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
+import { buildMachineRoster } from './machine-roster'
 import { ensureMainWindow } from './main-window-lifecycle'
 import { createMediaProtocolHandler, MEDIA_PROTOCOL } from './media-protocol'
 import {
@@ -12719,31 +12719,8 @@ ipcMain.handle('hermes:connections:set-last-used', async (_event, id) => {
 ipcMain.handle('hermes:machine-roster', async () => {
   const registry = readDesktopConnectionsRegistry()
   const peers = await discoverTailscalePeers(5_000)
-  const registryLabels = new Set(registry.connections.map((c: { label: string }) => labelKey(c.label)))
 
-  const machines = registry.connections.map((c: { id: string; label: string; kind: string }) => ({
-    id: c.id,
-    label: c.label,
-    kind: c.kind,
-    state: 'offline' as const,
-    connected: true
-  }))
-
-  for (const peer of peers) {
-    if (registryLabels.has(labelKey(peer.label))) {
-      continue
-    }
-
-    machines.push({
-      id: peer.id,
-      label: peer.label,
-      kind: 'tailscale' as const,
-      state: peer.online ? 'not_connected' as const : 'offline' as const,
-      connected: false
-    })
-  }
-
-  return { machines }
+  return buildMachineRoster(registry, peers)
 })
 ipcMain.handle('hermes:connections:test', async (_event, id) => {
   const registry = readDesktopConnectionsRegistry()

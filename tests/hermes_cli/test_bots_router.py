@@ -198,10 +198,60 @@ class TestHarnessCatalogInvariants:
         call_mock.assert_not_called()
         system_mock.assert_not_called()
 
+    def test_protocol_harness_never_selectable(self, monkeypatch):
+        """A protocol-only harness is never selectable even when detected."""
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_native_harnesses",
+            lambda: {},
+        )
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_registry_harnesses",
+            lambda: {"generic_a2a": "registry"},
+        )
+        catalog = bots._build_harness_catalog()
+        generic = next((h for h in catalog if h["id"] == "generic_a2a"), None)
+        assert generic is not None
+        assert generic["detected"] is True
+        assert generic["selectable"] is False
 
-# ---------------------------------------------------------------------------
-# Create
-# ---------------------------------------------------------------------------
+    def test_present_harness_has_all_fields(self, monkeypatch):
+        """A detected harness carries every expected field."""
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_native_harnesses",
+            lambda: {"hermes": "native"},
+        )
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_registry_harnesses",
+            lambda: {},
+        )
+        catalog = bots._build_harness_catalog()
+        hermes = next((h for h in catalog if h["id"] == "hermes"), None)
+        assert hermes is not None
+        assert isinstance(hermes["label"], str) and hermes["label"]
+        assert hermes["detected"] is True
+        assert hermes["selectable"] is True
+        assert isinstance(hermes["source"], str) and hermes["source"]
+        assert isinstance(hermes["download_url"], str) and hermes["download_url"]
+
+    def test_absent_harness_has_all_fields(self, monkeypatch):
+        """An absent harness still carries every expected field."""
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_native_harnesses",
+            lambda: {},
+        )
+        monkeypatch.setattr(
+            "hermes_cli.web_routers.bots._detect_registry_harnesses",
+            lambda: {},
+        )
+        catalog = bots._build_harness_catalog()
+        codex = next((h for h in catalog if h["id"] == "codex"), None)
+        assert codex is not None
+        assert isinstance(codex["label"], str) and codex["label"]
+        assert codex["detected"] is False
+        assert codex["selectable"] is False
+        assert isinstance(codex["source"], str)
+        assert isinstance(codex["download_url"], str) and codex["download_url"]
+        assert "install_hint" in codex
 
 
 class TestPostBots:

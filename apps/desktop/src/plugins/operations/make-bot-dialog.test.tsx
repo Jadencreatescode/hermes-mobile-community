@@ -440,6 +440,42 @@ describe('MakeBotDialog', () => {
     expect(dialog.className.includes('sm:w-[calc(100vw-2rem)]')).toBe(true)
   })
 
+  it('avoids fixed widths that would overflow at phone widths from 344 to 412 pixels', async () => {
+    loadMakeBotState.mockResolvedValue(resolvedState({}))
+
+    render(<MakeBotDialog onOpenChange={vi.fn()} open />)
+    await waitFor(() => expect(screen.getByLabelText(/Bot name/i)).toBeTruthy())
+
+    const dialog = screen.getByRole('dialog')
+    // Viewport-relative width keeps the dialog inside the screen at all sizes.
+    expect(dialog.className.includes('w-[calc(100vw-1rem)]')).toBe(true)
+    // No fixed pixel width that could exceed a narrow viewport.
+    expect(dialog.className.includes('w-[') && dialog.className.includes('px')).toBe(false)
+    // Vertical scroll is enabled so tall content does not force horizontal growth.
+    expect(dialog.className.includes('overflow-y-auto')).toBe(true)
+    // Capped so it does not stretch absurdly wide on desktop.
+    expect(dialog.className.includes('max-w-2xl')).toBe(true)
+  })
+
+  it('stacks form fields vertically on narrow viewports', async () => {
+    loadMakeBotState.mockResolvedValue(resolvedState({
+      machines: [
+        {
+          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+          harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+          models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+        }
+      ]
+    }))
+
+    render(<MakeBotDialog onOpenChange={vi.fn()} open />)
+    await waitFor(() => expect(screen.getByLabelText(/Bot name/i)).toBeTruthy())
+
+    // The machine/harness row uses a responsive grid that stacks below the sm breakpoint.
+    const gridRow = screen.getByLabelText(/Machine/i).closest('.grid')
+    expect(gridRow?.className.includes('sm:grid-cols-2')).toBe(true)
+  })
+
   it('switches harness and model lists when machine is changed', async () => {
     loadMakeBotState.mockResolvedValue(resolvedState({
       machines: [
