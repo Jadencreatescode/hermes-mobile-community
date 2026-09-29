@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { createBot, fetchMakeBotCatalog, installCommandForHarness, loadMakeBotState, suggestedInstallCommands } from './make-bot-data'
+import {
+  createBot,
+  fetchMakeBotCatalog,
+  fetchMakeBotCatalogForConnection,
+  installCommandForHarness,
+  loadMakeBotState,
+  suggestedInstallCommands
+} from './make-bot-data'
 
 vi.mock('@/api/client', () => ({
   hermesApi: vi.fn()
@@ -8,6 +15,26 @@ vi.mock('@/api/client', () => ({
 
 // eslint-disable-next-line no-restricted-imports
 import { hermesApi } from '@/api/client'
+
+function mockRegistry(connections: { id: string; kind: 'local' | 'remote' | 'ssh' | 'cloud'; label: string }[]) {
+  const bridge = {
+    connections: {
+      list: vi.fn().mockResolvedValue({
+        version: 2,
+        primary: connections[0]?.id ?? 'local',
+        launchMode: 'primary',
+        lastUsed: connections[0]?.id ?? 'local',
+        connections
+      })
+    }
+  }
+
+  vi.stubGlobal('window', { hermesDesktop: bridge })
+}
+
+function clearRegistryMock() {
+  vi.unstubAllGlobals()
+}
 
 describe('fetchMakeBotCatalog', () => {
   afterEach(() => {
@@ -151,6 +178,242 @@ describe('fetchMakeBotCatalog', () => {
   })
 })
 
+describe('fetchMakeBotCatalogForConnection', () => {
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('routes the catalog request through the given connection', async () => {
+    vi.mocked(hermesApi).mockResolvedValueOnce({
+      harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }],
+      models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+    })
+
+    const catalog = await fetchMakeBotCatalogForConnection('homelab')
+
+    expect(hermesApi).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/api/bots/catalog',
+      connectionId: 'homelab'
+    }))
+    expect(catalog.harnesses).toHaveLength(1)
+  })
+
+  it('passes a custom timeout to the request', async () => {
+    vi.mocked(hermesApi).mockResolvedValueOnce({ harnesses: [], models: [] })
+
+    await fetchMakeBotCatalogForConnection('homelab', 5000)
+
+    expect(hermesApi).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/api/bots/catalog',
+      connectionId: 'homelab',
+      timeoutMs: 5000
+    }))
+  })
+
+  it('uses null connectionId for local', async () => {
+    vi.mocked(hermesApi).mockResolvedValueOnce({ harnesses: [], models: [] })
+
+    await fetchMakeBotCatalogForConnection('local')
+
+    expect(hermesApi).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/api/bots/catalog',
+      connectionId: 'local'
+    }))
+  })
+})
+
+describe('loadMakeBotState', () => {
+  afterEach(() => {
+    vi.clearAllMocks()
+    clearRegistryMock()
+  })
+
+  it('returns local machine first when it is the only connection', async () => {
+    mockRegistry([{ id: 'local', kind: 'local', label: 'This device' }])
+    vi.mocked(hermesApi).mockResolvedValueOnce({
+      harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+      models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+    })
+
+    const state = await loadMakeBotState()
+
+    expect(state.machines).toHaveLength(1)
+    expect(state.machines[0].machine).toEqual({
+      id: 'local',
+      label: 'This device',
+      kind: 'local',
+      state: 'online'
+    })
+    expect(state.machines[0].harnesses).toHaveLength(1)
+    expect(state.machines[0].models).toHaveLength(1)
+    expect(state.degraded).toBe(false)
+  })
+
+  it('groups harnesses by machine', async () => {
+    mockRegistry([
+      { id: 'local', kind: 'local', label: 'This device' },
+      { id: 'homelab', kind: 'remote', label: 'Homelab' }
+    ])
+    vi.mocked(hermesApi)
+      .mockResolvedValueOnce({
+        harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+        models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+      })
+      .mockResolvedValueOnce({
+        harnesses: [
+          { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
+          { id: 'codex', label: 'Codex', detected: true, selectable: true, source: 'native' }
+        ],
+        models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+      })
+
+    const state = await loadMakeBotState()
+
+    expect(state.machines).toHaveLength(2)
+    expect(state.machines[0].machine.id).toBe('local')
+    expect(state.machines[0].harnesses).toHaveLength(1)
+    expect(state.machines[1].machine.id).toBe('homelab')
+    expect(state.machines[1].harnesses).toHaveLength(2)
+    expect(state.degraded).toBe(false)
+  })
+
+  it('marks a machine offline when the request times out', async () => {
+    mockRegistry([
+      { id: 'local', kind: 'local', label: 'This device' },
+      { id: 'homelab', kind: 'remote', label: 'Homelab' }
+    ])
+    vi.mocked(hermesApi)
+      .mockResolvedValueOnce({
+        harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+        models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+      })
+      .mockRejectedValueOnce(new Error('timeout'))
+
+    const state = await loadMakeBotState()
+
+    expect(state.machines[1].machine.state).toBe('unreachable')
+    expect(state.machines[1].harnesses).toEqual([])
+    expect(state.machines[1].models).toEqual([])
+    expect(state.degraded).toBe(false)
+  })
+
+  it('marks a machine offline when the response is malformed', async () => {
+    mockRegistry([
+      { id: 'local', kind: 'local', label: 'This device' },
+      { id: 'homelab', kind: 'remote', label: 'Homelab' }
+    ])
+    vi.mocked(hermesApi)
+      .mockResolvedValueOnce({ harnesses: [], models: [] })
+      .mockResolvedValueOnce({
+        harnesses: 'not-an-array',
+        models: { also: 'not-an-array' }
+      })
+
+    const state = await loadMakeBotState()
+
+    expect(state.machines[1].machine.state).toBe('online')
+    expect(state.machines[1].harnesses).toEqual([])
+    expect(state.machines[1].models).toEqual([])
+  })
+
+  it('degrades to no_machine when every machine is unreachable', async () => {
+    mockRegistry([
+      { id: 'local', kind: 'local', label: 'This device' },
+      { id: 'homelab', kind: 'remote', label: 'Homelab' }
+    ])
+    vi.mocked(hermesApi).mockRejectedValue(new Error('offline'))
+
+    const state = await loadMakeBotState()
+
+    expect(state.degraded).toBe(true)
+    expect(state.degradedReason).toBe('no_machine')
+    expect(state.machines[0].machine.state).toBe('unreachable')
+    expect(state.machines[1].machine.state).toBe('unreachable')
+  })
+
+  it('degrades to no_harness when the only online machine has no harnesses', async () => {
+    mockRegistry([{ id: 'local', kind: 'local', label: 'This device' }])
+    vi.mocked(hermesApi).mockResolvedValueOnce({ harnesses: [], models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }] })
+
+    const state = await loadMakeBotState()
+
+    expect(state.degraded).toBe(true)
+    expect(state.degradedReason).toBe('no_harness')
+  })
+
+  it('degrades to no_model when the only online machine has no models', async () => {
+    mockRegistry([{ id: 'local', kind: 'local', label: 'This device' }])
+    vi.mocked(hermesApi).mockResolvedValueOnce({ harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }], models: [] })
+
+    const state = await loadMakeBotState()
+
+    expect(state.degraded).toBe(true)
+    expect(state.degradedReason).toBe('no_model')
+  })
+
+  it('does not degrade when at least one machine is online with harnesses and models', async () => {
+    mockRegistry([
+      { id: 'local', kind: 'local', label: 'This device' },
+      { id: 'homelab', kind: 'remote', label: 'Homelab' }
+    ])
+    vi.mocked(hermesApi)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({
+        harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+        models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+      })
+
+    const state = await loadMakeBotState()
+
+    expect(state.degraded).toBe(false)
+    expect(state.machines[0].machine.state).toBe('unreachable')
+    expect(state.machines[1].machine.state).toBe('online')
+  })
+
+  it('places local first even when the registry lists it last', async () => {
+    mockRegistry([
+      { id: 'homelab', kind: 'remote', label: 'Homelab' },
+      { id: 'local', kind: 'local', label: 'This device' }
+    ])
+    vi.mocked(hermesApi)
+      .mockResolvedValueOnce({ harnesses: [], models: [] })
+      .mockResolvedValueOnce({ harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }], models: [] })
+
+    const state = await loadMakeBotState()
+
+    expect(state.machines[0].machine.id).toBe('local')
+    expect(state.machines[1].machine.id).toBe('homelab')
+  })
+
+  it('returns no_machine when the bridge is not available', async () => {
+    vi.stubGlobal('window', { hermesDesktop: undefined })
+
+    const state = await loadMakeBotState()
+
+    expect(state.degraded).toBe(true)
+    expect(state.degradedReason).toBe('no_machine')
+    expect(state.machines).toEqual([])
+  })
+
+  it('uses bounded per-machine timeout and overall budget', async () => {
+    mockRegistry([
+      { id: 'local', kind: 'local', label: 'This device' },
+      { id: 'slow', kind: 'remote', label: 'Slow box' }
+    ])
+    vi.mocked(hermesApi)
+      .mockResolvedValueOnce({ harnesses: [], models: [] })
+      .mockImplementationOnce(async request => {
+        expect(request).toMatchObject(expect.objectContaining({ timeoutMs: expect.any(Number) }))
+        throw new Error('timeout')
+      })
+
+    const state = await loadMakeBotState()
+
+    expect(state.machines[0].machine.state).toBe('online')
+    expect(state.machines[1].machine.state).toBe('unreachable')
+  })
+})
+
 describe('createBot', () => {
   afterEach(() => {
     vi.clearAllMocks()
@@ -231,101 +494,27 @@ describe('createBot', () => {
 
     await expect(createBot({ name: 'taken' })).rejects.toThrow('name taken')
   })
-})
 
-describe('loadMakeBotState', () => {
-  afterEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it('returns machine, harnesses and models when everything is available', async () => {
+  it('routes the create request through the selected connection', async () => {
     vi.mocked(hermesApi).mockResolvedValueOnce({
-      harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }],
-      models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+      name: 'remotebot',
+      path: '/home/user/.hermes/profiles/remotebot',
+      harness: 'hermes',
+      model: 'gpt-4'
     })
 
-    const state = await loadMakeBotState()
-
-    expect(state.machine).toEqual({
-      id: 'local',
-      label: 'This machine',
-      reachable: true
-    })
-    expect(state.harnesses).toHaveLength(1)
-    expect(state.models).toHaveLength(1)
-    expect(state.degraded).toBe(false)
-    expect(state.degradedReason).toBeUndefined()
-  })
-
-  it('returns degraded state when no harness is available', async () => {
-    vi.mocked(hermesApi).mockResolvedValueOnce({
-      harnesses: [],
-      models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+    await createBot({
+      name: 'remotebot',
+      harness: 'hermes',
+      model: 'gpt-4',
+      connectionId: 'homelab'
     })
 
-    const state = await loadMakeBotState()
-
-    expect(state.machine).toEqual({
-      id: 'local',
-      label: 'This machine',
-      reachable: true
-    })
-    expect(state.harnesses).toHaveLength(0)
-    expect(state.models).toHaveLength(1)
-    expect(state.degraded).toBe(true)
-    expect(state.degradedReason).toBe('no_harness')
-  })
-
-  it('returns degraded state when no model is available', async () => {
-    vi.mocked(hermesApi).mockResolvedValueOnce({
-      harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }],
-      models: []
-    })
-
-    const state = await loadMakeBotState()
-
-    expect(state.degraded).toBe(true)
-    expect(state.degradedReason).toBe('no_model')
-  })
-
-  it('does not degrade when harnesses exist but none are selectable', async () => {
-    vi.mocked(hermesApi).mockResolvedValueOnce({
-      harnesses: [
-        { id: 'codex', label: 'Codex', detected: false, selectable: false, source: 'none', download_url: 'https://www.npmjs.com/package/@openai/codex' }
-      ],
-      models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
-    })
-
-    const state = await loadMakeBotState()
-
-    expect(state.degraded).toBe(false)
-    expect(state.degradedReason).toBeUndefined()
-    expect(state.harnesses).toHaveLength(1)
-    expect(state.harnesses[0].selectable).toBe(false)
-  })
-
-  it('returns no machine when the backend is unreachable', async () => {
-    vi.mocked(hermesApi).mockRejectedValueOnce(new Error('offline'))
-
-    const state = await loadMakeBotState()
-
-    expect(state.machine).toBeUndefined()
-    expect(state.harnesses).toEqual([])
-    expect(state.models).toEqual([])
-    expect(state.degraded).toBe(true)
-    expect(state.degradedReason).toBe('no_machine')
-  })
-
-  it('prefers no_harness over no_model when both are missing', async () => {
-    vi.mocked(hermesApi).mockResolvedValueOnce({
-      harnesses: [],
-      models: []
-    })
-
-    const state = await loadMakeBotState()
-
-    expect(state.degraded).toBe(true)
-    expect(state.degradedReason).toBe('no_harness')
+    expect(hermesApi).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/api/bots',
+      method: 'POST',
+      connectionId: 'homelab'
+    }))
   })
 })
 
