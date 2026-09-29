@@ -68,6 +68,10 @@ function machineOptionLabel(catalog: MachineCatalog): string {
     return machine.label
   }
 
+  if (machine.state === 'not_connected') {
+    return `${machine.label} · not connected`
+  }
+
   return `${machine.label} · ${machine.state}`
 }
 
@@ -261,6 +265,11 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
                       </option>
                     ))}
                   </select>
+                  {selectedCatalog?.machine.state === 'not_connected' ? (
+                    <span className="text-[0.68rem] text-(--ui-text-tertiary)">
+                      Connect this machine in Settings to use it.
+                    </span>
+                  ) : null}
                 </Field>
 
                 <Field hint="The harness this Bot uses to run." label="Harness">

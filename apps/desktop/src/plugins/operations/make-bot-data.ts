@@ -25,13 +25,14 @@ export interface MakeBotModel {
   provider: string
 }
 
-export type MachineState = 'online' | 'offline' | 'unreachable'
+export type MachineState = 'online' | 'offline' | 'unreachable' | 'not_connected'
 
 export interface MakeBotMachine {
   id: string
   label: string
-  kind: DesktopConnectionKind
+  kind: DesktopConnectionKind | 'tailscale'
   state: MachineState
+  connected?: boolean
 }
 
 export interface MachineCatalog {
@@ -202,26 +203,18 @@ export async function fetchMakeBotCatalogForConnection(
 const PER_MACHINE_TIMEOUT_MS = 8_000
 const OVERALL_BUDGET_MS = 25_000
 
-interface RegistryLike {
-  connections: Array<{
-    id: string
-    kind: DesktopConnectionKind
-    label: string
-  }>
-}
-
-export async function resolveMachineRoster(registry: RegistryLike): Promise<MachineCatalog[]> {
-  const machines: MachineCatalog[] = []
+export async function resolveMachineRoster(machines: MakeBotMachine[]): Promise<MachineCatalog[]> {
+  const catalogs: MachineCatalog[] = []
   const startTime = Date.now()
 
-  for (const connection of registry.connections) {
+  for (const machine of machines) {
     const elapsed = Date.now() - startTime
     const remainingBudget = OVERALL_BUDGET_MS - elapsed
 
     if (remainingBudget <= 0) {
-      for (const remaining of registry.connections.slice(machines.length)) {
-        machines.push({
-          machine: { id: remaining.id, label: remaining.label, kind: remaining.kind, state: 'offline' },
+      for (const remaining of machines.slice(catalogs.length)) {
+        catalogs.push({
+          machine: remaining,
           harnesses: [],
           models: []
         })
@@ -229,18 +222,28 @@ export async function resolveMachineRoster(registry: RegistryLike): Promise<Mach
       break
     }
 
+    // Discovered but unconnected peers are never probed for harnesses.
+    if (machine.connected === false || machine.state === 'not_connected') {
+      catalogs.push({
+        machine,
+        harnesses: [],
+        models: []
+      })
+      continue
+    }
+
     const timeoutMs = Math.min(PER_MACHINE_TIMEOUT_MS, remainingBudget)
 
     try {
-      const catalog = await fetchMakeBotCatalogForConnection(connection.id, timeoutMs)
-      machines.push({
-        machine: { id: connection.id, label: connection.label, kind: connection.kind, state: 'online' },
+      const catalog = await fetchMakeBotCatalogForConnection(machine.id, timeoutMs)
+      catalogs.push({
+        machine: { ...machine, state: 'online' },
         harnesses: catalog.harnesses,
         models: catalog.models
       })
     } catch {
-      machines.push({
-        machine: { id: connection.id, label: connection.label, kind: connection.kind, state: 'unreachable' },
+      catalogs.push({
+        machine: { ...machine, state: 'unreachable' },
         harnesses: [],
         models: []
       })
@@ -248,13 +251,13 @@ export async function resolveMachineRoster(registry: RegistryLike): Promise<Mach
   }
 
   // Ensure local is always first
-  const localIndex = machines.findIndex(m => m.machine.id === 'local')
+  const localIndex = catalogs.findIndex(m => m.machine.id === 'local')
   if (localIndex > 0) {
-    const [local] = machines.splice(localIndex, 1)
-    machines.unshift(local)
+    const [local] = catalogs.splice(localIndex, 1)
+    catalogs.unshift(local)
   }
 
-  return machines
+  return catalogs
 }
 
 // ---------------------------------------------------------------------------
@@ -262,19 +265,19 @@ export async function resolveMachineRoster(registry: RegistryLike): Promise<Mach
 // ---------------------------------------------------------------------------
 
 export async function loadMakeBotState(): Promise<MakeBotState> {
-  let registry: RegistryLike | null = null
+  let machines: MakeBotMachine[] | null = null
 
   try {
-    const result = await window.hermesDesktop?.connections?.list()
+    const result = await window.hermesDesktop?.getMachineRoster?.()
 
-    if (result && Array.isArray(result.connections)) {
-      registry = result as RegistryLike
+    if (result && Array.isArray(result.machines)) {
+      machines = result.machines as MakeBotMachine[]
     }
   } catch {
-    // registry unavailable — degrade below
+    // roster unavailable — degrade below
   }
 
-  if (!registry) {
+  if (!machines) {
     return {
       degraded: true,
       degradedReason: 'no_machine',
@@ -282,14 +285,14 @@ export async function loadMakeBotState(): Promise<MakeBotState> {
     }
   }
 
-  const machines = await resolveMachineRoster(registry)
-  const onlineMachines = machines.filter(m => m.machine.state === 'online')
+  const catalogs = await resolveMachineRoster(machines)
+  const onlineMachines = catalogs.filter(m => m.machine.state === 'online')
 
   if (onlineMachines.length === 0) {
     return {
       degraded: true,
       degradedReason: 'no_machine',
-      machines
+      machines: catalogs
     }
   }
 
@@ -300,7 +303,7 @@ export async function loadMakeBotState(): Promise<MakeBotState> {
     return {
       degraded: true,
       degradedReason: 'no_harness',
-      machines
+      machines: catalogs
     }
   }
 
@@ -308,11 +311,11 @@ export async function loadMakeBotState(): Promise<MakeBotState> {
     return {
       degraded: true,
       degradedReason: 'no_model',
-      machines
+      machines: catalogs
     }
   }
 
-  return { degraded: false, machines }
+  return { degraded: false, machines: catalogs }
 }
 
 // ---------------------------------------------------------------------------

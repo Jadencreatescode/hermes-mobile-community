@@ -101,6 +101,7 @@ import {
   backendScopePrefix,
   buildAgentRoster,
   connectionDialFieldsChanged,
+  labelKey,
   mergeConnectionInput,
   migrateV1ToRegistry,
   normalizeConnectionInput,
@@ -272,6 +273,7 @@ import { createBootstrapCoordinator, sshConfigFingerprint } from './ssh-bootstra
 import { collectSshConfigHosts, parseSshGOutput } from './ssh-config'
 import { createSshProbeConnection, pickLocalPort, redactSecrets, SshConnection } from './ssh-connection'
 import { createStreamThrottle } from './stream-throttle'
+import { discoverTailscalePeers } from './tailscale-discovery'
 import { registerTerminalIpc } from './terminal-ipc'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
 import {
@@ -12713,6 +12715,35 @@ ipcMain.handle('hermes:connections:set-last-used', async (_event, id) => {
   writeDesktopConnectionsRegistry(registry)
 
   return { ok: true, registry: sanitizeConnectionsRegistry(registry) }
+})
+ipcMain.handle('hermes:machine-roster', async () => {
+  const registry = readDesktopConnectionsRegistry()
+  const peers = await discoverTailscalePeers(5_000)
+  const registryLabels = new Set(registry.connections.map((c: { label: string }) => labelKey(c.label)))
+
+  const machines = registry.connections.map((c: { id: string; label: string; kind: string }) => ({
+    id: c.id,
+    label: c.label,
+    kind: c.kind,
+    state: 'offline' as const,
+    connected: true
+  }))
+
+  for (const peer of peers) {
+    if (registryLabels.has(labelKey(peer.label))) {
+      continue
+    }
+
+    machines.push({
+      id: peer.id,
+      label: peer.label,
+      kind: 'tailscale' as const,
+      state: peer.online ? 'not_connected' as const : 'offline' as const,
+      connected: false
+    })
+  }
+
+  return { machines }
 })
 ipcMain.handle('hermes:connections:test', async (_event, id) => {
   const registry = readDesktopConnectionsRegistry()
