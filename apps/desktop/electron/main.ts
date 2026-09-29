@@ -186,6 +186,7 @@ import { snapHudBounds } from './hud-snap'
 import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
+import { buildMachineRoster } from './machine-roster'
 import { ensureMainWindow } from './main-window-lifecycle'
 import { createMediaProtocolHandler, MEDIA_PROTOCOL } from './media-protocol'
 import {
@@ -272,6 +273,7 @@ import { createBootstrapCoordinator, sshConfigFingerprint } from './ssh-bootstra
 import { collectSshConfigHosts, parseSshGOutput } from './ssh-config'
 import { createSshProbeConnection, pickLocalPort, redactSecrets, SshConnection } from './ssh-connection'
 import { createStreamThrottle } from './stream-throttle'
+import { discoverTailscalePeers } from './tailscale-discovery'
 import { registerTerminalIpc } from './terminal-ipc'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
 import {
@@ -12713,6 +12715,12 @@ ipcMain.handle('hermes:connections:set-last-used', async (_event, id) => {
   writeDesktopConnectionsRegistry(registry)
 
   return { ok: true, registry: sanitizeConnectionsRegistry(registry) }
+})
+ipcMain.handle('hermes:machine-roster', async () => {
+  const registry = readDesktopConnectionsRegistry()
+  const peers = await discoverTailscalePeers(5_000)
+
+  return buildMachineRoster(registry, peers)
 })
 ipcMain.handle('hermes:connections:test', async (_event, id) => {
   const registry = readDesktopConnectionsRegistry()

@@ -32,6 +32,8 @@ declare global {
       }) => Promise<GatewayWsUrlResult>
       // Union agent roster across every registered connection.
       getAgentRoster?: () => Promise<DesktopAgentRoster>
+      // Unified machine roster: registry connections + discovered Tailscale peers.
+      getMachineRoster?: () => Promise<DesktopMachineRoster>
       // Credential-free routes across the union connection registry. The
       // optional profile list is used only by the single-local v1 fallback;
       // endpoint and auth material never crosses the IPC boundary.
@@ -906,6 +908,18 @@ export interface DesktopAgentRoster {
     // Stable backend identity (/api/status install_id) when known.
     installId?: string
   }[]
+}
+
+export interface DesktopMachineRosterEntry {
+  id: string
+  label: string
+  kind: DesktopConnectionKind | 'tailscale'
+  state: 'online' | 'offline' | 'unreachable' | 'not_connected'
+  connected: boolean
+}
+
+export interface DesktopMachineRoster {
+  machines: DesktopMachineRosterEntry[]
 }
 
 // Per-connection result row from the update fan-out.
