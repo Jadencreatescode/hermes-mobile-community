@@ -532,3 +532,114 @@ test('C4: production meeting does NOT auto-complete at round cap', () => {
   m = submitContribution(m, { participant: bob, kind: 'pass' })
   assert.notEqual(m.state, 'completed')
 })
+
+// ---------------------------------------------------------------------------
+// C7 — contribution kinds (speak, pass, brief, produce, review)
+// ---------------------------------------------------------------------------
+
+test('C7: speak contribution is accepted with non-empty text', () => {
+  let m = startMeeting(createMeeting(base()))
+  m = submitContribution(m, { participant: alice, kind: 'speak', text: 'My point.' })
+  const c = m.contributions.at(-1)
+  assert.equal(c.kind, 'speak')
+  assert.equal(c.text, 'My point.')
+})
+
+test('C7: pass contribution is accepted with no text required', () => {
+  let m = startMeeting(createMeeting(base()))
+  m = submitContribution(m, { participant: alice, kind: 'pass' })
+  const c = m.contributions.at(-1)
+  assert.equal(c.kind, 'pass')
+  assert.equal(c.text, '')
+})
+
+test('C7: brief contribution is accepted with non-empty text', () => {
+  let m = startMeeting(createMeeting(base()))
+  m = submitContribution(m, { participant: alice, kind: 'brief', text: 'Briefing summary.' })
+  const c = m.contributions.at(-1)
+  assert.equal(c.kind, 'brief')
+  assert.equal(c.text, 'Briefing summary.')
+})
+
+test('C7: produce contribution is accepted with non-empty text', () => {
+  let m = startMeeting(createMeeting(base()))
+  m = submitContribution(m, { participant: alice, kind: 'produce', text: 'Production artifact ref.' })
+  const c = m.contributions.at(-1)
+  assert.equal(c.kind, 'produce')
+  assert.equal(c.text, 'Production artifact ref.')
+})
+
+test('C7: review contribution is accepted with non-empty text', () => {
+  let m = startMeeting(createMeeting(base()))
+  m = submitContribution(m, { participant: alice, kind: 'review', text: 'LGTM.' })
+  const c = m.contributions.at(-1)
+  assert.equal(c.kind, 'review')
+  assert.equal(c.text, 'LGTM.')
+})
+
+test('C7: unknown contribution kind is rejected', () => {
+  const m = startMeeting(createMeeting(base()))
+  assert.throws(
+    () => submitContribution(m, { participant: alice, kind: 'vote', text: 'Yes.' }),
+    err => err instanceof MeetingValidationError && /kind must be speak, pass, brief, produce, or review/.test(err.message)
+  )
+})
+
+test('C7: brief kind without text is rejected', () => {
+  const m = startMeeting(createMeeting(base()))
+  assert.throws(
+    () => submitContribution(m, { participant: alice, kind: 'brief' }),
+    err => err instanceof MeetingValidationError && /contribution\.text/.test(err.message)
+  )
+})
+
+test('C7: produce kind without text is rejected', () => {
+  const m = startMeeting(createMeeting(base()))
+  assert.throws(
+    () => submitContribution(m, { participant: alice, kind: 'produce' }),
+    err => err instanceof MeetingValidationError && /contribution\.text/.test(err.message)
+  )
+})
+
+test('C7: review kind without text is rejected', () => {
+  const m = startMeeting(createMeeting(base()))
+  assert.throws(
+    () => submitContribution(m, { participant: alice, kind: 'review' }),
+    err => err instanceof MeetingValidationError && /contribution\.text/.test(err.message)
+  )
+})
+
+// ---------------------------------------------------------------------------
+// C8 — non-production auto-complete guard (regression)
+// ---------------------------------------------------------------------------
+
+test('C8: non-production meeting still auto-completes on all-pass round (no regression)', () => {
+  let m = startMeeting(createMeeting(base()))
+  m = submitContribution(m, { participant: alice, kind: 'pass' })
+  m = submitContribution(m, { participant: bob, kind: 'pass' })
+  assert.equal(m.state, 'completed')
+})
+
+test('C8: non-production meeting still auto-completes at round cap', () => {
+  let m = startMeeting(createMeeting(base({ maxRounds: 1 })))
+  m = submitContribution(m, { participant: alice, kind: 'speak', text: 'Point.' })
+  m = submitContribution(m, { participant: bob, kind: 'pass' })
+  assert.equal(m.state, 'completed')
+})
+
+test('C8: non-production meeting with new kinds (brief/produce/review) still auto-completes at round cap', () => {
+  let m = startMeeting(createMeeting(base({ maxRounds: 1 })))
+  m = submitContribution(m, { participant: alice, kind: 'brief', text: 'Here is the brief.' })
+  m = submitContribution(m, { participant: bob, kind: 'review', text: 'Reviewed.' })
+  // round capped, non-production — should auto-complete
+  assert.equal(m.state, 'completed')
+})
+
+test('C8: production meeting with new kinds does NOT auto-complete at round cap', () => {
+  let m = startMeeting(createMeeting(prodBase({ maxRounds: 1 })))
+  m = submitContribution(m, { participant: alice, kind: 'brief', text: 'Brief.' })
+  m = submitContribution(m, { participant: bob, kind: 'review', text: 'LGTM.' })
+  // production meeting — must not auto-complete
+  assert.notEqual(m.state, 'completed')
+  assert.equal(m.state, 'running')
+})
