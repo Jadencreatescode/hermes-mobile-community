@@ -369,7 +369,47 @@ test('C5: artifact binding without approvedBy is rejected', () => {
 test('C5: artifact binding with non-number approvedAt is rejected', () => {
   assert.throws(
     () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: 'now' } })),
-    err => err instanceof MeetingValidationError && /approvedAt must be a number/.test(err.message)
+    err => err instanceof MeetingValidationError && /approvedAt must be a finite non-negative number/.test(err.message)
+  )
+})
+
+test('C5: artifact binding with NaN approvedAt is rejected', () => {
+  assert.throws(
+    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: NaN } })),
+    err => err instanceof MeetingValidationError && /approvedAt must be a finite non-negative number/.test(err.message)
+  )
+})
+
+test('C5: artifact binding with Infinity approvedAt is rejected', () => {
+  assert.throws(
+    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: Infinity } })),
+    err => err instanceof MeetingValidationError && /approvedAt must be a finite non-negative number/.test(err.message)
+  )
+})
+
+test('C5: artifact binding with -Infinity approvedAt is rejected', () => {
+  assert.throws(
+    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: -Infinity } })),
+    err => err instanceof MeetingValidationError && /approvedAt must be a finite non-negative number/.test(err.message)
+  )
+})
+
+test('C5: artifact binding with negative approvedAt is rejected', () => {
+  assert.throws(
+    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: -1 } })),
+    err => err instanceof MeetingValidationError && /approvedAt must be a finite non-negative number/.test(err.message)
+  )
+})
+
+test('C5: artifact binding with zero approvedAt is accepted', () => {
+  assert.doesNotThrow(
+    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: 0 } }))
+  )
+})
+
+test('C5: artifact binding with valid finite non-negative approvedAt is accepted', () => {
+  assert.doesNotThrow(
+    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: 1_700_000_000 } }))
   )
 })
 
