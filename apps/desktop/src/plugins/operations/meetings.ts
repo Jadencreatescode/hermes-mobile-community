@@ -28,6 +28,25 @@ export interface RouteIdentity {
   readonly profile: string
 }
 
+// C5: artifact binding fields required for production-meeting completion.
+export interface ArtifactBinding {
+  readonly outputId: string
+  readonly artifactVersion: number
+  readonly gameSha256: string
+  readonly manifestSha256: string
+  readonly zipSha256: string
+  readonly approvedBy: string
+  readonly approvedAt: number
+}
+
+// C3: a seat in a production meeting.
+export interface SeatAssignment {
+  readonly bot: RouteIdentity
+  readonly role: 'contributor' | 'thinker' | 'specialist' | 'reviewer'
+  readonly label: string
+  readonly instructions?: string
+}
+
 export interface MeetingRecord {
   readonly actionItems: readonly unknown[]
   readonly agenda: string
@@ -45,6 +64,15 @@ export interface MeetingRecord {
   readonly source: RouteIdentity
   readonly state: 'draft' | 'running' | 'waiting' | 'completed' | 'cancelled' | 'failed'
   readonly title: string
+  // C1: orchestrator+producer pairing (both present or both absent).
+  readonly orchestrator?: RouteIdentity
+  readonly producer?: RouteIdentity
+  // C3: ordered seat assignments.
+  readonly seats?: readonly SeatAssignment[]
+  // C6: production stage (only valid when orchestrator+producer present).
+  readonly productionStage?: string
+  // C5: artifact binding (required to complete a production meeting).
+  readonly artifactBinding?: ArtifactBinding
 }
 
 export type MeetingTransition = 'start' | 'speak' | 'pass' | 'wait' | 'resume' | 'conclude' | 'cancel' | 'fail'
@@ -125,7 +153,18 @@ export function meetingFromWire(value: unknown): MeetingRecord {
     evidenceRefs: array(row.evidenceRefs ?? row.evidence),
     decisions: array(row.decisions),
     dissent: array(row.dissent).map(item => nestedRoute(item, 'participant', 'participant')),
-    actionItems: array(row.actionItems ?? row.action_items).map(item => nestedRoute(item, 'ownerRoute', 'owner_route'))
+    actionItems: array(row.actionItems ?? row.action_items).map(item => nestedRoute(item, 'ownerRoute', 'owner_route')),
+    // C1: orchestrator/producer — normalize wire keys if present.
+    ...(row.orchestrator != null ? { orchestrator: routeFromWire(row.orchestrator) } : {}),
+    ...(row.producer != null ? { producer: routeFromWire(row.producer) } : {}),
+    // C3: seats — pass through as-is; createMeeting/hydrateMeeting validates and normalizes.
+    ...(row.seats != null ? { seats: row.seats } : {}),
+    // C6: productionStage.
+    ...(row.productionStage != null ? { productionStage: row.productionStage } :
+        row.production_stage != null ? { productionStage: row.production_stage } : {}),
+    // C5: artifactBinding.
+    ...(row.artifactBinding != null ? { artifactBinding: row.artifactBinding } :
+        row.artifact_binding != null ? { artifactBinding: row.artifact_binding } : {})
   }
 
   const hydrated = hydrateMeeting(JSON.stringify(normalized)) as MeetingRecord
@@ -136,6 +175,9 @@ export function meetingFromWire(value: unknown): MeetingRecord {
     ? undefined
     : freezeJson(objectRow(rawSessions)) as Readonly<Record<string, string>>
 
+  // The hydrated record already carries orchestrator, producer, seats,
+  // productionStage, and artifactBinding (restored by hydrateMeeting/createMeeting),
+  // so we only need to carry through pending and runnerSessions.
   if (pending === undefined && runnerSessions === undefined) {
     return hydrated
   }
@@ -168,7 +210,16 @@ export function meetingToWire(meeting: MeetingRecord): Record<string, unknown> {
     dissent: meeting.dissent,
     action_items: meeting.actionItems,
     ...(meeting.pending === undefined ? {} : { pending: meeting.pending }),
-    ...(meeting.runnerSessions === undefined ? {} : { runner_sessions: meeting.runnerSessions })
+    ...(meeting.runnerSessions === undefined ? {} : { runner_sessions: meeting.runnerSessions }),
+    // C1: orchestrator/producer pairing.
+    ...(meeting.orchestrator !== undefined ? { orchestrator: routeToWire(meeting.orchestrator) } : {}),
+    ...(meeting.producer !== undefined ? { producer: routeToWire(meeting.producer) } : {}),
+    // C3: seats.
+    ...(meeting.seats !== undefined ? { seats: meeting.seats } : {}),
+    // C6: productionStage.
+    ...(meeting.productionStage !== undefined ? { productionStage: meeting.productionStage } : {}),
+    // C5: artifactBinding.
+    ...(meeting.artifactBinding !== undefined ? { artifactBinding: meeting.artifactBinding } : {})
   }
 }
 
@@ -219,6 +270,11 @@ export function createMeetingDraft(input: {
   participants: RouteIdentity[]
   source: RouteIdentity
   title: string
+  // C1: optional production pairing.
+  orchestrator?: RouteIdentity
+  producer?: RouteIdentity
+  // C3: optional ordered seat assignments.
+  seats?: Array<{ bot: RouteIdentity; role: string; label: string; instructions?: string }>
 }): MeetingRecord {
   return createMeeting(input) as MeetingRecord
 }
