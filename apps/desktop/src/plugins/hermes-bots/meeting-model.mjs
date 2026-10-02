@@ -12,7 +12,17 @@ export const MEETING_LIMITS = Object.freeze({
   maxSerializedBytes: 256_000,
   minParticipants: 2,
   maxParticipants: 6,
-  maxRounds: 5
+  maxRounds: 5,
+  maxSeats: 6,
+  maxSeatLabelLength: 256,
+  maxSeatInstructionsLength: 4_000
+})
+
+export const MEETING_SEAT_ROLES = Object.freeze({
+  contributor: 'contributor',
+  thinker: 'thinker',
+  specialist: 'specialist',
+  reviewer: 'reviewer'
 })
 
 export class MeetingValidationError extends Error {
@@ -149,6 +159,46 @@ export function createMeeting(input) {
     fail(`maxRounds must be an integer from 1 to ${MEETING_LIMITS.maxRounds}`)
   }
 
+  // C1: orchestrator+producer mandatory pairing — both present or both absent, and must be distinct.
+  const orchestrator = candidate.orchestrator ? validateRoute(candidate.orchestrator, 'orchestrator') : null
+  const producer = candidate.producer ? validateRoute(candidate.producer, 'producer') : null
+  if (orchestrator && !producer) fail('producer is required when orchestrator is present')
+  if (producer && !orchestrator) fail('orchestrator is required when producer is present')
+  if (orchestrator && producer && routeKey(orchestrator) === routeKey(producer)) {
+    fail('orchestrator and producer must be distinct')
+  }
+
+  // C3: ordered seats — optional array, each bot unique, roles restricted, max 6 seats.
+  const seats = []
+  if (candidate.seats != null) {
+    if (!Array.isArray(candidate.seats)) fail('seats must be an array')
+    if (candidate.seats.length > MEETING_LIMITS.maxSeats) fail(`seats must contain at most ${MEETING_LIMITS.maxSeats} items`)
+    const seenBotKeys = new Set()
+    for (let index = 0; index < candidate.seats.length; index++) {
+      const rawSeat = candidate.seats[index]
+      if (rawSeat == null || typeof rawSeat !== 'object' || Array.isArray(rawSeat)) {
+        fail(`seats[${index}] must be an object`)
+      }
+      const bot = validateRoute(rawSeat.bot, `seats[${index}].bot`)
+      const role = requireString(rawSeat.role, `seats[${index}].role`, 32, { noWhitespace: true })
+      if (!Object.prototype.hasOwnProperty.call(MEETING_SEAT_ROLES, role)) {
+        fail(`seats[${index}].role is not allowed`)
+      }
+      const label = requireString(rawSeat.label, `seats[${index}].label`, MEETING_LIMITS.maxSeatLabelLength)
+      const instructions = rawSeat.instructions != null
+        ? requireString(rawSeat.instructions, `seats[${index}].instructions`, MEETING_LIMITS.maxSeatInstructionsLength)
+        : undefined
+      const botKey = routeKey(bot)
+      if (seenBotKeys.has(botKey)) fail('seats must contain unique bots')
+      seenBotKeys.add(botKey)
+      // C2: reviewer seat cannot be the producer.
+      if (role === 'reviewer' && producer && botKey === routeKey(producer)) {
+        fail('reviewer seat cannot be the producer')
+      }
+      seats.push(Object.freeze({ bot: copyRoute(bot), role, label, ...(instructions !== undefined ? { instructions } : {}) }))
+    }
+  }
+
   return Object.freeze({
     id: candidate.id,
     source: copyRoute(candidate.source),
@@ -163,7 +213,10 @@ export function createMeeting(input) {
     decisions: Object.freeze([]),
     dissent: Object.freeze([]),
     actionItems: Object.freeze([]),
-    state: 'draft'
+    state: 'draft',
+    ...(orchestrator ? { orchestrator: copyRoute(orchestrator) } : {}),
+    ...(producer ? { producer: copyRoute(producer) } : {}),
+    ...(seats.length ? { seats: Object.freeze(seats) } : {})
   })
 }
 
@@ -267,7 +320,13 @@ function freezeHydrated(record) {
     evidenceRefs: Object.freeze([...record.evidenceRefs]),
     decisions: Object.freeze(record.decisions.map(entry => Object.freeze({ ...entry, evidenceRefs: Object.freeze([...entry.evidenceRefs]) }))),
     dissent: Object.freeze(record.dissent.map(entry => Object.freeze({ ...entry, participant: copyRoute(entry.participant), evidenceRefs: Object.freeze([...entry.evidenceRefs]) }))),
-    actionItems: Object.freeze(record.actionItems.map(entry => Object.freeze({ ...entry, ownerRoute: copyRoute(entry.ownerRoute) })))
+    actionItems: Object.freeze(record.actionItems.map(entry => Object.freeze({ ...entry, ownerRoute: copyRoute(entry.ownerRoute) }))),
+    ...(record.orchestrator ? { orchestrator: copyRoute(record.orchestrator) } : {}),
+    ...(record.producer ? { producer: copyRoute(record.producer) } : {}),
+    ...(record.seats ? { seats: Object.freeze(record.seats.map(seat => Object.freeze({
+      ...seat,
+      bot: copyRoute(seat.bot)
+    }))) } : {})
   })
 }
 
