@@ -79,7 +79,7 @@ function validateArtifactBinding(value, field = 'artifactBinding') {
     }
   }
   const approvedBy = requireString(value.approvedBy, `${field}.approvedBy`, MEETING_LIMITS.maxIdLength)
-  if (typeof value.approvedAt !== 'number') fail(`${field}.approvedAt must be a number`)
+  if (!Number.isFinite(value.approvedAt) || value.approvedAt < 0) fail(`${field}.approvedAt must be a finite non-negative number`)
   return Object.freeze({
     outputId,
     artifactVersion: value.artifactVersion,
