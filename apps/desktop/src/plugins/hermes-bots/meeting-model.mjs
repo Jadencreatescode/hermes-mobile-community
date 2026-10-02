@@ -163,10 +163,13 @@ export function submitContribution(meeting, input) {
   if (meeting.contributions.some(entry => entry.round === meeting.currentRound && routeKey(entry.participant) === routeKey(participant))) {
     throw new MeetingTransitionError('participant already contributed this round')
   }
-  if (candidate.kind !== 'speak' && candidate.kind !== 'pass') {
-    fail('contribution kind must be speak or pass')
+  // C7: five legal contribution kinds; non-pass kinds require non-empty text.
+  if (candidate.kind !== 'speak' && candidate.kind !== 'pass' &&
+      candidate.kind !== 'brief' && candidate.kind !== 'produce' && candidate.kind !== 'review') {
+    fail('contribution kind must be speak, pass, brief, produce, or review')
   }
-  const text = candidate.kind === 'speak'
+  const text = (candidate.kind === 'speak' || candidate.kind === 'brief' ||
+      candidate.kind === 'produce' || candidate.kind === 'review')
     ? requireString(candidate.text, 'contribution.text', MEETING_LIMITS.maxContributionLength)
     : ''
   const evidenceRefs = copyEvidenceRefs(candidate.evidenceRefs, 'contribution.evidenceRefs')
