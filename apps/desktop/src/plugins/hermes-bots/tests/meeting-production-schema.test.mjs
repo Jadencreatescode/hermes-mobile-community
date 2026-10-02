@@ -2,10 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  advanceProductionStage,
+  concludeMeeting,
   createMeeting,
   hydrateMeeting,
   MEETING_LIMITS,
+  MEETING_PRODUCTION_STAGES,
   MEETING_SEAT_ROLES,
+  MeetingTransitionError,
   MeetingValidationError,
   serializeMeeting,
   startMeeting,
@@ -263,4 +267,268 @@ test('Non-regression: hydrate/serialize of an ordinary meeting remains stable', 
   assert.deepEqual(hydrated, withContrib)
   assert.equal(hydrated.orchestrator, undefined)
   assert.equal(hydrated.seats, undefined)
+})
+
+// ---------------------------------------------------------------------------
+// Shared valid artifact binding fixture
+// ---------------------------------------------------------------------------
+
+const validBinding = Object.freeze({
+  outputId: 'game-v1.0',
+  artifactVersion: 1,
+  gameSha256: 'a'.repeat(64),
+  manifestSha256: 'b'.repeat(64),
+  zipSha256: 'c'.repeat(64),
+  approvedBy: 'boss',
+  approvedAt: 1_700_000_000
+})
+
+function prodBase(overrides = {}) {
+  return base({ orchestrator: orch, producer: prod, ...overrides })
+}
+
+function prodConclusion(bindingOverride) {
+  return {
+    chair: alice,
+    decisions: [],
+    dissent: [],
+    actionItems: [],
+    ...(bindingOverride !== undefined ? { artifactBinding: bindingOverride } : { artifactBinding: validBinding })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// C5 — artifact-binding schema validation
+// ---------------------------------------------------------------------------
+
+test('C5: valid artifact binding is accepted on createMeeting', () => {
+  const meeting = createMeeting(prodBase({ artifactBinding: validBinding }))
+  assert.equal(meeting.artifactBinding.outputId, 'game-v1.0')
+  assert.equal(meeting.artifactBinding.artifactVersion, 1)
+  assert.equal(Object.isFrozen(meeting.artifactBinding), true)
+})
+
+test('C5: artifact binding without outputId is rejected', () => {
+  const noId = {
+    artifactVersion: validBinding.artifactVersion,
+    gameSha256: validBinding.gameSha256,
+    manifestSha256: validBinding.manifestSha256,
+    zipSha256: validBinding.zipSha256,
+    approvedBy: validBinding.approvedBy,
+    approvedAt: validBinding.approvedAt
+  }
+  assert.throws(
+    () => createMeeting(prodBase({ artifactBinding: noId })),
+    err => err instanceof MeetingValidationError && /outputId is required/.test(err.message)
+  )
+})
+
+test('C5: artifact binding with non-positive artifactVersion is rejected', () => {
+  assert.throws(
+    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, artifactVersion: 0 } })),
+    err => err instanceof MeetingValidationError && /artifactVersion must be a positive integer/.test(err.message)
+  )
+})
+
+test('C5: artifact binding with non-integer artifactVersion is rejected', () => {
+  assert.throws(
+    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, artifactVersion: 1.5 } })),
+    err => err instanceof MeetingValidationError && /artifactVersion must be a positive integer/.test(err.message)
+  )
+})
+
+test('C5: artifact binding with invalid gameSha256 (not 64 hex chars) is rejected', () => {
+  assert.throws(
+    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, gameSha256: 'ZZZZ' } })),
+    err => err instanceof MeetingValidationError && /gameSha256/.test(err.message)
+  )
+})
+
+test('C5: artifact binding with uppercase hex in sha256 is rejected', () => {
+  assert.throws(
+    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, manifestSha256: 'A'.repeat(64) } })),
+    err => err instanceof MeetingValidationError && /manifestSha256/.test(err.message)
+  )
+})
+
+test('C5: artifact binding without approvedBy is rejected', () => {
+  const noApprovedBy = {
+    outputId: validBinding.outputId,
+    artifactVersion: validBinding.artifactVersion,
+    gameSha256: validBinding.gameSha256,
+    manifestSha256: validBinding.manifestSha256,
+    zipSha256: validBinding.zipSha256,
+    approvedAt: validBinding.approvedAt
+  }
+  assert.throws(
+    () => createMeeting(prodBase({ artifactBinding: noApprovedBy })),
+    err => err instanceof MeetingValidationError && /approvedBy is required/.test(err.message)
+  )
+})
+
+test('C5: artifact binding with non-number approvedAt is rejected', () => {
+  assert.throws(
+    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: 'now' } })),
+    err => err instanceof MeetingValidationError && /approvedAt must be a number/.test(err.message)
+  )
+})
+
+test('C5: artifact binding on a non-production meeting (no orchestrator) is rejected', () => {
+  assert.throws(
+    () => createMeeting(base({ artifactBinding: validBinding })),
+    err => err instanceof MeetingValidationError && /artifactBinding requires orchestrator and producer/.test(err.message)
+  )
+})
+
+test('C5: artifact binding round-trips through serialize/hydrate', () => {
+  const meeting = createMeeting(prodBase({ artifactBinding: validBinding }))
+  const hydrated = hydrateMeeting(serializeMeeting(meeting))
+  assert.deepEqual(hydrated.artifactBinding, meeting.artifactBinding)
+  assert.equal(Object.isFrozen(hydrated.artifactBinding), true)
+})
+
+// ---------------------------------------------------------------------------
+// C6 — production stages FSM
+// ---------------------------------------------------------------------------
+
+test('C6: MEETING_PRODUCTION_STAGES exports all 8 stages as a frozen array', () => {
+  const expected = ['briefing', 'working', 'production_ready', 'producing', 'reviewing', 'changes_requested', 'approval_ready', 'completed']
+  assert.deepEqual([...MEETING_PRODUCTION_STAGES], expected)
+  assert.equal(Object.isFrozen(MEETING_PRODUCTION_STAGES), true)
+})
+
+test('C6: productionStage is set on createMeeting', () => {
+  const meeting = createMeeting(prodBase({ productionStage: 'briefing' }))
+  assert.equal(meeting.productionStage, 'briefing')
+})
+
+test('C6: productionStage on non-production meeting is rejected', () => {
+  assert.throws(
+    () => createMeeting(base({ productionStage: 'briefing' })),
+    err => err instanceof MeetingValidationError && /productionStage requires orchestrator and producer/.test(err.message)
+  )
+})
+
+test('C6: invalid productionStage value is rejected', () => {
+  assert.throws(
+    () => createMeeting(prodBase({ productionStage: 'unknown_stage' })),
+    err => err instanceof MeetingValidationError && /not a valid production stage/.test(err.message)
+  )
+})
+
+test('C6: advanceProductionStage advances stage on production meeting', () => {
+  const meeting = createMeeting(prodBase({ productionStage: 'briefing' }))
+  const advanced = advanceProductionStage(meeting, 'working')
+  assert.equal(advanced.productionStage, 'working')
+  // original unchanged
+  assert.equal(meeting.productionStage, 'briefing')
+})
+
+test('C6: advanceProductionStage rejects invalid stage', () => {
+  const meeting = createMeeting(prodBase())
+  assert.throws(
+    () => advanceProductionStage(meeting, 'nonexistent'),
+    err => err instanceof MeetingValidationError && /not a valid production stage/.test(err.message)
+  )
+})
+
+test('C6: advanceProductionStage rejects non-production meeting', () => {
+  const meeting = createMeeting(base())
+  assert.throws(
+    () => advanceProductionStage(meeting, 'briefing'),
+    err => err instanceof MeetingTransitionError && /requires orchestrator and producer/.test(err.message)
+  )
+})
+
+test('C6: productionStage round-trips through serialize/hydrate', () => {
+  const meeting = createMeeting(prodBase({ productionStage: 'producing' }))
+  const hydrated = hydrateMeeting(serializeMeeting(meeting))
+  assert.equal(hydrated.productionStage, 'producing')
+})
+
+test('C6: productionStage absent on ordinary meeting after hydrate', () => {
+  const meeting = createMeeting(base())
+  const hydrated = hydrateMeeting(serializeMeeting(meeting))
+  assert.equal(hydrated.productionStage, undefined)
+})
+
+// ---------------------------------------------------------------------------
+// C4 — hard completion gate
+// ---------------------------------------------------------------------------
+
+test('C4: production meeting with valid artifactBinding can be concluded', () => {
+  const m = startMeeting(createMeeting(prodBase()))
+  const concluded = concludeMeeting(m, prodConclusion())
+  assert.equal(concluded.state, 'completed')
+  assert.deepEqual(concluded.artifactBinding.outputId, validBinding.outputId)
+})
+
+test('C4: production meeting without artifactBinding cannot be concluded', () => {
+  const m = startMeeting(createMeeting(prodBase()))
+  assert.throws(
+    () => concludeMeeting(m, prodConclusion(null)),
+    err => err instanceof MeetingTransitionError && /cannot complete without an approved artifact binding/.test(err.message)
+  )
+})
+
+test('C4: production meeting with invalid artifactBinding (bad sha) is rejected at conclude', () => {
+  const badBinding = { ...validBinding, zipSha256: 'not-valid' }
+  const m = startMeeting(createMeeting(prodBase()))
+  assert.throws(
+    () => concludeMeeting(m, prodConclusion(badBinding)),
+    err => err instanceof MeetingValidationError && /zipSha256/.test(err.message)
+  )
+})
+
+test('C4: ordinary meeting concludes without any artifact binding', () => {
+  const m = startMeeting(createMeeting(base()))
+  const concluded = concludeMeeting(m, {
+    chair: alice,
+    decisions: [],
+    dissent: [],
+    actionItems: []
+  })
+  assert.equal(concluded.state, 'completed')
+  assert.equal(concluded.artifactBinding, undefined)
+})
+
+test('C4: production meeting pre-loaded with artifactBinding can conclude without passing binding again', () => {
+  const m = startMeeting(createMeeting(prodBase({ artifactBinding: validBinding })))
+  const concluded = concludeMeeting(m, { chair: alice, decisions: [], dissent: [], actionItems: [] })
+  assert.equal(concluded.state, 'completed')
+  assert.deepEqual(concluded.artifactBinding.outputId, validBinding.outputId)
+})
+
+test('C4: production meeting at completed state cannot be hydrated without artifactBinding', () => {
+  const m = startMeeting(createMeeting(prodBase()))
+  const concluded = concludeMeeting(m, prodConclusion())
+  const raw = JSON.parse(serializeMeeting(concluded))
+  delete raw.artifactBinding
+  assert.throws(
+    () => hydrateMeeting(JSON.stringify(raw)),
+    err => err instanceof MeetingValidationError && /cannot complete without an approved artifact binding/.test(err.message)
+  )
+})
+
+test('C4: production meeting with valid artifact binding round-trips through hydrate in completed state', () => {
+  const m = startMeeting(createMeeting(prodBase()))
+  const concluded = concludeMeeting(m, prodConclusion())
+  const hydrated = hydrateMeeting(serializeMeeting(concluded))
+  assert.equal(hydrated.state, 'completed')
+  assert.deepEqual(hydrated.artifactBinding.gameSha256, validBinding.gameSha256)
+})
+
+test('C4: production meeting does NOT auto-complete via all-pass rounds', () => {
+  let m = startMeeting(createMeeting(prodBase()))
+  m = submitContribution(m, { participant: alice, kind: 'pass' })
+  m = submitContribution(m, { participant: bob, kind: 'pass' })
+  // rounds exhaust but production meetings must not auto-complete
+  assert.notEqual(m.state, 'completed')
+})
+
+test('C4: production meeting does NOT auto-complete at round cap', () => {
+  let m = startMeeting(createMeeting(prodBase({ maxRounds: 1 })))
+  m = submitContribution(m, { participant: alice, kind: 'speak', text: 'Progress.' })
+  m = submitContribution(m, { participant: bob, kind: 'pass' })
+  assert.notEqual(m.state, 'completed')
 })
