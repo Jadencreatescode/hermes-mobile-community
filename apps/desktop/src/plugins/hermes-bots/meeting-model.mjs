@@ -12,8 +12,35 @@ export const MEETING_LIMITS = Object.freeze({
   maxSerializedBytes: 256_000,
   minParticipants: 2,
   maxParticipants: 6,
-  maxRounds: 5
+  maxRounds: 5,
+  maxSeats: 6,
+  maxSeatLabelLength: 256,
+  maxSeatInstructionsLength: 4_000
 })
+
+export const MEETING_SEAT_ROLES = Object.freeze({
+  contributor: 'contributor',
+  thinker: 'thinker',
+  specialist: 'specialist',
+  reviewer: 'reviewer'
+})
+
+// C6: legal production-stage names — only valid on production meetings (orchestrator+producer present).
+export const MEETING_PRODUCTION_STAGES = Object.freeze([
+  'briefing',
+  'working',
+  'production_ready',
+  'producing',
+  'reviewing',
+  'changes_requested',
+  'approval_ready',
+  'completed'
+])
+
+const _PRODUCTION_STAGE_SET = new Set(MEETING_PRODUCTION_STAGES)
+
+// C5: SHA-256 digest pattern.
+const _SHA256_RE = /^[0-9a-f]{64}$/
 
 export class MeetingValidationError extends Error {
   constructor(message) {
@@ -31,6 +58,42 @@ export class MeetingTransitionError extends MeetingValidationError {
 
 function fail(message) {
   throw new MeetingValidationError(message)
+}
+
+// C5: validate an artifact binding object. Returns a frozen copy or throws.
+function validateArtifactBinding(value, field = 'artifactBinding') {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    fail(`${field} must be an object`)
+  }
+  const required = ['outputId', 'artifactVersion', 'gameSha256', 'manifestSha256', 'zipSha256', 'approvedBy', 'approvedAt']
+  for (const key of required) {
+    if (!(key in value)) fail(`${field}.${key} is required`)
+  }
+  const outputId = requireString(value.outputId, `${field}.outputId`, MEETING_LIMITS.maxIdLength, { noWhitespace: true })
+  if (!Number.isInteger(value.artifactVersion) || value.artifactVersion < 1) {
+    fail(`${field}.artifactVersion must be a positive integer`)
+  }
+  for (const digestKey of ['gameSha256', 'manifestSha256', 'zipSha256']) {
+    if (typeof value[digestKey] !== 'string' || !_SHA256_RE.test(value[digestKey])) {
+      fail(`${field}.${digestKey} must be a 64-character lowercase hex SHA-256 digest`)
+    }
+  }
+  const approvedBy = requireString(value.approvedBy, `${field}.approvedBy`, MEETING_LIMITS.maxIdLength)
+  if (!Number.isFinite(value.approvedAt) || value.approvedAt < 0) fail(`${field}.approvedAt must be a finite non-negative number`)
+  return Object.freeze({
+    outputId,
+    artifactVersion: value.artifactVersion,
+    gameSha256: value.gameSha256,
+    manifestSha256: value.manifestSha256,
+    zipSha256: value.zipSha256,
+    approvedBy,
+    approvedAt: value.approvedAt
+  })
+}
+
+// Helper: returns true if the meeting is a production meeting (both orchestrator and producer present).
+function isProductionMeeting(meeting) {
+  return Boolean(meeting.orchestrator && meeting.producer)
 }
 
 function requireRecord(value, field) {
@@ -100,10 +163,13 @@ export function submitContribution(meeting, input) {
   if (meeting.contributions.some(entry => entry.round === meeting.currentRound && routeKey(entry.participant) === routeKey(participant))) {
     throw new MeetingTransitionError('participant already contributed this round')
   }
-  if (candidate.kind !== 'speak' && candidate.kind !== 'pass') {
-    fail('contribution kind must be speak or pass')
+  // C7: five legal contribution kinds; non-pass kinds require non-empty text.
+  if (candidate.kind !== 'speak' && candidate.kind !== 'pass' &&
+      candidate.kind !== 'brief' && candidate.kind !== 'produce' && candidate.kind !== 'review') {
+    fail('contribution kind must be speak, pass, brief, produce, or review')
   }
-  const text = candidate.kind === 'speak'
+  const text = (candidate.kind === 'speak' || candidate.kind === 'brief' ||
+      candidate.kind === 'produce' || candidate.kind === 'review')
     ? requireString(candidate.text, 'contribution.text', MEETING_LIMITS.maxContributionLength)
     : ''
   const evidenceRefs = copyEvidenceRefs(candidate.evidenceRefs, 'contribution.evidenceRefs')
@@ -120,12 +186,15 @@ export function submitContribution(meeting, input) {
   const roundComplete = current.length === meeting.participants.length
   const allPassed = roundComplete && current.every(entry => entry.kind === 'pass')
   const capped = roundComplete && meeting.currentRound >= meeting.maxRounds
+  // C4: production meetings (orchestrator+producer present) must NOT auto-complete via rounds —
+  // they require explicit concludeMeeting with a valid artifactBinding.
+  const autoComplete = (allPassed || capped) && !isProductionMeeting(meeting)
   return Object.freeze({
     ...meeting,
     contributions,
     currentRound: roundComplete && !allPassed && !capped ? meeting.currentRound + 1 : meeting.currentRound,
     evidenceRefs: Object.freeze([...new Set([...meeting.evidenceRefs, ...evidenceRefs])]),
-    state: allPassed || capped ? 'completed' : meeting.state
+    state: autoComplete ? 'completed' : meeting.state
   })
 }
 
@@ -149,6 +218,62 @@ export function createMeeting(input) {
     fail(`maxRounds must be an integer from 1 to ${MEETING_LIMITS.maxRounds}`)
   }
 
+  // C1: orchestrator+producer mandatory pairing — both present or both absent, and must be distinct.
+  const orchestrator = candidate.orchestrator ? validateRoute(candidate.orchestrator, 'orchestrator') : null
+  const producer = candidate.producer ? validateRoute(candidate.producer, 'producer') : null
+  if (orchestrator && !producer) fail('producer is required when orchestrator is present')
+  if (producer && !orchestrator) fail('orchestrator is required when producer is present')
+  if (orchestrator && producer && routeKey(orchestrator) === routeKey(producer)) {
+    fail('orchestrator and producer must be distinct')
+  }
+
+  // C3: ordered seats — optional array, each bot unique, roles restricted, max 6 seats.
+  const seats = []
+  if (candidate.seats != null) {
+    if (!Array.isArray(candidate.seats)) fail('seats must be an array')
+    if (candidate.seats.length > MEETING_LIMITS.maxSeats) fail(`seats must contain at most ${MEETING_LIMITS.maxSeats} items`)
+    const seenBotKeys = new Set()
+    for (let index = 0; index < candidate.seats.length; index++) {
+      const rawSeat = candidate.seats[index]
+      if (rawSeat == null || typeof rawSeat !== 'object' || Array.isArray(rawSeat)) {
+        fail(`seats[${index}] must be an object`)
+      }
+      const bot = validateRoute(rawSeat.bot, `seats[${index}].bot`)
+      const role = requireString(rawSeat.role, `seats[${index}].role`, 32, { noWhitespace: true })
+      if (!Object.prototype.hasOwnProperty.call(MEETING_SEAT_ROLES, role)) {
+        fail(`seats[${index}].role is not allowed`)
+      }
+      const label = requireString(rawSeat.label, `seats[${index}].label`, MEETING_LIMITS.maxSeatLabelLength)
+      const instructions = rawSeat.instructions != null
+        ? requireString(rawSeat.instructions, `seats[${index}].instructions`, MEETING_LIMITS.maxSeatInstructionsLength)
+        : undefined
+      const botKey = routeKey(bot)
+      if (seenBotKeys.has(botKey)) fail('seats must contain unique bots')
+      seenBotKeys.add(botKey)
+      // C2: reviewer seat cannot be the producer.
+      if (role === 'reviewer' && producer && botKey === routeKey(producer)) {
+        fail('reviewer seat cannot be the producer')
+      }
+      seats.push(Object.freeze({ bot: copyRoute(bot), role, label, ...(instructions !== undefined ? { instructions } : {}) }))
+    }
+  }
+
+  // C6: productionStage — optional, only valid on production meetings.
+  let productionStage
+  if (candidate.productionStage != null) {
+    if (!orchestrator || !producer) fail('productionStage requires orchestrator and producer')
+    const stage = String(candidate.productionStage)
+    if (!_PRODUCTION_STAGE_SET.has(stage)) fail('productionStage is not a valid production stage')
+    productionStage = stage
+  }
+
+  // C5: artifactBinding — optional, only valid on production meetings.
+  let artifactBinding
+  if (candidate.artifactBinding != null) {
+    if (!orchestrator || !producer) fail('artifactBinding requires orchestrator and producer')
+    artifactBinding = validateArtifactBinding(candidate.artifactBinding)
+  }
+
   return Object.freeze({
     id: candidate.id,
     source: copyRoute(candidate.source),
@@ -163,7 +288,12 @@ export function createMeeting(input) {
     decisions: Object.freeze([]),
     dissent: Object.freeze([]),
     actionItems: Object.freeze([]),
-    state: 'draft'
+    state: 'draft',
+    ...(orchestrator ? { orchestrator: copyRoute(orchestrator) } : {}),
+    ...(producer ? { producer: copyRoute(producer) } : {}),
+    ...(seats.length ? { seats: Object.freeze(seats) } : {}),
+    ...(productionStage !== undefined ? { productionStage } : {}),
+    ...(artifactBinding !== undefined ? { artifactBinding } : {})
   })
 }
 
@@ -176,6 +306,17 @@ export const waitMeeting = meeting => transitionMeeting(meeting, ['running'], 'w
 export const resumeMeeting = meeting => transitionMeeting(meeting, ['waiting'], 'running')
 export const cancelMeeting = meeting => transitionMeeting(meeting, ['draft', 'running', 'waiting'], 'cancelled')
 export const failMeeting = meeting => transitionMeeting(meeting, ['draft', 'running', 'waiting'], 'failed')
+
+// C6: advance production stage. Both orchestrator and producer must be present.
+export function advanceProductionStage(meeting, stage) {
+  if (!isProductionMeeting(meeting)) {
+    throw new MeetingTransitionError('advanceProductionStage requires orchestrator and producer')
+  }
+  if (!_PRODUCTION_STAGE_SET.has(stage)) {
+    throw new MeetingValidationError('productionStage is not a valid production stage')
+  }
+  return Object.freeze({ ...meeting, productionStage: stage })
+}
 
 function boundedArray(value, field, maximum) {
   if (!Array.isArray(value) || value.length > maximum) fail(`${field} must be a bounded array`)
@@ -230,7 +371,25 @@ export function concludeMeeting(meeting, input) {
   const decisions = Object.freeze(boundedArray(candidate.decisions, 'decisions', MEETING_LIMITS.maxDecisionCount).map(copyDecision))
   const dissent = Object.freeze(boundedArray(candidate.dissent, 'dissent', MEETING_LIMITS.maxDissentCount).map((row, index) => copyDissent(row, index, meeting.participants)))
   const actionItems = Object.freeze(boundedArray(candidate.actionItems, 'actionItems', MEETING_LIMITS.maxActionItemCount).map((row, index) => copyActionItem(meeting.id, row, index, meeting.participants)))
-  return Object.freeze({ ...meeting, decisions, dissent, actionItems, state: 'completed' })
+
+  // C4: production meetings cannot reach completed without a valid artifactBinding.
+  let artifactBinding = meeting.artifactBinding
+  if (isProductionMeeting(meeting)) {
+    const bindingInput = candidate.artifactBinding != null ? candidate.artifactBinding : meeting.artifactBinding
+    if (bindingInput == null) {
+      throw new MeetingTransitionError('production meeting cannot complete without an approved artifact binding')
+    }
+    artifactBinding = validateArtifactBinding(bindingInput)
+  }
+
+  return Object.freeze({
+    ...meeting,
+    decisions,
+    dissent,
+    actionItems,
+    state: 'completed',
+    ...(artifactBinding !== undefined ? { artifactBinding } : {})
+  })
 }
 
 export function buildKanbanCreatePayloads(meeting) {
@@ -267,7 +426,15 @@ function freezeHydrated(record) {
     evidenceRefs: Object.freeze([...record.evidenceRefs]),
     decisions: Object.freeze(record.decisions.map(entry => Object.freeze({ ...entry, evidenceRefs: Object.freeze([...entry.evidenceRefs]) }))),
     dissent: Object.freeze(record.dissent.map(entry => Object.freeze({ ...entry, participant: copyRoute(entry.participant), evidenceRefs: Object.freeze([...entry.evidenceRefs]) }))),
-    actionItems: Object.freeze(record.actionItems.map(entry => Object.freeze({ ...entry, ownerRoute: copyRoute(entry.ownerRoute) })))
+    actionItems: Object.freeze(record.actionItems.map(entry => Object.freeze({ ...entry, ownerRoute: copyRoute(entry.ownerRoute) }))),
+    ...(record.orchestrator ? { orchestrator: copyRoute(record.orchestrator) } : {}),
+    ...(record.producer ? { producer: copyRoute(record.producer) } : {}),
+    ...(record.seats ? { seats: Object.freeze(record.seats.map(seat => Object.freeze({
+      ...seat,
+      bot: copyRoute(seat.bot)
+    }))) } : {}),
+    ...(record.productionStage !== undefined ? { productionStage: record.productionStage } : {}),
+    ...(record.artifactBinding !== undefined ? { artifactBinding: Object.freeze({ ...record.artifactBinding }) } : {})
   })
 }
 
@@ -291,6 +458,19 @@ export function hydrateMeeting(serialized) {
   const decisions = boundedArray(candidate.decisions, 'decisions', MEETING_LIMITS.maxDecisionCount).map(copyDecision)
   const dissent = boundedArray(candidate.dissent, 'dissent', MEETING_LIMITS.maxDissentCount).map((row, index) => copyDissent(row, index, base.participants))
   const actions = boundedArray(candidate.actionItems, 'actionItems', MEETING_LIMITS.maxActionItemCount).map((row, index) => copyActionItem(base.id, row, index, base.participants))
+
+  // C6: restore productionStage if present (already validated inside createMeeting above).
+  // C5: restore artifactBinding if present.
+  let artifactBinding
+  if (candidate.artifactBinding != null) {
+    artifactBinding = validateArtifactBinding(candidate.artifactBinding)
+  }
+
+  // C4: production meetings in completed state must have an artifact binding.
+  if (candidate.state === 'completed' && base.orchestrator && base.producer) {
+    if (artifactBinding == null) fail('production meeting cannot complete without an approved artifact binding')
+  }
+
   const hydrated = {
     ...rebuilt,
     state: candidate.state,
@@ -298,7 +478,8 @@ export function hydrateMeeting(serialized) {
     evidenceRefs: copyEvidenceRefs(candidate.evidenceRefs),
     decisions: Object.freeze(decisions),
     dissent: Object.freeze(dissent),
-    actionItems: Object.freeze(actions)
+    actionItems: Object.freeze(actions),
+    ...(artifactBinding !== undefined ? { artifactBinding } : {})
   }
   return freezeHydrated(hydrated)
 }
