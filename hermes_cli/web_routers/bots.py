@@ -60,6 +60,28 @@ _HARNESS_LABELS: Dict[str, str] = {
     "generic_a2a": "Generic A2A",
 }
 
+_HARNESS_DOWNLOAD_URLS: Dict[str, Optional[str]] = {
+    "hermes": "https://github.com/NousResearch/Hermes-Agent#readme",
+    "pi": "https://pi.dev/",
+    "claude_code": "https://www.npmjs.com/package/@anthropic-ai/claude-code",
+    "codex": "https://www.npmjs.com/package/@openai/codex",
+    "opencode": "https://www.npmjs.com/package/opencode-ai",
+    "cursor": "https://cursor.com",
+    "github_copilot": "https://github.com/features/copilot",
+    "generic_a2a": None,
+}
+
+_HARNESS_INSTALL_HINTS: Dict[str, str] = {
+    "claude_code": "npm install -g @anthropic-ai/claude-code",
+    "codex": "npm install -g @openai/codex",
+    "cursor": "Install Cursor from https://cursor.com",
+    "github_copilot": "Install GitHub CLI and run: gh extension install github/copilot",
+    "opencode": "npm install -g opencode-ai",
+    "pi": "curl -fsSL https://pi.dev/install.sh | sh",
+}
+
+_PROTOCOL_HARNESSES: set = {"generic_a2a"}
+
 
 def _detect_native_harnesses() -> Dict[str, str]:
     """Return harness_id -> 'native' for binaries found on PATH."""
@@ -99,28 +121,27 @@ def _detect_registry_harnesses() -> Dict[str, str]:
 
 def _build_harness_catalog() -> List[Dict[str, Any]]:
     """Build the harness catalog from native detection + registry."""
-    catalog: Dict[str, Dict[str, Any]] = {}
+    native = _detect_native_harnesses()
+    registry = _detect_registry_harnesses()
+    catalog: List[Dict[str, Any]] = []
 
-    # Native detection first (strongest signal)
-    for harness_id, source in _detect_native_harnesses().items():
-        catalog[harness_id] = {
-            "id": harness_id,
-            "label": _HARNESS_LABELS.get(harness_id, harness_id),
-            "detected": True,
-            "source": source,
-        }
-
-    # Registry entries fill gaps
-    for harness_id, source in _detect_registry_harnesses().items():
-        if harness_id not in catalog:
-            catalog[harness_id] = {
+    for harness_id in _HARNESS_BINARIES:
+        detected = harness_id in native or harness_id in registry
+        source = native.get(harness_id) or registry.get(harness_id) or "none"
+        selectable = detected and harness_id not in _PROTOCOL_HARNESSES
+        catalog.append(
+            {
                 "id": harness_id,
                 "label": _HARNESS_LABELS.get(harness_id, harness_id),
-                "detected": True,
+                "detected": detected,
+                "selectable": selectable,
                 "source": source,
+                "download_url": _HARNESS_DOWNLOAD_URLS.get(harness_id),
+                "install_hint": _HARNESS_INSTALL_HINTS.get(harness_id, ""),
             }
+        )
 
-    return list(catalog.values())
+    return catalog
 
 
 # ---------------------------------------------------------------------------
