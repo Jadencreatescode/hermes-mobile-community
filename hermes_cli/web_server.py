@@ -5306,6 +5306,31 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
     }
 
 
+@app.get("/api/audio/voice-config")
+async def get_client_voice_config(profile: Optional[str] = None):
+    """The active profile's STT/TTS config for CLIENT-DIRECT voice.
+
+    Lets the desktop cut the audio relay hop: mic audio goes straight to the
+    profile's STT provider and reply text is synthesized on the client with
+    the profile's TTS provider — the desktop→gateway link carries only text.
+    Providers that can only run on this host (local whisper, edge-tts,
+    command/plugin providers) resolve to ``{"mode": "relay"}`` and the
+    desktop keeps using the /api/audio/* relay endpoints.
+    """
+    try:
+        from tools.voice_client_config import resolve_client_voice_config
+    except Exception as exc:
+        _log.exception("Voice client config resolver unavailable")
+        raise HTTPException(status_code=500, detail=f"Voice config unavailable: {exc}")
+
+    def _resolve_scoped():
+        with _config_profile_scope(profile):
+            return resolve_client_voice_config()
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _resolve_scoped)
+
+
 def _split_text_for_speak_stream(text: str, cap: int) -> list:
     """Split *text* into provider-cap-sized pieces on sentence boundaries.
 
