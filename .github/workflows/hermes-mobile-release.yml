@@ -20,6 +20,8 @@ on:
       - "package.json"
       - "package-lock.json"
       - "scripts/release-security/npm-audit-policy.*"
+      - "scripts/release-security/website-audit-policy.mjs"
+      - "tests-js/website-audit-policy.test.ts"
       - "scripts/operations-mobile-contract.mjs"
       - "scripts/route-matrix.mjs"
       - "tests-js/npm-audit-policy.test.ts"
@@ -57,7 +59,7 @@ jobs:
       - name: Audit shipped dependencies for high severity advisories
         run: npm run audit:mobile
       - name: Audit website dependencies for high severity advisories
-        run: npm --prefix website audit --audit-level=high
+        run: node scripts/release-security/website-audit-policy.mjs
       - name: Type check desktop
         working-directory: apps/desktop
         run: npm run typecheck
