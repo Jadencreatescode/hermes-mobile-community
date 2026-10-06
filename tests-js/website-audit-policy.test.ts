@@ -43,8 +43,9 @@ describe('website npm audit policy', () => {
   })
 
   test('rejects a package outside the reviewed closure', () => {
-    const report = knownReport()
-    report.vulnerabilities.axios = {
+    const report: Record<string, unknown> = knownReport()
+    const vulnerabilities = report.vulnerabilities as Record<string, unknown>
+    vulnerabilities.axios = {
       severity: 'high',
       nodes: ['node_modules/axios'],
       via: [{ severity: 'high', url: 'https://github.com/advisories/GHSA-axios-example' }]
