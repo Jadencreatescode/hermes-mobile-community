@@ -1,15 +1,25 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { getA2AChatHistory, sendA2AChatMessage } = vi.hoisted(() => ({
+const { getA2AChatHistory, getA2ALiveState, interruptA2AAgent, refreshA2AAgent, sendA2AChatMessage, startOrResumeA2AAgent, steerA2AAgent } = vi.hoisted(() => ({
   getA2AChatHistory: vi.fn(),
-  sendA2AChatMessage: vi.fn()
+  getA2ALiveState: vi.fn(),
+  interruptA2AAgent: vi.fn(),
+  refreshA2AAgent: vi.fn(),
+  sendA2AChatMessage: vi.fn(),
+  startOrResumeA2AAgent: vi.fn(),
+  steerA2AAgent: vi.fn()
 }))
 
 vi.mock('./data', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getA2AChatHistory,
-  sendA2AChatMessage
+  getA2ALiveState,
+  interruptA2AAgent,
+  refreshA2AAgent,
+  sendA2AChatMessage,
+  startOrResumeA2AAgent,
+  steerA2AAgent
 }))
 
 import { ConnectedAgentChat, ConnectedAgentChatSurface } from './connected-agent-chat'
@@ -19,7 +29,9 @@ const harnessAgent = (capabilities: string[] = ['chat.send']): HarnessAgent => (
   agentId: 'a2a:claude-reviewer',
   capabilities,
   name: 'Claude Reviewer',
-  status: 'verified'
+  status: 'verified',
+  runtimeState: 'unknown',
+  supportedOperations: []
 })
 
 afterEach(() => {
@@ -205,5 +217,27 @@ describe('ConnectedAgentChat', () => {
 
     expect(await screen.findByText('Last message.')).toBeTruthy()
     expect(screen.getByText(/degraded/)).toBeTruthy()
+  })
+
+  it('shows truthful state and only controls advertised by the connector', async () => {
+    getA2AChatHistory.mockResolvedValue({ messages: [], mirror_session_id: 'mirror_1' })
+    getA2ALiveState.mockResolvedValue({ operation: 'get_state', state: 'working', supported: true })
+
+    const agent = {
+      ...harnessAgent(),
+      runtimeState: 'unknown' as const,
+      supportedOperations: ['get_state', 'interrupt']
+    }
+
+    render(<ConnectedAgentChatSurface agent={agent} />)
+
+    expect(await screen.findByText(/state: unknown/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Read live state' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Interrupt Claude Reviewer' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start or resume Claude Reviewer' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Steer Claude Reviewer' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Read live state' }))
+    await waitFor(() => expect(getA2ALiveState).toHaveBeenCalledWith('a2a:claude-reviewer'))
+    expect(await screen.findByText(/state: working/i)).toBeTruthy()
   })
 })

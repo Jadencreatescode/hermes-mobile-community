@@ -127,7 +127,10 @@ describe('A2A harness agent data layer', () => {
     const rest = vi.fn().mockResolvedValue({
       agents: [
         { agent_id: 'a2a:abc123', name: 'Test Agent', status: 'pending', capabilities: ['chat'] },
-        { agent_id: 'a2a:def456', name: 'Other Agent', status: 'verified', capabilities: [] }
+        {
+          agent_id: 'a2a:def456', name: 'Other Agent', status: 'verified', capabilities: [],
+          runtime_state: 'working', supported_operations: ['get_state', 'interrupt']
+        }
       ]
     })
 
@@ -138,6 +141,7 @@ describe('A2A harness agent data layer', () => {
     expect(agents).toHaveLength(2)
     expect(agents[0]).toMatchObject({ agentId: 'a2a:abc123', name: 'Test Agent', status: 'pending', capabilities: ['chat'] })
     expect(agents[1]).toMatchObject({ agentId: 'a2a:def456', name: 'Other Agent', status: 'verified', capabilities: [] })
+    expect(agents[1]).toMatchObject({ runtimeState: 'working', supportedOperations: ['get_state', 'interrupt'] })
   })
 
   it('fetches a single agent status', async () => {

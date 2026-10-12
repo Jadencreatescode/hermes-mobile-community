@@ -13,6 +13,7 @@ describe('Operations responsive navigation', () => {
     expect(OPERATIONS_SECTIONS.map(section => section.id)).toEqual([
       'overview',
       'control-room',
+      'rooms',
       'mailroom',
       'meetings',
       'workspace',

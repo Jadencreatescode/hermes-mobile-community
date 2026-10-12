@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import secrets
 import shlex
 import sys
 import threading
@@ -409,11 +410,42 @@ class _A2ARateLimiter:
 _a2a_rate_limiter = _A2ARateLimiter()
 
 
+def _principal_hash(kind: str, provider: str, identity: str, organization: str = "") -> str:
+    """Build a stable opaque authority key from verified authentication data."""
+    material = "\x00".join((kind, provider, identity, organization))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _principal_hash_from_request(request: Request) -> str:
+    """Resolve the authenticated caller without trusting network addressing."""
+    token = getattr(request.state, "token_principal", None)
+    if token is not None and str(getattr(token, "principal", "")).strip():
+        return _principal_hash(
+            "token",
+            str(getattr(token, "provider", "")),
+            str(token.principal),
+        )
+    session = getattr(request.state, "session", None)
+    if session is not None and str(getattr(session, "user_id", "")).strip():
+        return _principal_hash(
+            "session",
+            str(getattr(session, "provider", "")),
+            str(session.user_id),
+            str(getattr(session, "org_id", "")),
+        )
+    # Loopback desktop authentication is an ephemeral header verified by the
+    # dashboard middleware before plugin dispatch. Hash it; never persist it.
+    session_token = str(request.headers.get("x-hermes-session-token") or "").strip()
+    authorization = str(request.headers.get("authorization") or "").strip()
+    if session_token:
+        return _principal_hash("dashboard-session", "local", session_token)
+    if authorization.lower().startswith("bearer ") and authorization[7:].strip():
+        return _principal_hash("dashboard-session", "local", authorization[7:].strip())
+    raise HTTPException(status_code=401, detail="operations_authentication_required")
+
+
 def _user_id_from_request(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return _principal_hash_from_request(request)
 
 
 def _a2a_registry_path() -> Path:
@@ -422,6 +454,53 @@ def _a2a_registry_path() -> Path:
 
 def _a2a_catalog_path() -> Path:
     return Path(get_hermes_home()) / "operations" / "agent_cards.db"
+
+
+def _authorized_registry(
+    request: Request,
+    capability: str,
+    *,
+    agent_id: str = "operations",
+    bootstrap_owner: bool = True,
+):
+    """Return an authorized registry and audit every mutation decision."""
+    from plugins.harness_agents.registry import HarnessRegistry
+
+    principal = _principal_hash_from_request(request)
+    registry = HarnessRegistry(_a2a_registry_path())
+    try:
+        if bootstrap_owner and not registry.has_owner():
+            registry.provision_owner_principal(principal)
+        registry.resolve_principal(principal)
+        allowed = capability in registry.capabilities_for(principal, agent_id=agent_id)
+        if capability not in {"agent.view", "chat.read"}:
+            allowed = allowed and registry.is_owner_or_admin(principal)
+        registry.record_event(
+            agent_id or "_global",
+            principal=principal,
+            event_type="policy.decision",
+            outcome="allowed" if allowed else "denied",
+            detail={"capability": capability},
+        )
+        if not allowed:
+            registry.close()
+            raise HTTPException(status_code=403, detail="operations_owner_or_admin_required")
+        return principal, registry
+    except HTTPException:
+        raise
+    except PermissionError as exc:
+        try:
+            registry.record_event(
+                agent_id,
+                principal=principal,
+                event_type="policy.decision",
+                outcome="denied",
+                detail={"capability": capability},
+            )
+        except Exception:
+            pass
+        registry.close()
+        raise HTTPException(status_code=403, detail="operations_owner_or_admin_required") from exc
 
 
 class A2ARegisterRequest(BaseModel):
@@ -444,11 +523,16 @@ def _normalize_a2a_url(url: str) -> str:
 
 def _public_agent_summary(agent: dict[str, Any]) -> dict[str, Any]:
     """Return only public-safe fields for the renderer."""
+    verified = agent.get("verification_state") == "verified"
     return {
         "agent_id": agent["id"],
         "name": agent["name"],
         "status": agent["verification_state"],
         "capabilities": agent.get("capabilities", []),
+        "runtime_state": str(agent.get("runtime_state") or "unknown") if verified else "unknown",
+        "supported_operations": agent.get("supported_operations", []) if verified else [],
+        "last_probe_at": str(agent.get("last_probe_at") or ""),
+        "work_summary": str(agent.get("work_summary") or "") if verified else "",
     }
 
 
@@ -462,6 +546,7 @@ def register_a2a_agent(request: Request, body: A2ARegisterRequest):
     user_id = _user_id_from_request(request)
     if not _a2a_rate_limiter.allow(user_id):
         raise HTTPException(status_code=429, detail="a2a_rate_limited")
+    user_id, reg = _authorized_registry(request, "agent.create")
 
     url = _normalize_a2a_url(body.url)
 
@@ -491,9 +576,6 @@ def register_a2a_agent(request: Request, body: A2ARegisterRequest):
     if not name:
         raise HTTPException(status_code=400, detail="a2a_malformed_agent_card")
 
-    from plugins.harness_agents.registry import HarnessRegistry
-
-    reg = HarnessRegistry(_a2a_registry_path())
     agent_id = f"a2a:{hashlib.sha256(url.encode()).hexdigest()[:16]}"
 
     try:
@@ -535,7 +617,7 @@ def register_a2a_agent(request: Request, body: A2ARegisterRequest):
                 native_session_id="",
                 mirror_session_id=mirror_session_id,
                 capabilities=probe_result.get("capabilities", []),
-                runtime_state="idle",
+                runtime_state=str(probe_result.get("state") or "unknown"),
                 supported_operations=probe_result.get("operations", []),
             )
             reg.record_event(
@@ -574,9 +656,9 @@ def rename_a2a_agent(request: Request, agent_id: str, body: A2ARenameRequest):
     if not _a2a_rate_limiter.allow(user_id):
         raise HTTPException(status_code=429, detail="a2a_rate_limited")
 
-    from plugins.harness_agents.registry import HarnessRegistry, _bot_name
+    from plugins.harness_agents.registry import _bot_name
 
-    reg = HarnessRegistry(_a2a_registry_path())
+    user_id, reg = _authorized_registry(request, "agent.create", agent_id=agent_id)
     try:
         reg.get_agent(agent_id)
     except ValueError:
@@ -624,9 +706,7 @@ def list_a2a_agents(request: Request, limit: int = Query(default=50, ge=1, le=10
     if not _a2a_rate_limiter.allow(user_id):
         raise HTTPException(status_code=429, detail="a2a_rate_limited")
 
-    from plugins.harness_agents.registry import HarnessRegistry
-
-    reg = HarnessRegistry(_a2a_registry_path())
+    _principal, reg = _authorized_registry(request, "agent.view")
     agents = reg.list_agents()
     return {"agents": [_public_agent_summary(a) for a in agents[:limit]]}
 
@@ -637,9 +717,7 @@ def delete_a2a_agent(request: Request, agent_id: str):
     if not _a2a_rate_limiter.allow(user_id):
         raise HTTPException(status_code=429, detail="a2a_rate_limited")
 
-    from plugins.harness_agents.registry import HarnessRegistry
-
-    reg = HarnessRegistry(_a2a_registry_path())
+    user_id, reg = _authorized_registry(request, "agent.delete", agent_id=agent_id)
     try:
         reg.get_agent(agent_id)
     except ValueError:
@@ -662,9 +740,7 @@ def get_a2a_agent_status(request: Request, agent_id: str):
     if not _a2a_rate_limiter.allow(user_id):
         raise HTTPException(status_code=429, detail="a2a_rate_limited")
 
-    from plugins.harness_agents.registry import HarnessRegistry
-
-    reg = HarnessRegistry(_a2a_registry_path())
+    _principal, reg = _authorized_registry(request, "agent.view", agent_id=agent_id)
     try:
         agent = reg.get_agent(agent_id)
     except ValueError:
@@ -684,9 +760,7 @@ def get_a2a_chat_history(request: Request, agent_id: str, request_id: str = Quer
     if not _a2a_rate_limiter.allow(user_id):
         raise HTTPException(status_code=429, detail="a2a_rate_limited")
 
-    from plugins.harness_agents.registry import HarnessRegistry
-
-    reg = HarnessRegistry(_a2a_registry_path())
+    _principal, reg = _authorized_registry(request, "chat.read", agent_id=agent_id)
     try:
         reg.get_agent(agent_id)
     except ValueError:
@@ -695,62 +769,457 @@ def get_a2a_chat_history(request: Request, agent_id: str, request_id: str = Quer
     return reg.get_chat_history(agent_id, request_id=request_id)
 
 
-@router.post("/agents/a2a/{agent_id}/chat")
-def send_a2a_chat_message(request: Request, agent_id: str, body: A2AChatSendRequest):
-    user_id = _user_id_from_request(request)
-    if not _a2a_rate_limiter.allow(user_id):
-        raise HTTPException(status_code=429, detail="a2a_rate_limited")
-
-    from plugins.harness_agents.registry import HarnessRegistry
+def _send_with_registry(
+    reg: Any,
+    *,
+    principal: str,
+    agent_id: str,
+    message: str,
+    request_id: str,
+) -> dict[str, Any]:
+    """One serialized prepare/dispatch/commit path shared by chat and rooms."""
     from plugins.harness_agents.connectors import A2AConnector
+    from plugins.harness_agents.registry import acquire_agent_operation_lock
 
-    reg = HarnessRegistry(_a2a_registry_path())
+    lock = acquire_agent_operation_lock(_a2a_registry_path(), agent_id)
+    if lock is None:
+        raise HTTPException(status_code=409, detail="a2a_agent_busy")
     try:
         agent = reg.get_agent(agent_id)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="a2a_agent_not_found")
-
-    if agent.get("verification_state") != "verified":
-        raise HTTPException(status_code=403, detail="a2a_agent_not_verified")
-
-    try:
+        if agent.get("verification_state") != "verified":
+            raise HTTPException(status_code=403, detail="a2a_agent_not_verified")
+        if "chat.send" not in agent.get("capabilities", []):
+            raise HTTPException(status_code=403, detail="a2a_chat_not_advertised")
+        stable_request_id = request_id or f"request-{secrets.token_hex(16)}"
+        replay = reg.get_chat_request(agent_id, stable_request_id)
+        if replay is not None and replay["status"] == "committed":
+            if replay["user_message"] != message.strip():
+                raise HTTPException(status_code=409, detail="a2a_request_id_conflict")
+            return {
+                "reply": replay["assistant_reply"],
+                "state": str(agent.get("runtime_state") or "unknown"),
+                "request_status": "committed",
+                "native_session_id": replay["native_session_id"],
+                "connector_event_id": stable_request_id,
+                "duplicate": True,
+            }
         binding = reg.get_chat_binding(agent_id)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="a2a_chat_binding_not_found")
-
-    connector_url = str(agent.get("connector_url") or "").strip()
-    if not connector_url:
-        raise HTTPException(status_code=400, detail="a2a_agent_missing_connector_url")
-
-    host = str(agent.get("host_id") or "").strip()
-    allowlist = frozenset({host}) if host else None
-
-    try:
+        reg.prepare_chat_intent(
+            agent_id,
+            mirror_session_id=binding["mirror_session_id"],
+            expected_native_session_id=binding["native_session_id"],
+            request_id=stable_request_id,
+            user_message=message.strip(),
+        )
+        connector_url = str(agent.get("connector_url") or "").strip()
+        host = str(agent.get("host_id") or "").strip()
         conn = A2AConnector(
             name=str(agent.get("name") or agent_id),
             url=connector_url,
-            allowlist=allowlist,
+            allowlist=frozenset({host}) if host else None,
         )
         result = conn.send(
-            body.message,
+            message,
             native_session_id=binding["native_session_id"],
-            request_id=body.request_id or None,
+            request_id=stable_request_id,
         )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"a2a_send_failed: {exc}") from exc
+        reg.send_chat_turn(
+            agent_id,
+            connector_event_id=stable_request_id,
+            user_message=message,
+            assistant_reply=result["reply"],
+            native_session_id=result["native_session_id"],
+        )
+        updated_agent = reg.update_runtime_state(
+            agent_id, str(result.get("state") or "unknown")
+        )
+        state = str(updated_agent.get("runtime_state") or "unknown")
+        reg.record_event(
+            agent_id,
+            principal=principal,
+            event_type="chat.delivery",
+            outcome="succeeded",
+            detail={"request_id": stable_request_id},
+        )
+        return {
+            "reply": result["reply"],
+            "state": state,
+            "request_status": "committed",
+            "native_session_id": result["native_session_id"],
+            "connector_event_id": stable_request_id,
+            "duplicate": False,
+        }
+    finally:
+        lock.release()
 
-    reg.send_chat_turn(
-        agent_id,
-        connector_event_id=result["connector_event_id"],
-        user_message=body.message,
-        assistant_reply=result["reply"],
-        native_session_id=result["native_session_id"],
+
+@router.post("/agents/a2a/{agent_id}/chat")
+def send_a2a_chat_message(request: Request, agent_id: str, body: A2AChatSendRequest):
+    principal = _user_id_from_request(request)
+    if not _a2a_rate_limiter.allow(principal):
+        raise HTTPException(status_code=429, detail="a2a_rate_limited")
+    principal, reg = _authorized_registry(request, "chat.send", agent_id=agent_id)
+    try:
+        return _send_with_registry(
+            reg,
+            principal=principal,
+            agent_id=agent_id,
+            message=body.message,
+            request_id=body.request_id,
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        if "request" in str(exc) and "reused" in str(exc):
+            raise HTTPException(status_code=409, detail="a2a_request_id_conflict") from exc
+        raise HTTPException(status_code=400, detail="a2a_chat_invalid") from exc
+    except Exception as exc:
+        reg.record_event(
+            agent_id,
+            principal=principal,
+            event_type="chat.delivery",
+            outcome="failed",
+            detail={"error_type": type(exc).__name__[:128]},
+        )
+        raise HTTPException(status_code=502, detail="a2a_send_failed") from exc
+    finally:
+        reg.close()
+
+
+class A2AStartRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=16_000)
+
+
+class A2ASteerRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=16_000)
+
+
+class A2AInterruptRequest(BaseModel):
+    confirm: bool = False
+
+
+def _run_advertised_control(
+    request: Request,
+    agent_id: str,
+    operation: str,
+    capability: str,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    from plugins.harness_agents.connectors import A2AConnector
+    from plugins.harness_agents.registry import acquire_agent_operation_lock
+
+    principal, reg = _authorized_registry(request, capability, agent_id=agent_id)
+    lock = acquire_agent_operation_lock(_a2a_registry_path(), agent_id)
+    try:
+        agent = reg.get_agent(agent_id)
+        if agent.get("verification_state") != "verified":
+            raise HTTPException(status_code=403, detail="a2a_agent_not_verified")
+        if operation not in set(agent.get("supported_operations") or []):
+            raise HTTPException(status_code=409, detail="a2a_operation_not_advertised")
+        binding = reg.get_chat_binding(agent_id)
+        host = str(agent.get("host_id") or "").strip()
+        connector = A2AConnector(
+            name=str(agent.get("name") or agent_id),
+            url=str(agent.get("connector_url") or ""),
+            allowlist=frozenset({host}) if host else None,
+        )
+        probe = connector.probe()
+        if operation not in set(probe.get("operations") or []):
+            raise HTTPException(status_code=409, detail="a2a_operation_not_advertised")
+        result = getattr(connector, operation)(
+            **parameters,
+            native_session_id=binding["native_session_id"],
+        )
+        if not isinstance(result, dict):
+            raise ValueError("connector control returned an invalid result")
+        state = str(result.get("state") or probe.get("state") or "unknown")
+        updated_binding = str(result.get("native_session_id") or binding["native_session_id"])
+        if updated_binding != binding["native_session_id"]:
+            reg.update_chat_binding(agent_id, updated_binding)
+        updated_agent = reg.update_runtime_state(
+            agent_id,
+            state,
+            work_summary=str(result.get("work_summary") or "")[:1024],
+        )
+        state = str(updated_agent.get("runtime_state") or "unknown")
+        reg.record_event(
+            agent_id,
+            principal=principal,
+            event_type="connector.operation",
+            outcome="succeeded",
+            detail={"operation": operation},
+        )
+        return {
+            "operation": operation,
+            "supported": True,
+            "state": state,
+            "native_session_id": updated_binding,
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="a2a_control_invalid") from exc
+    except Exception as exc:
+        try:
+            reg.mark_degraded(agent_id, error=type(exc).__name__[:128])
+            reg.record_event(
+                agent_id,
+                principal=principal,
+                event_type="connector.operation",
+                outcome="failed",
+                detail={"operation": operation, "error_type": type(exc).__name__[:128]},
+            )
+        finally:
+            pass
+        raise HTTPException(status_code=502, detail="a2a_control_failed") from exc
+    finally:
+        if lock is not None:
+            lock.release()
+        reg.close()
+
+
+@router.post("/agents/a2a/{agent_id}/refresh")
+def refresh_a2a_agent(request: Request, agent_id: str):
+    from plugins.harness_agents.connectors import A2AConnector
+    from plugins.harness_agents.registry import acquire_agent_operation_lock
+
+    principal, reg = _authorized_registry(request, "agent.create", agent_id=agent_id)
+    lock = acquire_agent_operation_lock(_a2a_registry_path(), agent_id)
+    try:
+        agent = reg.get_agent(agent_id)
+        binding = reg.get_chat_binding(agent_id)
+        host = str(agent.get("host_id") or "").strip()
+        connector = A2AConnector(
+            name=str(agent.get("name") or agent_id),
+            url=str(agent.get("connector_url") or ""),
+            allowlist=frozenset({host}) if host else None,
+        )
+        probe = connector.probe()
+        refreshed = reg.mark_verified(
+            agent_id,
+            native_agent_id=str(probe.get("native_agent_id") or agent_id),
+            native_session_id=binding["native_session_id"],
+            mirror_session_id=binding["mirror_session_id"],
+            capabilities=probe.get("capabilities") or [],
+            runtime_state=str(probe.get("state") or "unknown"),
+            work_summary=str(probe.get("work_summary") or "")[:1024],
+            supported_operations=probe.get("operations") or [],
+        )
+        reg.record_event(
+            agent_id,
+            principal=principal,
+            event_type="verification.refresh",
+            outcome="succeeded",
+            detail={"state": "verified"},
+        )
+        return _public_agent_summary(refreshed)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        try:
+            reg.mark_degraded(agent_id, error=type(exc).__name__[:128])
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail="a2a_refresh_failed") from exc
+    finally:
+        if lock is not None:
+            lock.release()
+        reg.close()
+
+
+@router.get("/agents/a2a/{agent_id}/state")
+def get_a2a_live_state(request: Request, agent_id: str):
+    return _run_advertised_control(request, agent_id, "get_state", "agent.view", {})
+
+
+@router.post("/agents/a2a/{agent_id}/start-or-resume")
+def start_or_resume_a2a(request: Request, agent_id: str, body: A2AStartRequest):
+    return _run_advertised_control(
+        request, agent_id, "start_or_resume", "run.assign", {"prompt": body.prompt.strip()}
     )
 
-    return {
-        "reply": result["reply"],
-        "state": result["state"],
-        "request_status": "committed",
-        "native_session_id": result["native_session_id"],
-        "connector_event_id": result["connector_event_id"],
-    }
+
+@router.post("/agents/a2a/{agent_id}/steer")
+def steer_a2a(request: Request, agent_id: str, body: A2ASteerRequest):
+    return _run_advertised_control(
+        request, agent_id, "steer", "run.steer", {"message": body.message.strip()}
+    )
+
+
+@router.post("/agents/a2a/{agent_id}/interrupt")
+def interrupt_a2a(request: Request, agent_id: str, body: A2AInterruptRequest):
+    if body.confirm is not True:
+        raise HTTPException(status_code=400, detail="confirmation_required")
+    return _run_advertised_control(request, agent_id, "interrupt", "run.interrupt", {})
+
+
+def _rooms_path() -> Path:
+    return Path(get_hermes_home()) / "operations" / "rooms.db"
+
+
+class RoomCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    confirm: bool = False
+
+
+class RoomMemberRequest(BaseModel):
+    confirm: bool = False
+
+
+class RoomMessageRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=16_000)
+    request_id: str = Field(default="", max_length=256)
+
+
+class RoomHandoffRequest(BaseModel):
+    agent_id: str = Field(min_length=1, max_length=256)
+    confirm: bool = False
+
+
+class RoomTurnRequest(BaseModel):
+    agent_id: str = Field(min_length=1, max_length=256)
+    message: str = Field(min_length=1, max_length=16_000)
+    request_id: str = Field(min_length=1, max_length=256)
+
+
+def _room_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, LookupError):
+        return HTTPException(status_code=404, detail="room_not_found")
+    if isinstance(exc, PermissionError):
+        return HTTPException(status_code=403, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/rooms")
+def list_rooms(request: Request):
+    from plugins.harness_agents.rooms import RoomStore
+
+    _principal, reg = _authorized_registry(request, "agent.view")
+    try:
+        return {"rooms": RoomStore(_rooms_path()).list_rooms()}
+    finally:
+        reg.close()
+
+
+@router.post("/rooms")
+def create_room(request: Request, body: RoomCreateRequest):
+    from plugins.harness_agents.rooms import RoomStore
+
+    if body.confirm is not True:
+        raise HTTPException(status_code=400, detail="confirmation_required")
+    principal, reg = _authorized_registry(request, "team.manage")
+    try:
+        return {"room": RoomStore(_rooms_path()).create(body.name, created_by=principal)}
+    finally:
+        reg.close()
+
+
+@router.get("/rooms/{room_id}")
+def get_room(request: Request, room_id: str, limit: int = Query(default=100, ge=1, le=200)):
+    from plugins.harness_agents.rooms import RoomStore
+
+    _principal, reg = _authorized_registry(request, "agent.view")
+    store = RoomStore(_rooms_path())
+    try:
+        return {"room": store.get(room_id), "transcript": store.transcript(room_id, limit)}
+    except Exception as exc:
+        raise _room_error(exc) from exc
+    finally:
+        reg.close()
+
+
+@router.post("/rooms/{room_id}/members/{agent_id}")
+def add_room_member(request: Request, room_id: str, agent_id: str, body: RoomMemberRequest):
+    from plugins.harness_agents.rooms import RoomStore
+
+    if body.confirm is not True:
+        raise HTTPException(status_code=400, detail="confirmation_required")
+    _principal, reg = _authorized_registry(request, "team.manage", agent_id=agent_id)
+    try:
+        return {"room": RoomStore(_rooms_path()).add_member(room_id, agent_id, registry=reg)}
+    except Exception as exc:
+        raise _room_error(exc) from exc
+    finally:
+        reg.close()
+
+
+@router.delete("/rooms/{room_id}/members/{agent_id}")
+def remove_room_member(request: Request, room_id: str, agent_id: str, confirm: bool = Query(default=False)):
+    from plugins.harness_agents.rooms import RoomStore
+
+    if confirm is not True:
+        raise HTTPException(status_code=400, detail="confirmation_required")
+    _principal, reg = _authorized_registry(request, "team.manage", agent_id=agent_id)
+    try:
+        return {"room": RoomStore(_rooms_path()).remove_member(room_id, agent_id)}
+    except Exception as exc:
+        raise _room_error(exc) from exc
+    finally:
+        reg.close()
+
+
+@router.post("/rooms/{room_id}/messages")
+def post_room_message(request: Request, room_id: str, body: RoomMessageRequest):
+    from plugins.harness_agents.rooms import RoomStore
+
+    _principal, reg = _authorized_registry(request, "chat.send")
+    try:
+        message = RoomStore(_rooms_path()).post(
+            room_id, body.message, request_id=body.request_id
+        )
+        return {"message": message}
+    except Exception as exc:
+        raise _room_error(exc) from exc
+    finally:
+        reg.close()
+
+
+@router.post("/rooms/{room_id}/handoff")
+def handoff_room(request: Request, room_id: str, body: RoomHandoffRequest):
+    from plugins.harness_agents.rooms import RoomStore
+
+    if body.confirm is not True:
+        raise HTTPException(status_code=400, detail="confirmation_required")
+    principal, reg = _authorized_registry(request, "chat.send", agent_id=body.agent_id)
+    try:
+        return RoomStore(_rooms_path()).hand_off(room_id, body.agent_id, actor=principal)
+    except Exception as exc:
+        raise _room_error(exc) from exc
+    finally:
+        reg.close()
+
+
+@router.post("/rooms/{room_id}/turns")
+def run_room_turn(request: Request, room_id: str, body: RoomTurnRequest):
+    from plugins.harness_agents.rooms import RoomStore
+
+    principal, reg = _authorized_registry(request, "chat.send", agent_id=body.agent_id)
+    store = RoomStore(_rooms_path())
+    try:
+        turn = store.begin_turn(
+            room_id,
+            request_id=body.request_id,
+            agent_id=body.agent_id,
+            message=body.message,
+        )
+        if turn.get("status") == "committed":
+            return turn
+        result = _send_with_registry(
+            reg,
+            principal=principal,
+            agent_id=body.agent_id,
+            message=body.message,
+            request_id=f"room-{room_id}-{body.request_id}",
+        )
+        return store.complete_turn(
+            room_id,
+            request_id=body.request_id,
+            agent_id=body.agent_id,
+            reply=result["reply"],
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _room_error(exc) from exc
+    finally:
+        reg.close()

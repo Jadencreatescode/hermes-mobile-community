@@ -8,7 +8,17 @@ import {
 } from '@hermes/plugin-sdk'
 import { useCallback, useEffect, useState } from 'react'
 
-import { type A2AChatMessage, getA2AChatHistory, type HarnessAgent, sendA2AChatMessage } from './data'
+import {
+  type A2AChatMessage,
+  getA2AChatHistory,
+  getA2ALiveState,
+  type HarnessAgent,
+  interruptA2AAgent,
+  refreshA2AAgent,
+  sendA2AChatMessage,
+  startOrResumeA2AAgent,
+  steerA2AAgent
+} from './data'
 
 interface PendingConnectedTurn {
   agentId: string
@@ -45,10 +55,10 @@ function clearPendingTurn(turn: PendingConnectedTurn) {
   }
 }
 
-function AgentMetadata({ agent }: { agent: HarnessAgent }) {
+function AgentMetadata({ agent, runtimeState }: { agent: HarnessAgent; runtimeState?: string }) {
   return (
     <p className="text-xs text-(--ui-text-tertiary)">
-      {agent.status} {agent.capabilities.length > 0 ? `· ${agent.capabilities.join(', ')}` : ''}
+      {agent.status} · state: {runtimeState || agent.runtimeState || 'unknown'} {agent.capabilities.length > 0 ? `· ${agent.capabilities.join(', ')}` : ''}
     </p>
   )
 }
@@ -67,7 +77,10 @@ export function ConnectedAgentChatSurface({
   const [error, setError] = useState('')
   const [pendingRequestId, setPendingRequestId] = useState('')
   const [restored, setRestored] = useState(false)
+  const [runtimeState, setRuntimeState] = useState(agent.runtimeState ?? 'unknown')
+  const [supportedOperations, setSupportedOperations] = useState(agent.supportedOperations ?? [])
   const canSend = agent.capabilities.includes('chat.send')
+  const operations = new Set(supportedOperations)
 
   const refresh = useCallback(async (requestId = '') => {
     const result = await getA2AChatHistory(agent.agentId, requestId)
@@ -134,14 +147,63 @@ export function ConnectedAgentChatSurface({
     }
   }
 
+  const control = async (operation: 'get_state' | 'interrupt' | 'refresh' | 'start_or_resume' | 'steer') => {
+    if (busy) {return}
+    setBusy(true)
+    setError('')
+
+    try {
+      if (operation === 'refresh') {
+        const refreshed = await refreshA2AAgent(agent.agentId)
+        setRuntimeState(refreshed.runtimeState ?? 'unknown')
+        setSupportedOperations(refreshed.supportedOperations ?? [])
+      } else if (operation === 'get_state') {
+        setRuntimeState((await getA2ALiveState(agent.agentId)).state)
+      } else if (operation === 'interrupt') {
+        setRuntimeState((await interruptA2AAgent(agent.agentId)).state)
+      } else {
+        const message = draft.trim()
+
+        if (!message) {return}
+
+        const result = operation === 'start_or_resume'
+          ? await startOrResumeA2AAgent(agent.agentId, message)
+          : await steerA2AAgent(agent.agentId, message)
+
+        setRuntimeState(result.state)
+        setDraft('')
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className={`flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-(--ui-bg-primary) ${showHeader ? 'h-full' : ''}`}>
       {showHeader ? (
         <header className="shrink-0 border-b border-(--ui-stroke-tertiary) px-4 py-3">
           <h2 className="truncate text-sm font-semibold text-(--ui-text-primary)">{agent.name || agent.agentId}</h2>
-          <AgentMetadata agent={agent} />
+          <AgentMetadata agent={agent} runtimeState={runtimeState} />
         </header>
       ) : null}
+
+      <div className="flex flex-wrap gap-2 border-b border-(--ui-stroke-tertiary) px-3 py-2">
+        <Button disabled={busy} onClick={() => void control('refresh')} size="sm" variant="ghost">Refresh verification</Button>
+        {operations.has('get_state') ? (
+          <Button disabled={busy} onClick={() => void control('get_state')} size="sm" variant="ghost">Read live state</Button>
+        ) : null}
+        {operations.has('start_or_resume') ? (
+          <Button aria-label={`Start or resume ${agent.name || agent.agentId}`} disabled={busy || !draft.trim()} onClick={() => void control('start_or_resume')} size="sm" variant="ghost">Start / resume</Button>
+        ) : null}
+        {operations.has('steer') ? (
+          <Button aria-label={`Steer ${agent.name || agent.agentId}`} disabled={busy || !draft.trim()} onClick={() => void control('steer')} size="sm" variant="ghost">Steer</Button>
+        ) : null}
+        {operations.has('interrupt') ? (
+          <Button aria-label={`Interrupt ${agent.name || agent.agentId}`} disabled={busy} onClick={() => void control('interrupt')} size="sm" variant="ghost">Interrupt</Button>
+        ) : null}
+      </div>
 
       <section
         aria-label={`${agent.name || agent.agentId} conversation`}

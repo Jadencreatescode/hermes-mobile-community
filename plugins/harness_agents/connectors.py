@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from typing import Any, Protocol, runtime_checkable
 
 from plugins.harness_agents.policy import fetch_agent_card, fetch_json
@@ -18,6 +19,12 @@ _CONNECTOR_OPERATIONS = (
     "set_model",
     "close",
 )
+_A2A_CONTROL_METHODS = {
+    "get_state": "tasks/get",
+    "interrupt": "tasks/cancel",
+    "start_or_resume": "message/send",
+    "steer": "message/send",
+}
 
 
 @runtime_checkable
@@ -144,17 +151,36 @@ class A2AConnector:
             return self._unsupported(operation)
         if operation not in self._supported_operations:
             return self._unsupported(operation)
-        request_id = params.pop("request_id", None) or f"{operation}-{id(self)}"
-        rpc_url = self._rpc_url()
+        method = _A2A_CONTROL_METHODS.get(operation)
+        if method is None:
+            return self._unsupported(operation)
+        request_id = params.pop("request_id", None) or f"{operation}-{secrets.token_hex(16)}"
+        native_session_id = str(params.pop("native_session_id", "") or "").strip()
+        if operation in {"start_or_resume", "steer"}:
+            prompt = str(params.pop("prompt", params.pop("message", "")) or "").strip()
+            if not prompt:
+                raise ValueError(f"connector {operation} requires a message")
+            rpc_params: dict[str, Any] = {
+                "message": {
+                    "role": "user",
+                    "parts": [{"type": "text", "text": prompt}],
+                },
+                "contextId": native_session_id or None,
+                "metadata": {"intent": operation},
+            }
+        else:
+            if not native_session_id:
+                raise ValueError(f"connector {operation} requires a native task id")
+            rpc_params = {"id": native_session_id}
         response = fetch_json(
-            rpc_url,
+            self._rpc_url(),
             allowlist=self._allowlist,
             method="POST",
             body={
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "method": f"hermes/{operation}",
-                "params": params,
+                "method": method,
+                "params": rpc_params,
             },
         )
         if "error" in response:
@@ -162,7 +188,19 @@ class A2AConnector:
         result = response.get("result")
         if not isinstance(result, dict):
             raise ValueError(f"connector {operation} returned an invalid result")
-        return _sanitize_result(result)
+        sanitized = _sanitize_result(result)
+        if not isinstance(sanitized, dict):
+            raise ValueError(f"connector {operation} returned an invalid result")
+        status = sanitized.get("status")
+        nested_state = status.get("state") if isinstance(status, dict) else ""
+        sanitized["state"] = str(sanitized.get("state") or nested_state or "unknown")
+        sanitized["native_session_id"] = str(
+            sanitized.get("native_session_id")
+            or sanitized.get("contextId")
+            or sanitized.get("id")
+            or native_session_id
+        )
+        return sanitized
 
     def start_or_resume(self, *_args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._invoke_operation("start_or_resume", **kwargs)
@@ -220,7 +258,18 @@ class A2AConnector:
         if not native_agent_id:
             raise ValueError("connector Agent Card has no name")
 
-        self._supported_operations = frozenset({"probe", "send"})
+        advertised = card.get("operations")
+        if advertised is None and isinstance(card.get("capabilities"), dict):
+            advertised = card["capabilities"].get("operations")
+        advertised = advertised if isinstance(advertised, list) else []
+        self._supported_operations = frozenset(
+            {"probe", "send"}
+            | {
+                operation
+                for operation in advertised
+                if isinstance(operation, str) and operation in _CONNECTOR_OPERATIONS
+            }
+        )
         skills = []
         for skill in card.get("skills") or []:
             if not isinstance(skill, dict):
@@ -230,6 +279,11 @@ class A2AConnector:
                 skills.append(value)
 
         card_capabilities = card.get("capabilities") or {}
+        live_state = str(card.get("state") or "").strip().lower()
+        if live_state not in {
+            "idle", "working", "waiting", "reviewing", "blocked", "offline"
+        }:
+            live_state = "unknown"
         return {
             "verified": True,
             "native_agent_id": native_agent_id,
@@ -238,6 +292,7 @@ class A2AConnector:
             "protocol": "a2a-jsonrpc-1.0",
             "capabilities": ["chat.send"],
             "operations": sorted(self._supported_operations),
+            "state": live_state,
             "skills": skills,
             "features": {
                 "streaming": bool(card_capabilities.get("streaming")),

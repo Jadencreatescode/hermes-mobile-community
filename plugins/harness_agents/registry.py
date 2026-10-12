@@ -64,6 +64,25 @@ _BOT_NAME_MAX_CHARS = 48
 _BOT_NAME_MAX_WORDS = 5
 
 
+def _runtime_state(value: Any) -> str:
+    normalized = str(value or "unknown").strip().lower()
+    normalized = {
+        "busy": "working",
+        "completed": "idle",
+        "done": "idle",
+        "failed": "blocked",
+        "needs_input": "waiting",
+        "paused": "waiting",
+        "running": "working",
+        "stopped": "idle",
+    }.get(normalized, normalized)
+    if normalized not in {
+        "idle", "working", "waiting", "reviewing", "blocked", "offline", "unknown"
+    }:
+        return "unknown"
+    return normalized
+
+
 class _AgentOperationFileLock:
     """Kernel-backed lock held by an open file descriptor."""
 
@@ -313,6 +332,26 @@ class HarnessRegistry:
                 CREATE INDEX IF NOT EXISTS idx_agent_events_agent_id_id
                     ON agent_events(agent_id, id);
 
+                CREATE TABLE IF NOT EXISTS principals (
+                    id TEXT PRIMARY KEY,
+                    principal_hash TEXT NOT NULL UNIQUE,
+                    display_name TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+                    created_at TEXT NOT NULL DEFAULT (
+                        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    )
+                );
+
+                CREATE TABLE IF NOT EXISTS role_bindings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    principal_id TEXT NOT NULL,
+                    team_id TEXT NOT NULL DEFAULT '',
+                    agent_id TEXT NOT NULL DEFAULT '',
+                    role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'operator', 'viewer')),
+                    UNIQUE(principal_id, team_id, agent_id),
+                    FOREIGN KEY (principal_id) REFERENCES principals(id) ON DELETE CASCADE
+                );
+
                 INSERT OR IGNORE INTO schema_migrations (version) VALUES (1);
                 """
             )
@@ -381,6 +420,124 @@ class HarnessRegistry:
                 FROM connected_agents
                 """
             )
+
+    @property
+    def path(self) -> Path:
+        """The registry database path, for colocated bounded stores."""
+        return self._path
+
+    def provision_owner_principal(self, principal_hash: str) -> str:
+        """Persist the installation's one global Owner principal race-safely."""
+        if (
+            not isinstance(principal_hash, str)
+            or len(principal_hash) != 64
+            or any(char not in "0123456789abcdef" for char in principal_hash)
+        ):
+            raise ValueError("principal must be a stable principal hash")
+        principal_id = f"owner_{principal_hash[:24]}"
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            existing = self._connection.execute(
+                """
+                SELECT p.id, p.principal_hash
+                FROM principals p
+                JOIN role_bindings r ON r.principal_id = p.id
+                WHERE r.role = 'owner' AND r.team_id = '' AND r.agent_id = ''
+                LIMIT 1
+                """
+            ).fetchone()
+            if existing is not None:
+                if str(existing["principal_hash"]) != principal_hash:
+                    raise PermissionError("initial Owner is already provisioned")
+                self._connection.commit()
+                return str(existing["id"])
+            self._connection.execute(
+                """
+                INSERT INTO principals (id, principal_hash, display_name)
+                VALUES (?, ?, 'Owner')
+                ON CONFLICT(principal_hash) DO NOTHING
+                """,
+                (principal_id, principal_hash),
+            )
+            row = self._connection.execute(
+                "SELECT id FROM principals WHERE principal_hash = ?",
+                (principal_hash,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("owner principal was not persisted")
+            principal_id = str(row["id"])
+            self._connection.execute(
+                """
+                INSERT INTO role_bindings (principal_id, team_id, agent_id, role)
+                VALUES (?, '', '', 'owner')
+                ON CONFLICT(principal_id, team_id, agent_id)
+                DO UPDATE SET role = 'owner'
+                """,
+                (principal_id,),
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        return principal_id
+
+    def resolve_principal(self, principal_hash: str) -> str:
+        """Resolve an active persisted principal without changing policy."""
+        if (
+            not isinstance(principal_hash, str)
+            or len(principal_hash) != 64
+            or any(char not in "0123456789abcdef" for char in principal_hash)
+        ):
+            raise PermissionError("unknown or inactive principal")
+        row = self._connection.execute(
+            "SELECT id FROM principals WHERE principal_hash = ? AND active = 1",
+            (principal_hash,),
+        ).fetchone()
+        if row is None:
+            raise PermissionError("unknown or inactive principal")
+        return str(row["id"])
+
+    def roles_for(
+        self, principal_hash: str, *, team_id: str = "", agent_id: str = ""
+    ) -> tuple[str, ...]:
+        rows = self._connection.execute(
+            """
+            SELECT rb.role
+            FROM principals p
+            JOIN role_bindings rb ON rb.principal_id = p.id
+            WHERE p.principal_hash = ? AND p.active = 1
+              AND rb.team_id IN ('', ?) AND rb.agent_id IN ('', ?)
+            ORDER BY rb.id
+            """,
+            (principal_hash, team_id, agent_id),
+        ).fetchall()
+        return tuple(str(row["role"]) for row in rows)
+
+    def capabilities_for(
+        self, principal_hash: str, *, team_id: str = "", agent_id: str = ""
+    ) -> frozenset[str]:
+        """Resolve persisted roles; an unknown principal gets no authority."""
+        from .policy import ALL_CAPABILITIES, resolve_capabilities
+
+        roles = self.roles_for(principal_hash, team_id=team_id, agent_id=agent_id)
+        capabilities: set[str] = set()
+        for role in roles:
+            capabilities.update(
+                ALL_CAPABILITIES if role in {"owner", "admin"} else resolve_capabilities(role)
+            )
+        return frozenset(capabilities)
+
+    def is_owner_or_admin(self, principal_hash: str) -> bool:
+        return any(role in {"owner", "admin"} for role in self.roles_for(principal_hash))
+
+    def has_owner(self) -> bool:
+        row = self._connection.execute(
+            """
+            SELECT 1 FROM role_bindings
+            WHERE role = 'owner' AND team_id = '' AND agent_id = '' LIMIT 1
+            """
+        ).fetchone()
+        return row is not None
 
     @staticmethod
     def _normalize_agent(row: sqlite3.Row) -> dict[str, Any]:
@@ -557,7 +714,7 @@ class HarnessRegistry:
         native_session_id: str,
         mirror_session_id: str,
         capabilities: Iterable[str],
-        runtime_state: str = "idle",
+        runtime_state: str = "unknown",
         work_summary: str = "",
         model: Mapping[str, Any] | None = None,
         reasoning: str = "",
@@ -586,15 +743,7 @@ class HarnessRegistry:
         ):
             raise ValueError("supported operations contain an invalid operation")
         operations_json = json.dumps(operations, separators=(",", ":"))
-        if runtime_state not in {
-            "idle",
-            "working",
-            "waiting",
-            "reviewing",
-            "blocked",
-            "offline",
-        }:
-            runtime_state = "idle"
+        runtime_state = _runtime_state(runtime_state)
         model_json = (
             json.dumps(_model(model), sort_keys=True, separators=(",", ":"))
             if model is not None
@@ -691,6 +840,25 @@ class HarnessRegistry:
                 """,
                 (agent_id, mirror_session_id, native_session_id),
             )
+        return self.get_agent(agent_id)
+
+    def update_runtime_state(
+        self, agent_id: str, state: str, *, work_summary: str = ""
+    ) -> dict[str, Any]:
+        """Persist only fresh connector evidence; invalid states become unknown."""
+        normalized = _runtime_state(state)
+        with self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE connected_agents
+                SET runtime_state = ?, work_summary = ?,
+                    last_activity_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?
+                """,
+                (normalized, _optional_text(work_summary, "work summary", 1024), agent_id),
+            )
+        if cursor.rowcount == 0:
+            raise ValueError(f"unknown agent: {agent_id}")
         return self.get_agent(agent_id)
 
     def mark_degraded(self, agent_id: str, *, error: str) -> dict[str, Any]:
@@ -971,8 +1139,12 @@ class HarnessRegistry:
             raise RuntimeError("connected agent recovery backlog exceeds its bound")
         recovered = 0
         for row in rows:
-            if not row["user_message"] or not row["assistant_reply"]:
-                raise RuntimeError("connected agent has an incomplete durable turn")
+            if not row["user_message"]:
+                raise RuntimeError("connected agent has an invalid durable turn")
+            if not row["assistant_reply"]:
+                # The remote result was not durably observed. A retry must use the
+                # same request id so an idempotent connector can safely replay it.
+                continue
             self.commit_chat_turn(
                 str(row["agent_id"]),
                 state_db_path=state_db_path,
@@ -1003,6 +1175,22 @@ class HarnessRegistry:
             (agent_id, request_id),
         ).fetchone()
         return str(row["status"]) if row is not None else "unknown"
+
+    def get_chat_request(self, agent_id: str, request_id: str) -> dict[str, str] | None:
+        """Return one durable request without exposing connector configuration."""
+        request_id = _optional_text(request_id, "request id", 256)
+        row = self._connection.execute(
+            """
+            SELECT connector_event_id, user_message, assistant_reply,
+                   native_session_id, status
+            FROM agent_chat_commits
+            WHERE agent_id = ? AND connector_event_id = ?
+            """,
+            (agent_id, request_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return {key: str(row[key]) for key in row.keys()}
 
     def _finalize_chat_commit(self, connector_event_id: str) -> None:
         """Advance native context only after the canonical mirror is durable."""
@@ -1208,6 +1396,28 @@ class HarnessRegistry:
             raise ValueError(f"unknown agent: {agent_id}")
 
         with self._connection:
+            existing = self._connection.execute(
+                "SELECT * FROM agent_chat_commits WHERE connector_event_id = ?",
+                (connector_event_id,),
+            ).fetchone()
+            if existing is not None and (
+                existing["agent_id"] != agent_id
+                or existing["user_message"] != safe_user
+                or (
+                    existing["assistant_reply"]
+                    and (
+                        existing["assistant_reply"] != safe_reply
+                        or existing["native_session_id"] != native_session_id
+                    )
+                )
+            ):
+                raise ValueError("client request replay does not match its original turn")
+            if existing is not None and existing["status"] == "committed":
+                return {
+                    "connector_event_id": connector_event_id,
+                    "status": "committed",
+                    "native_session_id": str(existing["native_session_id"]),
+                }
             self._connection.execute(
                 """
                 INSERT INTO agent_chat_commits (
@@ -1221,6 +1431,7 @@ class HarnessRegistry:
                     assistant_reply = excluded.assistant_reply,
                     status = 'committed',
                     committed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE agent_chat_commits.status = 'pending'
                 """,
                 (
                     connector_event_id,
@@ -1232,6 +1443,21 @@ class HarnessRegistry:
                     safe_user,
                     safe_reply,
                 ),
+            )
+            self._connection.execute(
+                """
+                UPDATE agent_chat_bindings SET native_session_id = ?
+                WHERE agent_id = ?
+                """,
+                (native_session_id, agent_id),
+            )
+            self._connection.execute(
+                """
+                UPDATE connected_agents
+                SET native_session_id = ?, last_activity_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?
+                """,
+                (native_session_id, agent_id),
             )
         return {
             "connector_event_id": connector_event_id,
@@ -1256,6 +1482,21 @@ class HarnessRegistry:
             "mirror_session_id": row["mirror_session_id"],
             "native_session_id": row["native_session_id"],
         }
+
+    def update_chat_binding(self, agent_id: str, native_session_id: str) -> dict[str, str]:
+        native = _optional_text(native_session_id, "native session id", 512)
+        with self._connection:
+            cursor = self._connection.execute(
+                "UPDATE agent_chat_bindings SET native_session_id = ? WHERE agent_id = ?",
+                (native, agent_id),
+            )
+            self._connection.execute(
+                "UPDATE connected_agents SET native_session_id = ? WHERE id = ?",
+                (native, agent_id),
+            )
+        if cursor.rowcount == 0:
+            raise ValueError(f"unknown agent: {agent_id}")
+        return self.get_chat_binding(agent_id)
 
     def close(self) -> None:
         """Close the underlying SQLite connection."""

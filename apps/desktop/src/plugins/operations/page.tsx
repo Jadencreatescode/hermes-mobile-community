@@ -8,6 +8,7 @@ import { MailroomView } from './mailroom-view'
 import { MeetingsView } from './meetings-view'
 import { OperationsNavigation, type OperationsSection } from './navigation'
 import { type OperationsDelegation, OperationsOverview } from './overview'
+import { RoomsView } from './rooms-view'
 import { loadOperationsRoutines, type OperationsRoutinesSnapshot } from './routines'
 import { openAgentWorkspace } from './workspace'
 import { WorkspaceView } from './workspace-view'
@@ -174,6 +175,13 @@ export function OperationsPage({
                   .filter(agent => agent.sourceId === activeConnectionId)
                   .map(agent => agent.profile)
               ]}
+            />
+          )}
+          {section === 'rooms' && (
+            <RoomsView
+              agents={stableSnapshot.agents
+                .filter(agent => agent.sourceKind === 'a2a' && agent.verified === true)
+                .map(agent => ({ id: agent.profile, label: agent.displayName }))}
             />
           )}
           {section === 'meetings' && <MeetingsView snapshot={stableSnapshot} />}
