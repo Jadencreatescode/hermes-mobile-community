@@ -116,3 +116,24 @@ jobs:
           retention-days: 1
           overwrite: true
           if-no-files-found: ignore
+
+  required-dependency-gates:
+    name: Require WhatsApp and OSV dependency gates
+    needs: [whatsapp-production-audit, scan, emit-status]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout aggregate evaluator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts/ci/evaluate_required_jobs.py
+          sparse-checkout-cone-mode: false
+
+      - name: Fail unless every dependency gate succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: >-
+          python3 scripts/ci/evaluate_required_jobs.py
+          --strict
+          --needs-json "$NEEDS"

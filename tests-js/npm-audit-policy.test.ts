@@ -11,54 +11,25 @@ const repositoryLock = JSON.parse(
   fs.readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8')
 ) as Record<string, unknown>
 
-function knownReport() {
-  return {
-    metadata: {
-      vulnerabilities: { critical: 0, high: 0, moderate: 8, low: 0, info: 0, total: 8 }
-    },
-    vulnerabilities: {
-      '@electron/get': {
-        severity: 'moderate',
-        nodes: ['node_modules/app-builder-lib/node_modules/@electron/get'],
-        via: ['global-agent']
-      },
-      'app-builder-lib': {
-        severity: 'moderate',
-        nodes: ['node_modules/app-builder-lib'],
-        via: ['@electron/get', 'dmg-builder', 'electron-builder-squirrel-windows']
-      },
-      'dmg-builder': {
-        severity: 'moderate',
-        nodes: ['node_modules/dmg-builder'],
-        via: ['app-builder-lib']
-      },
-      'electron-builder': {
-        severity: 'moderate',
-        nodes: ['node_modules/electron-builder'],
-        via: ['app-builder-lib', 'dmg-builder']
-      },
-      'electron-builder-squirrel-windows': {
-        severity: 'moderate',
-        nodes: ['node_modules/electron-builder-squirrel-windows'],
-        via: ['app-builder-lib']
-      },
-      'global-agent': {
-        severity: 'moderate',
-        nodes: ['node_modules/global-agent'],
-        via: ['roarr']
-      },
-      roarr: {
-        severity: 'moderate',
-        nodes: ['node_modules/roarr'],
-        via: ['sprintf-js']
-      },
-      'sprintf-js': {
-        severity: 'moderate',
-        nodes: ['node_modules/sprintf-js'],
-        via: [{ severity: 'moderate', url: sprintfUrl }]
-      }
-    }
-  }
+interface AuditFinding {
+  nodes: string[]
+  severity: string
+  via: Array<Record<string, unknown> | string>
+  [key: string]: unknown
+}
+
+interface AuditReport {
+  metadata: { vulnerabilities: Record<string, number> }
+  vulnerabilities: Record<string, AuditFinding>
+  [key: string]: unknown
+}
+
+const repositoryReport = JSON.parse(
+  fs.readFileSync(new URL('./fixtures/npm-audit-report.json', import.meta.url), 'utf8')
+) as AuditReport
+
+function knownReport(): AuditReport {
+  return structuredClone(repositoryReport)
 }
 
 function developmentLock(): Record<string, unknown> {
@@ -71,6 +42,50 @@ describe('npm audit policy', () => {
       errors: [],
       passed: true
     })
+  })
+
+  test('rejects an incomplete report containing only sprintf-js', () => {
+    const report = knownReport()
+    report.vulnerabilities = {
+      'sprintf-js': report.vulnerabilities['sprintf-js']
+    }
+    report.metadata.vulnerabilities.moderate = 1
+    report.metadata.vulnerabilities.total = 1
+
+    const result = evaluateAuditReport(report, developmentLock())
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /missing required vulnerability.*electron-builder/i)
+  })
+
+  test('rejects an allowed closure package with an incomplete via fan-out', () => {
+    const report = knownReport()
+    report.vulnerabilities['electron-builder'].via = []
+
+    const result = evaluateAuditReport(report, developmentLock())
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /electron-builder.*via/i)
+  })
+
+  test('rejects malformed advisory details even when the advisory URL is allowed', () => {
+    const report = knownReport()
+    report.vulnerabilities['sprintf-js'].via = [{ url: sprintfUrl }]
+
+    const result = evaluateAuditReport(report, developmentLock())
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /sprintf-js.*advisory.*provenance/i)
+  })
+
+  test('rejects unexpected finding fields instead of accepting malformed extras', () => {
+    const report = knownReport()
+    report.vulnerabilities['sprintf-js'].unexpected = true
+
+    const result = evaluateAuditReport(report, developmentLock())
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /sprintf-js.*missing or unexpected fields/i)
   })
 
   test('rejects an unknown advisory even on an allowed package', () => {
@@ -154,6 +169,7 @@ describe('npm audit policy', () => {
 
   test('accepts a clean audit report', () => {
     const report = {
+      auditReportVersion: 2,
       metadata: {
         vulnerabilities: { critical: 0, high: 0, moderate: 0, low: 0, info: 0, total: 0 }
       },

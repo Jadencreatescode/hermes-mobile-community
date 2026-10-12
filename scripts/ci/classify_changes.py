@@ -59,7 +59,8 @@ import json
 import os
 import sys
 
-_FRONTEND = ("ui-tui/", "web/", "apps/")  # TS typecheck-matrix packages
+_FRONTEND = ("ui-tui/", "web/", "apps/", "tests-js/")  # JS/TS test and package trees
+_FRONTEND_POLICY_PATHS = ("scripts/release-security/",)
 _ROOT_NPM = {"package.json", "package-lock.json"}  # shifts every package's tree
 _DOCKER_META = ("docker/", ".hadolint.yml", "Dockerfile") # docker setup
 _NIX_PATHS = ("nix/",) # nix files
@@ -188,7 +189,12 @@ def classify(files: list[str]) -> dict[str, bool]:
     files = [f.strip() for f in files if f.strip()]
     python = any(not _py_irrelevant(f) for f in files)
     python_prod = any(not _py_irrelevant(f) and not _py_test_only(f) for f in files)
-    frontend = any(f.startswith(_FRONTEND) or f in _ROOT_NPM for f in files)
+    frontend = any(
+        f.startswith(_FRONTEND)
+        or f.startswith(_FRONTEND_POLICY_PATHS)
+        or f in _ROOT_NPM
+        for f in files
+    )
     deps = any(f == "pyproject.toml" for f in files)
     npm_lock = any(f.split("/")[-1] == "package-lock.json" for f in files)
     docker_meta = any(f.startswith(_DOCKER_META) for f in files)

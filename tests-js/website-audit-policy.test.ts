@@ -12,28 +12,30 @@ const repositoryLock = JSON.parse(
   fs.readFileSync(new URL('../website/package-lock.json', import.meta.url), 'utf8')
 ) as Record<string, unknown>
 
-function knownReport() {
-  return {
-    metadata: {
-      vulnerabilities: { critical: 0, high: 2, moderate: 0, low: 0, info: 0, total: 2 }
-    },
-    vulnerabilities: {
-      braces: {
-        severity: 'high',
-        nodes: ['node_modules/braces'],
-        via: [{ severity: 'high', url: bracesUrl }]
-      },
-      chokidar: {
-        severity: 'high',
-        nodes: ['node_modules/chokidar'],
-        via: ['braces']
-      }
-    }
-  }
+interface AuditFinding {
+  nodes: string[]
+  severity: string
+  via: Array<Record<string, unknown> | string>
+  [key: string]: unknown
+}
+
+interface AuditReport {
+  metadata: { vulnerabilities: Record<string, number> }
+  vulnerabilities: Record<string, AuditFinding>
+  [key: string]: unknown
+}
+
+const repositoryReport = JSON.parse(
+  fs.readFileSync(new URL('./fixtures/website-audit-report.json', import.meta.url), 'utf8')
+) as AuditReport
+
+function knownReport(): AuditReport {
+  return structuredClone(repositoryReport)
 }
 
 function cleanReport() {
   return {
+    auditReportVersion: 2,
     metadata: {
       vulnerabilities: { critical: 0, high: 0, moderate: 0, low: 0, info: 0, total: 0 }
     },
@@ -47,6 +49,52 @@ describe('website npm audit policy', () => {
       errors: [],
       passed: true
     })
+  })
+
+  test('rejects an incomplete report containing only the direct braces advisory', () => {
+    const report = knownReport()
+    report.vulnerabilities = { braces: report.vulnerabilities.braces }
+    report.metadata.vulnerabilities.high = 1
+    report.metadata.vulnerabilities.total = 1
+
+    const result = evaluateWebsiteAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /missing required vulnerability.*chokidar/i)
+  })
+
+  test('rejects an allowed transitive finding with an empty via chain', () => {
+    const report = knownReport()
+    report.vulnerabilities.chokidar.via = []
+
+    const result = evaluateWebsiteAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /chokidar.*via/i)
+  })
+
+  test('rejects malformed advisory details even when the advisory URL is allowed', () => {
+    const report = knownReport()
+    report.vulnerabilities.braces.via = [{ url: bracesUrl }]
+
+    const result = evaluateWebsiteAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /braces.*advisory.*provenance/i)
+  })
+
+  test('binds every allowed finding to its exact lock artifact', () => {
+    const lock = structuredClone(repositoryLock) as {
+      packages: Record<string, { integrity?: string; version?: string }>
+    }
+    lock.packages['node_modules/chokidar'].version = '0.0.0-drift'
+    delete lock.packages['node_modules/chokidar'].integrity
+
+    const result = evaluateWebsiteAuditReport(knownReport(), lock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /chokidar.*version/i)
+    assert.match(result.errors.join('\n'), /chokidar.*integrity/i)
   })
 
   test('binds the retained advisory to the exact locked artifact', () => {
@@ -80,8 +128,8 @@ describe('website npm audit policy', () => {
       vulnerabilities: Record<string, unknown>
     }
 
-    report.metadata.vulnerabilities.high = 3
-    report.metadata.vulnerabilities.total = 3
+    report.metadata.vulnerabilities.high += 1
+    report.metadata.vulnerabilities.total += 1
     report.vulnerabilities['http-cache-semantics'] = {
       severity: 'high',
       nodes: ['node_modules/http-cache-semantics'],
