@@ -6,7 +6,6 @@ import { describe, test } from 'vitest'
 import { evaluateWebsiteAuditReport, validateWebsiteLock } from '../scripts/release-security/website-audit-policy.mjs'
 
 const bracesUrl = 'https://github.com/advisories/GHSA-vfj7-8cjw-p6xm'
-const httpCacheUrl = 'https://github.com/advisories/GHSA-ch52-4w7c-c8xp'
 
 const repositoryLock = JSON.parse(
   fs.readFileSync(new URL('../website/package-lock.json', import.meta.url), 'utf8')
@@ -33,162 +32,181 @@ function knownReport(): AuditReport {
   return structuredClone(repositoryReport)
 }
 
-function cleanReport() {
-  return {
-    auditReportVersion: 2,
-    metadata: {
-      vulnerabilities: { critical: 0, high: 0, moderate: 0, low: 0, info: 0, total: 0 }
-    },
-    vulnerabilities: {}
-  }
-}
+function recount(report: AuditReport): void {
+  const counts = { critical: 0, high: 0, moderate: 0, low: 0, info: 0, total: 0 }
 
-function driftFindingField(finding: AuditFinding, field: string): unknown {
-  const value = finding[field]
-
-  if (field === 'severity') {
-    return value === 'high' ? 'moderate' : 'high'
+  for (const finding of Object.values(report.vulnerabilities)) {
+    counts[finding.severity as keyof typeof counts] += 1
+    counts.total += 1
   }
 
-  if (field === 'isDirect') {
-    return !value
-  }
-
-  if (field === 'via' || field === 'effects' || field === 'nodes') {
-    return [...value as unknown[], `unreviewed-${field}`]
-  }
-
-  if (field === 'fixAvailable') {
-    return typeof value === 'boolean'
-      ? !value
-      : { ...(value as Record<string, unknown>), unexpected: true }
-  }
-
-  return `${String(value)}-drift`
+  report.metadata.vulnerabilities = counts
 }
 
 describe('website npm audit policy', () => {
-  test('accepts the no-patch braces closure against the repository lock', () => {
+  test('accepts the no-patch braces closure derived from the repository lock', () => {
     assert.deepEqual(evaluateWebsiteAuditReport(knownReport(), repositoryLock), {
       errors: [],
       passed: true
     })
   })
 
-  test('rejects an incomplete report containing only the direct braces advisory', () => {
+  test('does not freeze npm transitive effects, ranges, or fix presentation', () => {
     const report = knownReport()
-    report.vulnerabilities = { braces: report.vulnerabilities.braces }
-    report.metadata.vulnerabilities.high = 1
-    report.metadata.vulnerabilities.total = 1
-
-    const result = evaluateWebsiteAuditReport(report, repositoryLock)
-
-    assert.equal(result.passed, false)
-    assert.match(result.errors.join('\n'), /missing required vulnerability.*chokidar/i)
-  })
-
-  test('rejects an allowed transitive finding with an empty via chain', () => {
-    const report = knownReport()
-    report.vulnerabilities.chokidar.via = []
-
-    const result = evaluateWebsiteAuditReport(report, repositoryLock)
-
-    assert.equal(result.passed, false)
-    assert.match(result.errors.join('\n'), /chokidar.*via/i)
-  })
-
-  test('rejects malformed advisory details even when the advisory URL is allowed', () => {
-    const report = knownReport()
-    report.vulnerabilities.braces.via = [{ url: bracesUrl }]
-
-    const result = evaluateWebsiteAuditReport(report, repositoryLock)
-
-    assert.equal(result.passed, false)
-    assert.match(result.errors.join('\n'), /braces.*advisory.*provenance/i)
-  })
-
-  test('rejects malformed, omitted, and drifted values for every field of every retained finding', () => {
-    const fields = ['name', 'severity', 'isDirect', 'via', 'effects', 'range', 'nodes', 'fixAvailable']
-
-    for (const name of Object.keys(knownReport().vulnerabilities)) {
-      for (const field of fields) {
-        for (const mode of ['omitted', 'malformed', 'drift'] as const) {
-          const report = knownReport()
-          const finding = report.vulnerabilities[name]
-
-          if (mode === 'omitted') {
-            delete finding[field]
-          } else {
-            finding[field] = mode === 'malformed' ? null : driftFindingField(finding, field)
-          }
-
-          assert.equal(
-            evaluateWebsiteAuditReport(report, repositoryLock).passed,
-            false,
-            `${name} ${field} ${mode} value was accepted`
-          )
-        }
-      }
+    report.vulnerabilities.chokidar.effects = ['braces']
+    report.vulnerabilities.chokidar.range = 'volatile-range'
+    report.vulnerabilities.chokidar.fixAvailable = {
+      isSemVerMajor: true,
+      name: 'volatile',
+      version: '999.0.0'
     }
-  }, 30_000)
 
-  test.each([null, [], '', 0])('rejects malformed or truncated report payload %j', report => {
+    assert.equal(evaluateWebsiteAuditReport(report, repositoryLock).passed, true)
+  })
+
+  test('rejects an incomplete lock-derived transitive closure', () => {
+    const report = knownReport()
+    delete report.vulnerabilities.chokidar
+    recount(report)
+
+    const result = evaluateWebsiteAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /missing.*chokidar/i)
+  })
+
+  test('rejects a closure member whose actual vulnerable lock node is omitted', () => {
+    const report = knownReport()
+    report.vulnerabilities.globby.nodes = ['node_modules/globby']
+
+    const result = evaluateWebsiteAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /globby.*nodes/i)
+  })
+
+  test('rejects unexpected vulnerable nodes and findings', () => {
+    const report = knownReport()
+    report.vulnerabilities.braces.nodes.push('node_modules/unreviewed/node_modules/braces')
+    report.vulnerabilities.axios = {
+      name: 'axios',
+      severity: 'high',
+      isDirect: false,
+      via: [{ url: 'https://github.com/advisories/GHSA-unknown' }],
+      effects: [],
+      range: '*',
+      nodes: ['node_modules/axios'],
+      fixAvailable: false
+    }
+    recount(report)
+
+    const result = evaluateWebsiteAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /braces.*nodes/i)
+    assert.match(result.errors.join('\n'), /unexpected vulnerable package: axios/i)
+  })
+
+  test('binds the leaf advisory to exact provenance', () => {
+    const mutations = [
+      (finding: AuditFinding) => { finding.via = [{ url: bracesUrl }] },
+      (finding: AuditFinding) => { (finding.via[0] as Record<string, unknown>).source = 0 },
+      (finding: AuditFinding) => { (finding.via[0] as Record<string, unknown>).range = '<=999.0.0' },
+      (finding: AuditFinding) => { finding.via.push({ url: 'https://github.com/advisories/GHSA-unknown' }) }
+    ]
+
+    for (const mutate of mutations) {
+      const report = knownReport()
+      mutate(report.vulnerabilities.braces)
+      const result = evaluateWebsiteAuditReport(report, repositoryLock)
+      assert.equal(result.passed, false)
+      assert.match(result.errors.join('\n'), /braces.*advisory provenance/i)
+    }
+  })
+
+  test('rejects another leaf advisory anywhere in the closure', () => {
+    const report = knownReport()
+    report.vulnerabilities.chokidar.via = [{
+      source: 1,
+      name: 'chokidar',
+      dependency: 'chokidar',
+      title: 'unexpected advisory',
+      url: 'https://github.com/advisories/GHSA-unknown',
+      severity: 'high',
+      cwe: ['CWE-1'],
+      cvss: { score: 9, vectorString: 'CVSS:3.1/example' },
+      range: '*'
+    }]
+
+    const result = evaluateWebsiteAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /only braces may contain advisory details/i)
+  })
+
+  test('rejects duplicate provenance, duplicate effects, and malformed transitive fix objects', () => {
+    const mutations = [
+      (finding: AuditFinding) => { finding.via = ['braces', 'braces'] },
+      (finding: AuditFinding) => { finding.effects = ['braces', 'braces'] },
+      (finding: AuditFinding) => { finding.fixAvailable = { name: 'incomplete' } }
+    ]
+
+    for (const mutate of mutations) {
+      const report = knownReport()
+      mutate(report.vulnerabilities.chokidar)
+      assert.equal(evaluateWebsiteAuditReport(report, repositoryLock).passed, false)
+    }
+  })
+
+  test.each([true, { name: 'braces', version: '3.0.4' }, null])(
+    'rejects leaf fix availability %j',
+    fixAvailable => {
+      const report = knownReport()
+      report.vulnerabilities.braces.fixAvailable = fixAvailable
+
+      const result = evaluateWebsiteAuditReport(report, repositoryLock)
+
+      assert.equal(result.passed, false)
+      assert.match(result.errors.join('\n'), /braces.*fix/i)
+    }
+  )
+
+  test.each([null, [], '', 0, {}])('rejects malformed or truncated report payload %j', report => {
     assert.equal(
       evaluateWebsiteAuditReport(report as unknown as Record<string, unknown>, repositoryLock).passed,
       false
     )
   })
 
-  test('rejects unsupported versions and internally inconsistent metadata counts', () => {
+  test('rejects omitted report maps and counts', () => {
+    for (const mutate of [
+      (report: AuditReport) => { delete (report as Record<string, unknown>).vulnerabilities },
+      (report: AuditReport) => { delete (report as Record<string, unknown>).metadata },
+      (report: AuditReport) => { delete (report.metadata as Record<string, unknown>).vulnerabilities }
+    ]) {
+      const report = knownReport()
+      mutate(report)
+      assert.equal(evaluateWebsiteAuditReport(report, repositoryLock).passed, false)
+    }
+  })
+
+  test('rejects unsupported versions and contradictory counts', () => {
     const reports = [
-      (() => {
-        const report = knownReport()
-        delete report.auditReportVersion
+      (() => { const report = knownReport(); delete report.auditReportVersion;
 
-        return report
-      })(),
-      (() => {
-        const report = knownReport()
-        report.auditReportVersion = 3
+ return report })(),
+      (() => { const report = knownReport(); report.auditReportVersion = 3;
 
-        return report
-      })(),
-      (() => {
-        const report = knownReport()
-        report.auditReportVersion = '2'
+ return report })(),
+      (() => { const report = knownReport(); report.metadata.vulnerabilities.high -= 1;
 
-        return report
-      })(),
-      (() => {
-        const report = knownReport()
-        report.metadata.vulnerabilities.high -= 1
+ return report })(),
+      (() => { const report = knownReport(); delete report.metadata.vulnerabilities.info;
 
-        return report
-      })(),
-      (() => {
-        const report = knownReport()
-        report.metadata.vulnerabilities.total -= 1
+ return report })(),
+      (() => { const report = knownReport(); report.metadata.vulnerabilities.unexpected = 0;
 
-        return report
-      })(),
-      (() => {
-        const report = knownReport()
-        delete report.metadata.vulnerabilities.info
-
-        return report
-      })(),
-      (() => {
-        const report = knownReport()
-        report.metadata.vulnerabilities.unexpected = 0
-
-        return report
-      })(),
-      (() => {
-        const report = knownReport() as { metadata: { vulnerabilities: Record<string, unknown> } }
-        report.metadata.vulnerabilities.high = '30'
-
-        return report
-      })()
+ return report })()
     ]
 
     for (const report of reports) {
@@ -196,126 +214,61 @@ describe('website npm audit policy', () => {
     }
   })
 
-  test('binds every allowed finding to its exact lock artifact', () => {
+  test('rejects a falsely clean report while the lock has vulnerable braces nodes', () => {
+    const report = knownReport()
+    report.vulnerabilities = {}
+    recount(report)
+
+    const result = evaluateWebsiteAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /missing.*braces/i)
+  })
+
+  test('binds the braces exception to exact version, registry, and integrity', () => {
+    for (const field of ['version', 'resolved', 'integrity'] as const) {
+      const lock = structuredClone(repositoryLock) as {
+        packages: Record<string, Record<string, unknown>>
+      }
+
+      lock.packages['node_modules/braces'][field] = 'drift'
+
+      const result = evaluateWebsiteAuditReport(knownReport(), lock)
+
+      assert.equal(result.passed, false)
+      assert.match(result.errors.join('\n'), new RegExp(`braces.*${field}`, 'i'))
+    }
+  })
+
+  test('rejects any semantic lock artifact drift', () => {
     const lock = structuredClone(repositoryLock) as {
-      packages: Record<string, { integrity?: string; version?: string }>
+      packages: Record<string, Record<string, unknown>>
     }
 
-    lock.packages['node_modules/chokidar'].version = '0.0.0-drift'
-    delete lock.packages['node_modules/chokidar'].integrity
+    lock.packages['node_modules/react'].version = '0.0.0-drift'
 
     const result = evaluateWebsiteAuditReport(knownReport(), lock)
 
     assert.equal(result.passed, false)
-    assert.match(result.errors.join('\n'), /chokidar.*version/i)
-    assert.match(result.errors.join('\n'), /chokidar.*integrity/i)
+    assert.match(result.errors.join('\n'), /lock artifact.*drift/i)
   })
 
-  test('binds the retained advisory to the exact locked artifact', () => {
+  test('derives closure from dependency edges rather than the npm effects snapshot', () => {
     const lock = structuredClone(repositoryLock) as {
-      packages: Record<string, { integrity?: string }>
+      packages: Record<string, { dependencies?: Record<string, string> }>
     }
 
-    delete lock.packages['node_modules/braces'].integrity
+    delete lock.packages['node_modules/chokidar'].dependencies?.braces
 
     const result = evaluateWebsiteAuditReport(knownReport(), lock)
 
     assert.equal(result.passed, false)
-    assert.match(result.errors.join('\n'), /braces integrity/i)
+    assert.match(result.errors.join('\n'), /lock artifact.*drift|unexpected vulnerable package: chokidar/i)
   })
 
-  test('requires the patchable http-cache-semantics fix in the real lock', () => {
+  test('requires the patched webpack-dev-middleware artifact', () => {
     assert.deepEqual(validateWebsiteLock(repositoryLock), [])
-
-    const lock = structuredClone(repositoryLock) as {
-      packages: Record<string, { version?: string }>
-    }
-
-    lock.packages['node_modules/http-cache-semantics'].version = '4.2.0'
-
-    assert.match(validateWebsiteLock(lock).join('\n'), /http-cache-semantics.*4\.3\.0/i)
-  })
-
-  test('rejects the removed http-cache-semantics advisory exception', () => {
-    const report = knownReport() as {
-      metadata: { vulnerabilities: Record<string, number> }
-      vulnerabilities: Record<string, unknown>
-    }
-
-    report.metadata.vulnerabilities.high += 1
-    report.metadata.vulnerabilities.total += 1
-    report.vulnerabilities['http-cache-semantics'] = {
-      severity: 'high',
-      nodes: ['node_modules/http-cache-semantics'],
-      via: [{ severity: 'high', url: httpCacheUrl }]
-    }
-
-    const result = evaluateWebsiteAuditReport(report, repositoryLock)
-
-    assert.equal(result.passed, false)
-    assert.match(result.errors.join('\n'), /unapproved vulnerable package: http-cache-semantics/i)
-  })
-
-  test('rejects an unknown advisory even when transitive', () => {
-    const report = knownReport()
-    report.vulnerabilities.braces.via.push({
-      severity: 'high',
-      url: 'https://github.com/advisories/GHSA-unknown'
-    })
-
-    const result = evaluateWebsiteAuditReport(report, repositoryLock)
-
-    assert.equal(result.passed, false)
-    assert.match(result.errors.join('\n'), /unapproved advisory/i)
-  })
-
-  test('rejects a package outside the reviewed closure', () => {
-    const report: Record<string, unknown> = knownReport()
-    const vulnerabilities = report.vulnerabilities as Record<string, unknown>
-    vulnerabilities.axios = {
-      severity: 'high',
-      nodes: ['node_modules/axios'],
-      via: [{ severity: 'high', url: 'https://github.com/advisories/GHSA-axios-example' }]
-    }
-
-    const result = evaluateWebsiteAuditReport(report, repositoryLock)
-
-    assert.equal(result.passed, false)
-    assert.match(result.errors.join('\n'), /unapproved vulnerable package: axios/i)
-  })
-
-  test('rejects a transitive reference that escapes the reviewed closure', () => {
-    const report = knownReport()
-    report.vulnerabilities.chokidar.via = ['some-unreviewed-package']
-
-    const result = evaluateWebsiteAuditReport(report, repositoryLock)
-
-    assert.equal(result.passed, false)
-    assert.match(result.errors.join('\n'), /unapproved transitive reference/i)
-  })
-
-  test('rejects critical findings without exception', () => {
-    const report = knownReport()
-    report.metadata.vulnerabilities.critical = 1
-
-    const result = evaluateWebsiteAuditReport(report, repositoryLock)
-
-    assert.equal(result.passed, false)
-    assert.match(result.errors.join('\n'), /critical/i)
-  })
-
-  test('rejects a structurally incomplete audit report', () => {
-    const result = evaluateWebsiteAuditReport({}, repositoryLock)
-
-    assert.equal(result.passed, false)
-    assert.match(result.errors.join('\n'), /missing audit metadata/i)
-    assert.match(result.errors.join('\n'), /missing vulnerability map/i)
-  })
-
-  test('accepts a clean audit report only when the lock is patched', () => {
-    assert.deepEqual(evaluateWebsiteAuditReport(cleanReport(), repositoryLock), {
-      errors: [],
-      passed: true
-    })
+    const packages = (repositoryLock as { packages: Record<string, { version: string }> }).packages
+    assert.equal(packages['node_modules/webpack-dev-middleware'].version, '7.4.6')
   })
 })

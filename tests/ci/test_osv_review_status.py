@@ -1,4 +1,4 @@
-"""Tests for the fail-closed OSV SARIF review-status adapter."""
+"""Behavior tests for the fail-closed OSV finding review policy."""
 
 from __future__ import annotations
 
@@ -15,86 +15,247 @@ _SPEC.loader.exec_module(_MOD)
 build_review_status = _MOD.build_review_status
 
 
-def _write_sarif(path: Path, results: list[dict]) -> None:
-    path.write_text(json.dumps({"runs": [{"results": results}]}), encoding="utf-8")
+_ALLOWED = {
+    "braces": {
+        "lock": "website/package-lock.json",
+        "version": "3.0.3",
+        "id": "GHSA-vfj7-8cjw-p6xm",
+        "cve": "CVE-2026-93687",
+        "severity": "HIGH",
+        "score": "8.7",
+        "cwe": "CWE-674",
+        "last_affected": "3.0.3",
+        "groups": None,
+    },
+    "sprintf-js": {
+        "lock": "package-lock.json",
+        "version": "1.1.3",
+        "id": "GHSA-hp3w-g68c-fv3c",
+        "cve": "CVE-2026-97058",
+        "severity": "MODERATE",
+        "score": "6.9",
+        "cwe": "CWE-1284",
+        "last_affected": "1.1.3",
+        "groups": ["dev", "optional"],
+    },
+}
 
 
-def _finding(rule_id: str = "GHSA-test", uri: str = "package-lock.json") -> dict:
+def _vulnerability(name: str) -> dict:
+    policy = _ALLOWED[name]
+    advisory = policy["id"]
     return {
-        "ruleId": rule_id,
-        "message": {"text": "test advisory"},
-        "locations": [
+        "affected": [
             {
-                "physicalLocation": {
-                    "artifactLocation": {"uri": uri},
-                }
+                "database_specific": {
+                    "source": (
+                        "https://github.com/github/advisory-database/blob/main/"
+                        f"advisories/github-reviewed/2026/09/{advisory}/{advisory}.json"
+                    )
+                },
+                "package": {
+                    "ecosystem": "npm",
+                    "name": name,
+                    "purl": f"pkg:npm/{name}",
+                },
+                "ranges": [
+                    {
+                        "events": [
+                            {"introduced": "0"},
+                            {"last_affected": policy["last_affected"]},
+                        ],
+                        "type": "SEMVER",
+                    }
+                ],
             }
         ],
+        "aliases": [policy["cve"]],
+        "database_specific": {
+            "cwe_ids": [policy["cwe"]],
+            "github_reviewed": True,
+            "github_reviewed_at": "volatile",
+            "severity": policy["severity"],
+        },
+        "details": "reviewed no-patch advisory",
+        "id": advisory,
+        "modified": "volatile",
+        "published": "volatile",
+        "references": [{"type": "PACKAGE", "url": "https://example.invalid/package"}],
+        "schema_version": "1.9.0",
+        "severity": [{"score": "CVSS:3.1/example", "type": "CVSS_V3"}],
+        "summary": "reviewed no-patch advisory",
     }
 
 
-def test_clean_success_emits_no_status(tmp_path: Path) -> None:
-    sarif = tmp_path / "results.sarif"
-    _write_sarif(sarif, [])
+def _package(name: str) -> dict:
+    policy = _ALLOWED[name]
+    package = {
+        "package": {"name": name, "version": policy["version"], "ecosystem": "npm"},
+        "groups": [
+            {
+                "ids": [policy["id"]],
+                "aliases": [policy["cve"], policy["id"]],
+                "max_severity": policy["score"],
+            }
+        ],
+        "vulnerabilities": [_vulnerability(name)],
+    }
+    if policy["groups"] is not None:
+        package["dependency_groups"] = policy["groups"]
+    return package
 
-    status, failed = build_review_status("success", sarif)
 
-    assert status == []
-    assert failed is False
+def _document() -> dict:
+    return {
+        "results": [
+            {
+                "source": {"path": "/checkout/package-lock.json", "type": "lockfile"},
+                "packages": [_package("sprintf-js")],
+            },
+            {
+                "source": {
+                    "path": "/checkout/website/package-lock.json",
+                    "type": "lockfile",
+                },
+                "packages": [_package("braces")],
+            },
+        ],
+        "experimental_config": {"licenses": {"allow": [], "ignore": []}},
+    }
 
 
-def test_findings_emit_warning_without_operational_failure(tmp_path: Path) -> None:
-    sarif = tmp_path / "results.sarif"
-    _write_sarif(sarif, [_finding()])
+def _write_results(path: Path, document: dict | list | str) -> None:
+    path.write_text(json.dumps(document), encoding="utf-8")
 
-    status, failed = build_review_status("success", sarif)
+
+def _review(tmp_path: Path, document: dict, scan_result: str = "success"):
+    results = tmp_path / "results.json"
+    _write_results(results, document)
+    return build_review_status(scan_result, results)
+
+
+def test_exact_reviewed_no_patch_findings_pass(tmp_path: Path) -> None:
+    status, failed = _review(tmp_path, _document())
 
     assert failed is False
     result = status[0]["results"][0]
     assert result["kind"] == "warning"
-    assert "1 known vulnerability" in result["summary"]
-    assert "GHSA-test in package-lock.json" in result["detail"]
+    assert "2 reviewed no-patch vulnerabilities" in result["summary"]
+    assert "GHSA-vfj7-8cjw-p6xm" in result["detail"]
+    assert "GHSA-hp3w-g68c-fv3c" in result["detail"]
+
+
+def test_missing_reviewed_finding_fails_closed(tmp_path: Path) -> None:
+    document = _document()
+    document["results"].pop()
+
+    status, failed = _review(tmp_path, document)
+
+    assert failed is True
+    assert "missing reviewed finding" in status[0]["results"][0]["detail"]
+
+
+def test_extra_or_unknown_finding_fails_closed(tmp_path: Path) -> None:
+    document = _document()
+    extra = _package("braces")
+    extra["package"]["name"] = "axios"
+    document["results"][1]["packages"].append(extra)
+
+    status, failed = _review(tmp_path, document)
+
+    assert failed is True
+    assert "unreviewed finding" in status[0]["results"][0]["detail"]
+
+
+def test_patchable_allowed_advisory_fails_closed(tmp_path: Path) -> None:
+    document = _document()
+    events = document["results"][1]["packages"][0]["vulnerabilities"][0]["affected"][0]["ranges"][0]["events"]
+    events[-1] = {"fixed": "3.0.4"}
+
+    status, failed = _review(tmp_path, document)
+
+    assert failed is True
+    assert "patched version" in status[0]["results"][0]["detail"]
+
+
+def test_wrong_package_version_or_source_lock_fails_closed(tmp_path: Path) -> None:
+    for mutate in (
+        lambda document: document["results"][1]["packages"][0]["package"].update(version="3.0.2"),
+        lambda document: document["results"][1]["source"].update(path="/checkout/package-lock.json"),
+        lambda document: document["results"][0]["packages"][0].update(dependency_groups=["prod"]),
+    ):
+        document = _document()
+        mutate(document)
+        _, failed = _review(tmp_path, document)
+        assert failed is True
+
+
+def test_advisory_identity_and_provenance_are_exact(tmp_path: Path) -> None:
+    mutations = (
+        lambda vulnerability: vulnerability.update(id="GHSA-unknown"),
+        lambda vulnerability: vulnerability.update(aliases=[]),
+        lambda vulnerability: vulnerability["affected"][0]["database_specific"].update(source="https://example.invalid"),
+        lambda vulnerability: vulnerability["affected"][0]["package"].update(purl="pkg:npm/other"),
+        lambda vulnerability: vulnerability["database_specific"].update(github_reviewed=False),
+    )
+    for mutate in mutations:
+        document = _document()
+        vulnerability = document["results"][1]["packages"][0]["vulnerabilities"][0]
+        mutate(vulnerability)
+        status, failed = _review(tmp_path, document)
+        assert failed is True
+        assert "provenance" in status[0]["results"][0]["detail"]
+
+
+def test_multiple_vulnerabilities_for_an_allowed_package_fail_closed(tmp_path: Path) -> None:
+    document = _document()
+    document["results"][1]["packages"][0]["vulnerabilities"].append(_vulnerability("braces"))
+
+    status, failed = _review(tmp_path, document)
+
+    assert failed is True
+    assert "exactly one vulnerability" in status[0]["results"][0]["detail"]
+
+
+def test_malformed_truncated_or_omitted_results_fail_closed(tmp_path: Path) -> None:
+    documents = [None, [], {}, {"results": None}, {"results": []}, {"results": [{}]}]
+    for document in documents:
+        status, failed = _review(tmp_path, document)  # type: ignore[arg-type]
+        assert failed is True
+        assert "could not be validated" in status[0]["results"][0]["detail"]
 
 
 def test_missing_artifact_fails_closed(tmp_path: Path) -> None:
-    status, failed = build_review_status("success", tmp_path / "missing.sarif")
+    status, failed = build_review_status("success", tmp_path / "missing.json")
 
     assert failed is True
-    result = status[0]["results"][0]
-    assert result["kind"] == "action_required"
-    assert "not produced" in result["detail"]
+    assert "not produced" in status[0]["results"][0]["detail"]
 
 
-def test_failed_scanner_job_fails_closed_even_with_clean_sarif(tmp_path: Path) -> None:
-    sarif = tmp_path / "results.sarif"
-    _write_sarif(sarif, [])
-
-    status, failed = build_review_status("failure", sarif)
+def test_failed_scanner_job_fails_closed_even_with_valid_results(tmp_path: Path) -> None:
+    status, failed = _review(tmp_path, _document(), scan_result="failure")
 
     assert failed is True
     assert "scanner job result was failure" in status[0]["results"][0]["detail"]
 
 
-def test_malformed_or_incomplete_sarif_fails_closed(tmp_path: Path) -> None:
-    malformed = tmp_path / "malformed.sarif"
-    malformed.write_text("not json", encoding="utf-8")
-    incomplete = tmp_path / "incomplete.sarif"
-    incomplete.write_text(json.dumps({"runs": [{}]}), encoding="utf-8")
+def test_invalid_json_fails_closed(tmp_path: Path) -> None:
+    results = tmp_path / "results.json"
+    results.write_text("not json", encoding="utf-8")
 
-    malformed_status, malformed_failed = build_review_status("success", malformed)
-    incomplete_status, incomplete_failed = build_review_status("success", incomplete)
-
-    assert malformed_failed is True
-    assert incomplete_failed is True
-    assert "could not be validated" in malformed_status[0]["results"][0]["detail"]
-    assert "could not be validated" in incomplete_status[0]["results"][0]["detail"]
-
-
-def test_result_without_a_real_location_fails_closed(tmp_path: Path) -> None:
-    sarif = tmp_path / "results.sarif"
-    _write_sarif(sarif, [{"ruleId": "GHSA-test", "locations": []}])
-
-    status, failed = build_review_status("success", sarif)
+    status, failed = build_review_status("success", results)
 
     assert failed is True
-    assert "has no location" in status[0]["results"][0]["detail"]
+    assert "could not be validated" in status[0]["results"][0]["detail"]
+
+
+def test_workflow_exports_json_and_required_aggregate_consumes_review() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "osv-scanner.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "export-results: true" in workflow
+    assert "OSV_RESULTS: ${{ needs.scan.outputs.results }}" in workflow
+    assert "--results \"$RESULTS_PATH\"" in workflow
+    assert "needs: [whatsapp-production-audit, scan, review-findings]" in workflow
+    assert "--required-job review-findings" in workflow

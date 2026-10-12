@@ -54,7 +54,8 @@
     "compression": "1.8.2",
     "joi": "17.13.8",
     "proxy-addr": "2.0.8",
-    "http-cache-semantics": "4.3.0"
+    "http-cache-semantics": "4.3.0",
+    "webpack-dev-middleware": "7.4.6"
   },
   "browserslist": {
     "production": [
