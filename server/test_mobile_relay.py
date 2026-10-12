@@ -14,6 +14,8 @@ from server.mobile_relay import create_relay_app
 class MobileRelayTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.primary_paths = []
+        self.primary_websocket_compressions = []
+        self.primary_websocket_messages = []
         self.peer_cookies = []
         primary = web.Application(client_max_size=64 * 1024 * 1024)
 
@@ -33,16 +35,22 @@ class MobileRelayTests(unittest.IsolatedAsyncioTestCase):
             return web.json_response({"method": request.method, "path": request.path})
 
         async def websocket(request: web.Request):
-            ws = web.WebSocketResponse()
+            ws = web.WebSocketResponse(compress=request.query.get("no_compress") != "1")
             await ws.prepare(request)
+            self.primary_websocket_compressions.append(ws.compress)
             emit_text = int(request.query.get("emit_text", "0"))
             if emit_text:
                 await ws.send_str("u" * emit_text)
+            emit_binary = int(request.query.get("emit_binary", "0"))
+            if emit_binary:
+                await ws.send_bytes(b"u" * emit_binary)
             async for message in ws:
                 if message.type == web.WSMsgType.TEXT:
+                    self.primary_websocket_messages.append(message.data)
                     reply = message.data if request.query.get("echo") == "1" else f"relay:{message.data}"
                     await ws.send_str(reply)
                 elif message.type == web.WSMsgType.BINARY:
+                    self.primary_websocket_messages.append(message.data)
                     await ws.send_bytes(message.data)
             return ws
 
@@ -198,9 +206,10 @@ class MobileRelayTests(unittest.IsolatedAsyncioTestCase):
         raw_attachment_bytes = 256 * 1024 * 1024
         base64_bytes = ((raw_attachment_bytes + 2) // 3) * 4
 
+        self.assertEqual(mobile_relay.MAX_WEBSOCKET_MESSAGE_BYTES, 384 * 1024 * 1024)
         self.assertGreater(mobile_relay.MAX_WEBSOCKET_MESSAGE_BYTES, base64_bytes)
 
-    async def test_websocket_frame_limit_accepts_the_exact_boundary_in_both_directions(self):
+    async def test_uncompressed_websocket_limit_accepts_the_exact_boundary_in_both_directions(self):
         test_limit = 64 * 1024
         with patch.object(mobile_relay, "MAX_WEBSOCKET_MESSAGE_BYTES", test_limit):
             relay = create_relay_app(
@@ -210,24 +219,36 @@ class MobileRelayTests(unittest.IsolatedAsyncioTestCase):
             client = TestClient(TestServer(relay))
             await client.start_server()
             try:
-                ws = await client.ws_connect("/api/ws?echo=1", max_msg_size=test_limit + 1)
+                ws = await client.ws_connect(
+                    "/api/ws?echo=1&no_compress=1",
+                    compress=0,
+                    max_msg_size=test_limit + 1,
+                )
+                self.assertEqual(ws.compress, 0)
                 payload = "x" * test_limit
                 await ws.send_str(payload)
                 echoed = await ws.receive(timeout=2)
                 self.assertEqual(echoed.type, web.WSMsgType.TEXT)
                 self.assertEqual(echoed.data, payload)
+                self.assertEqual(self.primary_websocket_compressions[-1], 0)
                 await ws.close()
 
-                ws = await client.ws_connect(f"/api/ws?emit_text={test_limit}", max_msg_size=test_limit + 1)
+                ws = await client.ws_connect(
+                    f"/api/ws?emit_text={test_limit}&no_compress=1",
+                    compress=0,
+                    max_msg_size=test_limit + 1,
+                )
                 emitted = await ws.receive(timeout=2)
                 self.assertEqual(emitted.type, web.WSMsgType.TEXT)
                 self.assertEqual(emitted.data, "u" * test_limit)
+                self.assertEqual(self.primary_websocket_compressions[-1], 0)
                 await ws.close()
             finally:
                 await client.close()
 
-    async def test_websocket_frame_limit_refuses_limit_plus_one_in_both_directions(self):
+    async def test_uncompressed_websocket_limit_refuses_limit_plus_one_in_both_directions(self):
         test_limit = 64 * 1024
+        oversized = "x" * (test_limit + 1)
         with patch.object(mobile_relay, "MAX_WEBSOCKET_MESSAGE_BYTES", test_limit):
             relay = create_relay_app(
                 static_root=self.static_root,
@@ -236,16 +257,188 @@ class MobileRelayTests(unittest.IsolatedAsyncioTestCase):
             client = TestClient(TestServer(relay))
             await client.start_server()
             try:
-                ws = await client.ws_connect("/api/ws")
-                await ws.send_str("x" * (test_limit + 1))
+                ws = await client.ws_connect("/api/ws?no_compress=1", compress=0)
+                await ws.send_str(oversized)
                 refused = await ws.receive(timeout=2)
                 self.assertEqual(refused.type, web.WSMsgType.CLOSE)
                 self.assertEqual(ws.close_code, WSCloseCode.MESSAGE_TOO_BIG)
+                self.assertNotIn(oversized, self.primary_websocket_messages)
+                self.assertEqual(self.primary_websocket_compressions[-1], 0)
 
-                ws = await client.ws_connect(f"/api/ws?emit_text={test_limit + 1}")
+                ws = await client.ws_connect(
+                    f"/api/ws?emit_text={test_limit + 1}&no_compress=1",
+                    compress=0,
+                )
                 refused = await ws.receive(timeout=2)
                 self.assertEqual(refused.type, web.WSMsgType.CLOSE)
                 self.assertEqual(ws.close_code, WSCloseCode.MESSAGE_TOO_BIG)
+                self.assertEqual(self.primary_websocket_compressions[-1], 0)
+            finally:
+                await client.close()
+
+    async def test_negotiated_compression_accepts_the_exact_boundary_in_both_directions(self):
+        test_limit = 64 * 1024
+        payload = "c" * test_limit
+        with patch.object(mobile_relay, "MAX_WEBSOCKET_MESSAGE_BYTES", test_limit):
+            relay = create_relay_app(
+                static_root=self.static_root,
+                upstream=str(self.primary_server.make_url("/")),
+            )
+            client = TestClient(TestServer(relay))
+            await client.start_server()
+            try:
+                ws = await client.ws_connect(
+                    f"/api/ws?echo=1&emit_text={test_limit}",
+                    compress=15,
+                    max_msg_size=test_limit + 1,
+                )
+                self.assertNotEqual(ws.compress, 0)
+
+                emitted = await ws.receive(timeout=2)
+                self.assertEqual(emitted.type, web.WSMsgType.TEXT)
+                self.assertEqual(emitted.data, "u" * test_limit)
+
+                await ws.send_str(payload)
+                echoed = await ws.receive(timeout=2)
+                self.assertEqual(echoed.type, web.WSMsgType.TEXT)
+                self.assertEqual(echoed.data, payload)
+                self.assertNotEqual(self.primary_websocket_compressions[-1], 0)
+                await ws.close()
+            finally:
+                await client.close()
+
+    async def test_negotiated_compression_refuses_limit_plus_one_in_both_directions(self):
+        test_limit = 64 * 1024
+        oversized = "z" * (test_limit + 1)
+        with patch.object(mobile_relay, "MAX_WEBSOCKET_MESSAGE_BYTES", test_limit):
+            relay = create_relay_app(
+                static_root=self.static_root,
+                upstream=str(self.primary_server.make_url("/")),
+            )
+            client = TestClient(TestServer(relay))
+            await client.start_server()
+            try:
+                ws = await client.ws_connect("/api/ws", compress=15)
+                self.assertNotEqual(ws.compress, 0)
+
+                await ws.send_str(oversized)
+                refused = await ws.receive(timeout=2)
+
+                self.assertEqual(refused.type, web.WSMsgType.CLOSE)
+                self.assertEqual(ws.close_code, WSCloseCode.MESSAGE_TOO_BIG)
+                self.assertNotIn(oversized, self.primary_websocket_messages)
+
+                ws = await client.ws_connect(
+                    f"/api/ws?emit_text={test_limit + 1}",
+                    compress=15,
+                )
+                self.assertNotEqual(ws.compress, 0)
+                refused = await ws.receive(timeout=2)
+                self.assertEqual(refused.type, web.WSMsgType.CLOSE)
+                self.assertEqual(ws.close_code, WSCloseCode.MESSAGE_TOO_BIG)
+                self.assertNotEqual(self.primary_websocket_compressions[-1], 0)
+            finally:
+                await client.close()
+
+    async def test_compressed_text_limit_counts_utf8_bytes_before_forwarding(self):
+        test_limit = 64 * 1024
+        oversized = "x" * (test_limit - 1) + "é"
+        self.assertEqual(len(oversized), test_limit)
+        self.assertEqual(len(oversized.encode("utf-8")), test_limit + 1)
+
+        with patch.object(mobile_relay, "MAX_WEBSOCKET_MESSAGE_BYTES", test_limit):
+            relay = create_relay_app(
+                static_root=self.static_root,
+                upstream=str(self.primary_server.make_url("/")),
+            )
+            client = TestClient(TestServer(relay))
+            await client.start_server()
+            try:
+                ws = await client.ws_connect("/api/ws", compress=15)
+                self.assertNotEqual(ws.compress, 0)
+                await ws.send_str(oversized)
+                refused = await ws.receive(timeout=2)
+
+                self.assertEqual(refused.type, web.WSMsgType.CLOSE)
+                self.assertEqual(ws.close_code, WSCloseCode.MESSAGE_TOO_BIG)
+                self.assertNotIn(oversized, self.primary_websocket_messages)
+            finally:
+                await client.close()
+
+    async def test_binary_websocket_limit_accepts_exact_boundary_with_and_without_compression(self):
+        test_limit = 64 * 1024
+        payload = b"b" * test_limit
+        with patch.object(mobile_relay, "MAX_WEBSOCKET_MESSAGE_BYTES", test_limit):
+            relay = create_relay_app(
+                static_root=self.static_root,
+                upstream=str(self.primary_server.make_url("/")),
+            )
+            client = TestClient(TestServer(relay))
+            await client.start_server()
+            try:
+                for compression, suffix in ((0, "&no_compress=1"), (15, "")):
+                    with self.subTest(compression=compression):
+                        ws = await client.ws_connect(
+                            f"/api/ws?echo=1&emit_binary={test_limit}{suffix}",
+                            compress=compression,
+                            max_msg_size=test_limit + 1,
+                        )
+                        self.assertEqual(bool(ws.compress), bool(compression))
+
+                        emitted = await ws.receive(timeout=2)
+                        self.assertEqual(emitted.type, web.WSMsgType.BINARY)
+                        self.assertEqual(emitted.data, b"u" * test_limit)
+
+                        await ws.send_bytes(payload)
+                        echoed = await ws.receive(timeout=2)
+                        self.assertEqual(echoed.type, web.WSMsgType.BINARY)
+                        self.assertEqual(echoed.data, payload)
+                        self.assertEqual(
+                            bool(self.primary_websocket_compressions[-1]),
+                            bool(compression),
+                        )
+                        await ws.close()
+            finally:
+                await client.close()
+
+    async def test_binary_websocket_limit_refuses_limit_plus_one_with_and_without_compression(self):
+        test_limit = 64 * 1024
+        oversized = b"q" * (test_limit + 1)
+        with patch.object(mobile_relay, "MAX_WEBSOCKET_MESSAGE_BYTES", test_limit):
+            relay = create_relay_app(
+                static_root=self.static_root,
+                upstream=str(self.primary_server.make_url("/")),
+            )
+            client = TestClient(TestServer(relay))
+            await client.start_server()
+            try:
+                for compression, suffix in ((0, "?no_compress=1"), (15, "")):
+                    with self.subTest(direction="client-to-upstream", compression=compression):
+                        ws = await client.ws_connect(
+                            f"/api/ws{suffix}",
+                            compress=compression,
+                        )
+                        self.assertEqual(bool(ws.compress), bool(compression))
+                        await ws.send_bytes(oversized)
+                        refused = await ws.receive(timeout=2)
+                        self.assertEqual(refused.type, web.WSMsgType.CLOSE)
+                        self.assertEqual(ws.close_code, WSCloseCode.MESSAGE_TOO_BIG)
+                        self.assertNotIn(oversized, self.primary_websocket_messages)
+
+                    separator = "&" if suffix else "?"
+                    with self.subTest(direction="upstream-to-client", compression=compression):
+                        ws = await client.ws_connect(
+                            f"/api/ws{suffix}{separator}emit_binary={test_limit + 1}",
+                            compress=compression,
+                        )
+                        self.assertEqual(bool(ws.compress), bool(compression))
+                        refused = await ws.receive(timeout=2)
+                        self.assertEqual(refused.type, web.WSMsgType.CLOSE)
+                        self.assertEqual(ws.close_code, WSCloseCode.MESSAGE_TOO_BIG)
+                        self.assertEqual(
+                            bool(self.primary_websocket_compressions[-1]),
+                            bool(compression),
+                        )
             finally:
                 await client.close()
 

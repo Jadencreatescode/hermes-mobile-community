@@ -222,33 +222,48 @@ def create_relay_app(
             headers=_forward_headers(request.headers, node_id=node_id, websocket=True, upstream=origin),
             autoping=True,
             heartbeat=30,
-            # aiohttp rejects messages whose length is >= max_msg_size, so add
-            # one to make our documented ceiling inclusive.
+            # Offer permessage-deflate to the upstream just as browsers do; an
+            # upstream that does not support it can decline the extension.
+            compress=15,
+            # aiohttp 3.14 rejects uncompressed messages at >= max_msg_size,
+            # but compressed messages only above max_msg_size after inflation.
+            # The extra byte keeps the public ceiling inclusive; forward_message
+            # applies the same exact post-decompression byte limit to both paths.
             max_msg_size=MAX_WEBSOCKET_MESSAGE_BYTES + 1,
         )
         downstream = web.WebSocketResponse(
             autoping=True,
             heartbeat=30,
+            compress=True,
             max_msg_size=MAX_WEBSOCKET_MESSAGE_BYTES + 1,
         )
         await downstream.prepare(request)
 
+        async def forward_message(message, target_ws) -> bool:
+            if message.type == WSMsgType.TEXT:
+                if len(message.data.encode("utf-8")) > MAX_WEBSOCKET_MESSAGE_BYTES:
+                    return False
+                await target_ws.send_str(message.data)
+            elif message.type == WSMsgType.BINARY:
+                if len(message.data) > MAX_WEBSOCKET_MESSAGE_BYTES:
+                    return False
+                await target_ws.send_bytes(message.data)
+            return True
+
         async def client_to_upstream() -> int | None:
             async for message in downstream:
-                if message.type == WSMsgType.TEXT:
-                    await upstream_ws.send_str(message.data)
-                elif message.type == WSMsgType.BINARY:
-                    await upstream_ws.send_bytes(message.data)
+                if message.type in {WSMsgType.TEXT, WSMsgType.BINARY}:
+                    if not await forward_message(message, upstream_ws):
+                        return WSCloseCode.MESSAGE_TOO_BIG
                 elif message.type in {WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED, WSMsgType.ERROR}:
                     break
             return downstream.close_code
 
         async def upstream_to_client() -> int | None:
             async for message in upstream_ws:
-                if message.type == WSMsgType.TEXT:
-                    await downstream.send_str(message.data)
-                elif message.type == WSMsgType.BINARY:
-                    await downstream.send_bytes(message.data)
+                if message.type in {WSMsgType.TEXT, WSMsgType.BINARY}:
+                    if not await forward_message(message, downstream):
+                        return WSCloseCode.MESSAGE_TOO_BIG
                 elif message.type in {WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED, WSMsgType.ERROR}:
                     break
             return upstream_ws.close_code
