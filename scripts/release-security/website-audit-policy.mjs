@@ -1,30 +1,16 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-// Website docs build (Docusaurus) carries its own dependency tree, entirely
-// separate from the shipped desktop app and mobile relay server. This policy
-// exists because Docusaurus 3.10.2 (the latest stable release as of review)
-// still bundles two upstream-fixed-elsewhere advisories transitively through
-// its own internals (webpack-dev-server -> chokidar -> braces, and
-// @electron/get-style got/cacheable-request -> http-cache-semantics via the
-// webpack build toolchain). Neither reaches the published static site output;
-// both are dev-time build tooling. Unlike the root npm-audit-policy.mjs
-// (which pins exact node/version/integrity because we control that
-// dependency directly), this gate allowlists by package name + advisory URL
-// only: the vulnerable packages here are Docusaurus's own internal fan-out
-// (31 nodes as of this review, all resolving to the same two root CVEs), so
-// pinning each node's exact version would break on every routine Docusaurus
-// patch release while adding no real review signal. Re-review and shrink
-// this list whenever Docusaurus ships a release that resolves either CVE.
+// Docusaurus 3.10.2 still carries braces 3.0.3 through its build toolchain.
+// npm publishes no patched braces release, so this policy permits only that
+// advisory and binds it to the exact reviewed lockfile artifact. Any new
+// advisory, package, node, or artifact drift fails closed. The separately
+// patchable http-cache-semantics advisory is not an exception: the lock must
+// retain the fixed 4.3.0 artifact.
+const ALLOWED_ADVISORIES = new Set(['https://github.com/advisories/GHSA-vfj7-8cjw-p6xm'])
 
-const ALLOWED_ADVISORIES = new Set([
-  'https://github.com/advisories/GHSA-vfj7-8cjw-p6xm', // braces: quadratic brace-expansion ReDoS
-  'https://github.com/advisories/GHSA-ch52-4w7c-c8xp' // http-cache-semantics: max-stale cross-user disclosure
-])
-
-// Closed set of package names allowed to carry (only) the two advisories
-// above, reached transitively through Docusaurus 3.10.2's own tree.
 const ALLOWED_PACKAGES = new Set([
   '@docusaurus/babel',
   '@docusaurus/bundler',
@@ -53,20 +39,71 @@ const ALLOWED_PACKAGES = new Set([
   'copy-webpack-plugin',
   'fast-glob',
   'globby',
-  'http-cache-semantics',
   'http-proxy-middleware',
   'micromatch',
   'webpack-dev-server'
 ])
 
+const REVIEWED_LOCKED_PACKAGES = {
+  braces: {
+    node: 'node_modules/braces',
+    version: '3.0.3',
+    resolved: 'https://registry.npmjs.org/braces/-/braces-3.0.3.tgz',
+    integrity: 'sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA=='
+  },
+  'http-cache-semantics': {
+    node: 'node_modules/http-cache-semantics',
+    version: '4.3.0',
+    resolved: 'https://registry.npmjs.org/http-cache-semantics/-/http-cache-semantics-4.3.0.tgz',
+    integrity: 'sha512-M5t5LlJpS1UHMjvwRQVdFHvPISGeLAxNcrWuJkeGh0KxsqCHZ1O3NXZU/8x7cD0BDcGW8kapxMKTvwlqrNkHkA=='
+  }
+}
+
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-export function evaluateWebsiteAuditReport(report) {
+function lockedPackageName(node) {
+  const marker = 'node_modules/'
+  const index = node.lastIndexOf(marker)
+  return index === -1 ? '' : node.slice(index + marker.length)
+}
+
+export function validateWebsiteLock(lock) {
   const errors = []
+  const packages = isRecord(lock?.packages) ? lock.packages : null
+
+  if (!packages) {
+    return ['missing lockfile package map']
+  }
+
+  for (const [name, expected] of Object.entries(REVIEWED_LOCKED_PACKAGES)) {
+    const locked = packages[expected.node]
+
+    if (!isRecord(locked)) {
+      errors.push(`${name} lockfile node is missing: ${expected.node}`)
+      continue
+    }
+
+    if (locked.version !== expected.version) {
+      errors.push(`${name} must remain locked to reviewed version ${expected.version}`)
+    }
+    if (locked.resolved !== expected.resolved) {
+      errors.push(`${name} registry identity changed or is missing`)
+    }
+    if (locked.integrity !== expected.integrity) {
+      errors.push(`${name} integrity changed or is missing`)
+    }
+  }
+
+  return errors
+}
+
+export function evaluateWebsiteAuditReport(report, lock) {
+  const errors = [...validateWebsiteLock(lock)]
   const counts = isRecord(report?.metadata?.vulnerabilities) ? report.metadata.vulnerabilities : {}
   const vulnerabilities = isRecord(report?.vulnerabilities) ? report.vulnerabilities : {}
+  const packages = isRecord(lock?.packages) ? lock.packages : {}
 
   if (!isRecord(report?.metadata?.vulnerabilities)) {
     errors.push('missing audit metadata vulnerability counts')
@@ -99,14 +136,22 @@ export function evaluateWebsiteAuditReport(report) {
       continue
     }
 
-    const via = Array.isArray(finding?.via) ? finding.via : []
-    const advisoryDetails = via.filter(source => typeof source !== 'string')
-
-    if (advisoryDetails.length === 0 && via.every(source => typeof source === 'string')) {
-      // Purely transitive (reached only via other allowed packages, no
-      // direct advisory attached here) — fine as long as every reference
-      // resolves inside the reviewed closure, checked below.
+    const nodes = Array.isArray(finding?.nodes) ? finding.nodes : []
+    if (nodes.length === 0) {
+      errors.push(`${name} has no lockfile nodes to validate`)
     }
+
+    for (const node of nodes) {
+      if (typeof node !== 'string' || lockedPackageName(node) !== name) {
+        errors.push(`${name} reported an invalid lockfile node: ${String(node)}`)
+        continue
+      }
+      if (!isRecord(packages[node])) {
+        errors.push(`${name} lockfile node is missing: ${node}`)
+      }
+    }
+
+    const via = Array.isArray(finding?.via) ? finding.via : []
 
     for (const source of via) {
       if (typeof source === 'string') {
@@ -117,7 +162,6 @@ export function evaluateWebsiteAuditReport(report) {
       }
 
       const url = source?.url
-
       if (!url || !ALLOWED_ADVISORIES.has(url)) {
         errors.push(`unapproved advisory for ${name}: ${url ?? '<missing URL>'}`)
       }
@@ -131,7 +175,7 @@ function run() {
   const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'website')
   const result = spawnSync(
     process.platform === 'win32' ? 'npm.cmd' : 'npm',
-    ['audit', '--json', '--audit-level=high'],
+    ['audit', '--omit=dev', '--json', '--audit-level=high'],
     { cwd: websiteRoot, encoding: 'utf8' }
   )
 
@@ -141,24 +185,28 @@ function run() {
     report = JSON.parse(result.stdout || '')
   } catch {
     console.error('npm audit did not return valid JSON')
-    if (result.stderr) {
-      console.error(result.stderr.trim())
-    }
+    if (result.stderr) console.error(result.stderr.trim())
     process.exit(1)
   }
 
-  if (report.error) {
-    console.error(`npm audit failed: ${report.error.summary ?? report.error.code ?? 'unknown error'}`)
+  if (result.error || report.error) {
+    console.error(`npm audit failed: ${report.error?.summary ?? result.error?.message ?? 'unknown error'}`)
     process.exit(1)
   }
 
-  const evaluation = evaluateWebsiteAuditReport(report)
+  let lock
+  try {
+    lock = JSON.parse(fs.readFileSync(path.join(websiteRoot, 'package-lock.json'), 'utf8'))
+  } catch (error) {
+    console.error(`website package lock could not be read: ${error.message}`)
+    process.exit(1)
+  }
+
+  const evaluation = evaluateWebsiteAuditReport(report, lock)
 
   if (!evaluation.passed) {
     console.error('website npm audit policy failed')
-    for (const error of evaluation.errors) {
-      console.error(`  ${error}`)
-    }
+    for (const error of evaluation.errors) console.error(`  ${error}`)
     process.exit(1)
   }
 
@@ -167,7 +215,7 @@ function run() {
     console.log('website npm audit policy passed with no known vulnerabilities')
   } else {
     console.log(
-      `website npm audit policy passed with ${total} documented Docusaurus-internal build-tooling findings (upstream-tracked, not shipped in site output)`
+      `website npm audit policy passed with ${total} documented Docusaurus-internal braces findings (no patched braces release)`
     )
   }
 }

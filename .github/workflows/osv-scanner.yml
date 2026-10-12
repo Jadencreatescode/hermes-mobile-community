@@ -4,7 +4,9 @@ name: OSV-Scanner
 # database. Runs on every PR/push (via the ci.yml orchestrator's workflow_call)
 # and on a weekly schedule against main.
 #
-# This is detection-only — OSV-Scanner does NOT open PRs or modify pins.
+# The broad OSV scan is detection-only — OSV-Scanner does NOT open PRs or
+# modify pins. A separate focused WhatsApp production audit below is blocking:
+# that internet-facing bridge has a small exact lock and no advisory exceptions.
 # It reports known CVEs in currently-pinned dependency versions so we can
 # decide when and how to patch on our own schedule. Our pinning strategy
 # (full SHA / exact version) is preserved; only the notification signal
@@ -38,6 +40,24 @@ permissions:
   security-events: write
 
 jobs:
+  whatsapp-production-audit:
+    name: Audit WhatsApp production dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: scripts/whatsapp-bridge/package-lock.json
+
+      - name: Enforce clean production audit and exact patched lock
+        run: npm --prefix scripts/whatsapp-bridge run audit:prod
+
   scan:
     name: Scan lockfiles
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
