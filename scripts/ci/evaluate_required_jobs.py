@@ -16,6 +16,30 @@ from pathlib import Path
 from typing import Any
 
 
+REQUIRED_CI_JOBS = frozenset(
+    {
+        "detect",
+        "tests",
+        "tests-os",
+        "lint",
+        "js-tests",
+        "installer-tests",
+        "rust-tests",
+        "e2e-desktop",
+        "docs-site",
+        "history-check",
+        "contributor-check",
+        "uv-lockfile",
+        "infographic-check",
+        "lockfile-diff",
+        "docker-lint",
+        "supply-chain",
+        "review-labels",
+        "osv-scanner",
+    }
+)
+
+
 @dataclass(frozen=True)
 class Evaluation:
     compact: dict[str, str]
@@ -24,16 +48,22 @@ class Evaluation:
 
 def _result(info: object) -> str:
     if not isinstance(info, dict):
-        return "missing"
+        return "invalid"
     result = info.get("result")
-    return result if isinstance(result, str) and result else "missing"
+    return result if isinstance(result, str) and result else "invalid"
 
 
 def evaluate_required_jobs(
-    needs: dict[str, object], *, allowed_skips: set[str]
+    needs: dict[str, object],
+    *,
+    allowed_skips: set[str],
+    required_jobs: frozenset[str] = REQUIRED_CI_JOBS,
 ) -> Evaluation:
-    """Evaluate concrete job results, allowing only named conditional skips."""
-    compact = {name: _result(info) for name, info in sorted(needs.items())}
+    """Evaluate the complete required set, allowing only named conditional skips."""
+    names = sorted(set(needs) | required_jobs)
+    compact = {
+        name: _result(needs[name]) if name in needs else "missing" for name in names
+    }
     failed = tuple(
         name
         for name, result in compact.items()
@@ -99,6 +129,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--needs-json", required=True)
     parser.add_argument("--github-output", type=Path)
     parser.add_argument(
+        "--required-job",
+        action="append",
+        default=[],
+        help="required dependency name (repeat for strict sub-workflow gates)",
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help="allow no skipped jobs (for required dependency-gate workflows)",
@@ -117,8 +153,17 @@ def main() -> int:
         print("::error::needs JSON must be an object")
         return 1
 
+    if args.strict and not args.required_job:
+        print("::error::strict evaluation requires at least one --required-job")
+        return 1
+
     allowed_skips = set() if args.strict else allowed_ci_skips(needs)
-    evaluation = evaluate_required_jobs(needs, allowed_skips=allowed_skips)
+    required_jobs = frozenset(args.required_job) if args.strict else REQUIRED_CI_JOBS
+    evaluation = evaluate_required_jobs(
+        needs,
+        allowed_skips=allowed_skips,
+        required_jobs=required_jobs,
+    )
     compact_json = json.dumps(evaluation.compact, separators=(",", ":"))
     print(f"needs-json={compact_json}")
 

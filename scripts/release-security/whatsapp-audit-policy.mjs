@@ -22,6 +22,53 @@ function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+function sameValue(actual, expected) {
+  return JSON.stringify(actual) === JSON.stringify(expected)
+}
+
+function validateCounts(counts, vulnerabilities, errors) {
+  const severities = ['info', 'low', 'moderate', 'high', 'critical']
+  const expectedKeys = [...severities, 'total'].sort()
+  if (!sameValue(Object.keys(counts).sort(), expectedKeys)) {
+    errors.push('audit metadata vulnerability counts have missing or unexpected fields')
+  }
+
+  for (const severity of [...severities, 'total']) {
+    const count = counts[severity]
+    if (!Number.isInteger(count) || count < 0) {
+      errors.push(`invalid audit metadata count for ${severity}`)
+    }
+  }
+
+  const derived = Object.fromEntries(severities.map(severity => [severity, 0]))
+  for (const [name, finding] of Object.entries(vulnerabilities)) {
+    if (!isRecord(finding) || !severities.includes(finding.severity)) {
+      errors.push(`${name} vulnerability finding has a missing or invalid severity`)
+      continue
+    }
+    derived[finding.severity] += 1
+  }
+
+  for (const severity of severities) {
+    if (Number.isInteger(counts[severity]) && counts[severity] !== derived[severity]) {
+      errors.push(`audit metadata ${severity} count ${counts[severity]} does not match findings ${derived[severity]}`)
+    }
+  }
+
+  if (Number.isInteger(counts.total) && counts.total !== Object.keys(vulnerabilities).length) {
+    errors.push(
+      `audit metadata total ${counts.total} does not match vulnerability map size ${Object.keys(vulnerabilities).length}`
+    )
+  }
+  if (
+    severities.every(severity => Number.isInteger(counts[severity])) &&
+    Number.isInteger(counts.total) &&
+    counts.total !== severities.reduce((total, severity) => total + counts[severity], 0)
+  ) {
+    errors.push('audit metadata total does not equal the sum of severity counts')
+  }
+}
+
 export function validateWhatsAppLock(lock) {
   const errors = []
   const packages = isRecord(lock?.packages) ? lock.packages : null
@@ -57,6 +104,10 @@ export function evaluateProductionAuditReport(report, lock) {
   const counts = isRecord(report?.metadata?.vulnerabilities) ? report.metadata.vulnerabilities : {}
   const vulnerabilities = isRecord(report?.vulnerabilities) ? report.vulnerabilities : {}
 
+  if (!isRecord(report)) {
+    errors.push('audit report is malformed')
+  }
+
   if (!isRecord(report?.metadata?.vulnerabilities)) {
     errors.push('missing audit metadata vulnerability counts')
   }
@@ -65,18 +116,11 @@ export function evaluateProductionAuditReport(report, lock) {
     errors.push('missing vulnerability map')
   }
 
-  for (const severity of ['info', 'low', 'moderate', 'high', 'critical', 'total']) {
-    const count = counts[severity]
-    if (!Number.isInteger(count) || count < 0) {
-      errors.push(`invalid audit metadata count for ${severity}`)
-    }
+  if (report?.auditReportVersion !== 2) {
+    errors.push('missing or unsupported audit report version')
   }
 
-  if (Number.isInteger(counts.total) && counts.total !== Object.keys(vulnerabilities).length) {
-    errors.push(
-      `audit metadata total ${counts.total} does not match vulnerability map size ${Object.keys(vulnerabilities).length}`
-    )
-  }
+  validateCounts(counts, vulnerabilities, errors)
 
   for (const name of Object.keys(vulnerabilities)) {
     errors.push(`production vulnerability: ${name}`)

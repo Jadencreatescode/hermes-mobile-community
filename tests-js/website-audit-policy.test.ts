@@ -43,6 +43,30 @@ function cleanReport() {
   }
 }
 
+function driftFindingField(finding: AuditFinding, field: string): unknown {
+  const value = finding[field]
+
+  if (field === 'severity') {
+    return value === 'high' ? 'moderate' : 'high'
+  }
+
+  if (field === 'isDirect') {
+    return !value
+  }
+
+  if (field === 'via' || field === 'effects' || field === 'nodes') {
+    return [...value as unknown[], `unreviewed-${field}`]
+  }
+
+  if (field === 'fixAvailable') {
+    return typeof value === 'boolean'
+      ? !value
+      : { ...(value as Record<string, unknown>), unexpected: true }
+  }
+
+  return `${String(value)}-drift`
+}
+
 describe('website npm audit policy', () => {
   test('accepts the no-patch braces closure against the repository lock', () => {
     assert.deepEqual(evaluateWebsiteAuditReport(knownReport(), repositoryLock), {
@@ -81,6 +105,95 @@ describe('website npm audit policy', () => {
 
     assert.equal(result.passed, false)
     assert.match(result.errors.join('\n'), /braces.*advisory.*provenance/i)
+  })
+
+  test('rejects malformed, omitted, and drifted values for every field of every retained finding', () => {
+    const fields = ['name', 'severity', 'isDirect', 'via', 'effects', 'range', 'nodes', 'fixAvailable']
+
+    for (const name of Object.keys(knownReport().vulnerabilities)) {
+      for (const field of fields) {
+        for (const mode of ['omitted', 'malformed', 'drift'] as const) {
+          const report = knownReport()
+          const finding = report.vulnerabilities[name]
+
+          if (mode === 'omitted') {
+            delete finding[field]
+          } else {
+            finding[field] = mode === 'malformed' ? null : driftFindingField(finding, field)
+          }
+
+          assert.equal(
+            evaluateWebsiteAuditReport(report, repositoryLock).passed,
+            false,
+            `${name} ${field} ${mode} value was accepted`
+          )
+        }
+      }
+    }
+  }, 30_000)
+
+  test.each([null, [], '', 0])('rejects malformed or truncated report payload %j', report => {
+    assert.equal(
+      evaluateWebsiteAuditReport(report as unknown as Record<string, unknown>, repositoryLock).passed,
+      false
+    )
+  })
+
+  test('rejects unsupported versions and internally inconsistent metadata counts', () => {
+    const reports = [
+      (() => {
+        const report = knownReport()
+        delete report.auditReportVersion
+
+        return report
+      })(),
+      (() => {
+        const report = knownReport()
+        report.auditReportVersion = 3
+
+        return report
+      })(),
+      (() => {
+        const report = knownReport()
+        report.auditReportVersion = '2'
+
+        return report
+      })(),
+      (() => {
+        const report = knownReport()
+        report.metadata.vulnerabilities.high -= 1
+
+        return report
+      })(),
+      (() => {
+        const report = knownReport()
+        report.metadata.vulnerabilities.total -= 1
+
+        return report
+      })(),
+      (() => {
+        const report = knownReport()
+        delete report.metadata.vulnerabilities.info
+
+        return report
+      })(),
+      (() => {
+        const report = knownReport()
+        report.metadata.vulnerabilities.unexpected = 0
+
+        return report
+      })(),
+      (() => {
+        const report = knownReport() as { metadata: { vulnerabilities: Record<string, unknown> } }
+        report.metadata.vulnerabilities.high = '30'
+
+        return report
+      })()
+    ]
+
+    for (const report of reports) {
+      assert.equal(evaluateWebsiteAuditReport(report, repositoryLock).passed, false)
+    }
   })
 
   test('binds every allowed finding to its exact lock artifact', () => {

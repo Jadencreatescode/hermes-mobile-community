@@ -437,6 +437,13 @@ function validateCounts(counts, vulnerabilities, errors) {
   if (Number.isInteger(counts.total) && counts.total !== Object.keys(vulnerabilities).length) {
     errors.push(`audit metadata total ${counts.total} does not match vulnerability map size ${Object.keys(vulnerabilities).length}`)
   }
+  if (
+    severities.every(severity => Number.isInteger(counts[severity])) &&
+    Number.isInteger(counts.total) &&
+    counts.total !== severities.reduce((total, severity) => total + counts[severity], 0)
+  ) {
+    errors.push('audit metadata total does not equal the sum of severity counts')
+  }
   if (Number(counts.critical ?? 0) > 0) errors.push(`critical advisories are never allowed: ${counts.critical}`)
 }
 
@@ -469,19 +476,14 @@ function validateFinding(name, finding, policy, errors) {
     if (!sameArrayMembers(finding.via, expectedVia)) errors.push(`${name} via fan-out differs from the reviewed closure`)
   }
 
-  for (const field of ['name', 'severity', 'isDirect', 'range', 'nodes']) {
-    const matches = field === 'nodes'
+  for (const field of ['name', 'severity', 'isDirect', 'effects', 'range', 'nodes', 'fixAvailable']) {
+    const matches = field === 'effects' || field === 'nodes'
       ? sameArrayMembers(finding[field], policy.finding[field])
       : sameValue(finding[field], policy.finding[field])
     if (!matches) {
       errors.push(`${name} audit field ${field} differs from the reviewed finding`)
     }
   }
-  if (!Array.isArray(finding.effects)) errors.push(`${name} audit effects are malformed`)
-  if (!(typeof finding.fixAvailable === 'boolean' || isRecord(finding.fixAvailable))) {
-    errors.push(`${name} audit fixAvailable is malformed`)
-  }
-
   const expectedKeys = Object.keys(policy.finding).sort()
   const actualKeys = Object.keys(finding).sort()
   if (!sameValue(actualKeys, expectedKeys)) errors.push(`${name} finding has missing or unexpected fields`)
@@ -493,6 +495,7 @@ export function evaluateAuditReport(report, lock) {
   const vulnerabilities = isRecord(report?.vulnerabilities) ? report.vulnerabilities : {}
   const packages = isRecord(lock?.packages) ? lock.packages : {}
 
+  if (!isRecord(report)) errors.push('audit report is malformed')
   if (!isRecord(report?.metadata?.vulnerabilities)) errors.push('missing audit metadata vulnerability counts')
   if (!isRecord(report?.vulnerabilities)) errors.push('missing vulnerability map')
   if (!isRecord(lock?.packages)) errors.push('missing lockfile package map')

@@ -136,4 +136,7 @@ jobs:
         run: >-
           python3 scripts/ci/evaluate_required_jobs.py
           --strict
+          --required-job whatsapp-production-audit
+          --required-job scan
+          --required-job emit-status
           --needs-json "$NEEDS"

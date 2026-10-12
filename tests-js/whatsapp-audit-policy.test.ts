@@ -14,6 +14,7 @@ const repositoryLock = JSON.parse(
 
 function cleanReport() {
   return {
+    auditReportVersion: 2,
     metadata: {
       vulnerabilities: { critical: 0, high: 0, moderate: 0, low: 0, info: 0, total: 0 }
     },
@@ -75,6 +76,68 @@ describe('WhatsApp production npm audit policy', () => {
     assert.equal(result.passed, false)
     assert.match(result.errors.join('\n'), /missing audit metadata/i)
     assert.match(result.errors.join('\n'), /missing vulnerability map/i)
+  })
+
+  test.each([undefined, 1, 3, '2'])('rejects unsupported audit report version %j', version => {
+    const report: Record<string, unknown> = cleanReport()
+
+    if (version === undefined) {delete report.auditReportVersion}
+    else {report.auditReportVersion = version}
+
+    const result = evaluateProductionAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /unsupported audit report version/i)
+  })
+
+  test('rejects contradictory severity counts even when total and findings are zero', () => {
+    const report = cleanReport()
+    report.metadata.vulnerabilities.low = 1
+
+    const result = evaluateProductionAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /low count 1 does not match findings 0/i)
+  })
+
+  test('rejects missing, extra, malformed, and non-additive metadata counts', () => {
+    const reports = [
+      (() => {
+        const report = cleanReport()
+        delete (report.metadata.vulnerabilities as Partial<Record<string, number>>).info
+
+        return report
+      })(),
+      (() => {
+        const report = cleanReport() as { metadata: { vulnerabilities: Record<string, unknown> } }
+        report.metadata.vulnerabilities.unknown = 0
+
+        return report
+      })(),
+      (() => {
+        const report = cleanReport() as { metadata: { vulnerabilities: Record<string, unknown> } }
+        report.metadata.vulnerabilities.high = '0'
+
+        return report
+      })(),
+      (() => {
+        const report = cleanReport()
+        report.metadata.vulnerabilities.total = 1
+
+        return report
+      })()
+    ]
+
+    for (const report of reports) {
+      assert.equal(evaluateProductionAuditReport(report, repositoryLock).passed, false)
+    }
+  })
+
+  test.each([null, [], '', 0])('rejects malformed or truncated report payload %j', report => {
+    assert.equal(
+      evaluateProductionAuditReport(report as unknown as Record<string, unknown>, repositoryLock).passed,
+      false
+    )
   })
 
   test('rejects a lockfile without a package map', () => {
