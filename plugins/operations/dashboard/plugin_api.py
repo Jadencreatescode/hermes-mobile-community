@@ -1183,6 +1183,16 @@ class RoomTurnRequest(BaseModel):
     request_id: str = Field(min_length=1, max_length=256)
 
 
+def _room_turn_dispatch_id(room_id: str, request_id: str) -> str:
+    """Derive a bounded connector identity without truncating room identity."""
+    framed = bytearray(b"hermes.operations.room-turn.dispatch.v1\0")
+    for value in (room_id, request_id):
+        encoded = value.encode("utf-8")
+        framed.extend(len(encoded).to_bytes(4, "big"))
+        framed.extend(encoded)
+    return f"room-turn-{hashlib.sha256(framed).hexdigest()}"
+
+
 def _room_error(exc: Exception) -> HTTPException:
     if isinstance(exc, HTTPException):
         return exc
@@ -1318,7 +1328,7 @@ def run_room_turn(request: Request, room_id: str, body: RoomTurnRequest):
             principal=principal,
             agent_id=body.agent_id,
             message=body.message,
-            request_id=f"room-{room_id}-{body.request_id}",
+            request_id=_room_turn_dispatch_id(room_id, body.request_id),
         )
         return store.complete_turn(
             room_id,

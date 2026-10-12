@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import hashlib
 import importlib.util
 import sys
 import threading
@@ -51,6 +52,66 @@ async def request_json(app: FastAPI, method: str, path: str, payload=None):
         transport=transport, base_url="http://operations.test"
     ) as client:
         return await client.request(method, path, json=payload)
+
+
+def _room_turn_test_app(tmp_path, monkeypatch):
+    from plugins.harness_agents.registry import HarnessRegistry
+    from plugins.harness_agents.rooms import RoomStore
+
+    api = load_api()
+    monkeypatch.setattr(api, "get_hermes_home", lambda: tmp_path)
+    app = FastAPI()
+    app.state.auth_required = False
+    app.include_router(api.router)
+
+    registry = HarnessRegistry(tmp_path / "operations" / "harness_agents.db")
+    registry.create_agent(agent_template("a2a:review"))
+    registry.mark_verified(
+        "a2a:review",
+        native_agent_id="review",
+        native_session_id="ctx",
+        mirror_session_id="mirror",
+        capabilities=["agent.view", "chat.send"],
+        supported_operations=["send"],
+    )
+    rooms = RoomStore(tmp_path / "operations" / "rooms.db")
+    room = rooms.create("Idempotency", created_by="owner")
+    rooms.add_member(room["id"], "a2a:review", registry=registry)
+    rooms.hand_off(room["id"], "a2a:review")
+    registry.close()
+    return app, rooms, room["id"]
+
+
+def _expected_room_dispatch_id(room_id: str, request_id: str) -> str:
+    framed = bytearray(b"hermes.operations.room-turn.dispatch.v1\0")
+    for value in (room_id, request_id):
+        encoded = value.encode("utf-8")
+        framed.extend(len(encoded).to_bytes(4, "big"))
+        framed.extend(encoded)
+    return f"room-turn-{hashlib.sha256(framed).hexdigest()}"
+
+
+def _record_room_dispatches(monkeypatch, *, reply_prefix: str = "Reply to") -> list[str]:
+    from plugins.harness_agents import connectors
+
+    dispatches: list[str] = []
+
+    class FakeConnector:
+        def __init__(self, **_kwargs):
+            pass
+
+        def send(self, message, *, native_session_id, request_id):
+            dispatches.append(request_id)
+            return {
+                "reply": f"{reply_prefix} {message}",
+                "state": "completed",
+                "native_session_id": native_session_id,
+                "native_task_id": f"task-{len(dispatches)}",
+                "connector_event_id": request_id,
+            }
+
+    monkeypatch.setattr(connectors, "A2AConnector", FakeConnector)
+    return dispatches
 
 def test_authenticated_principal_ignores_forwarded_network_identity():
     api = load_api()
@@ -723,6 +784,98 @@ def test_durable_chat_retries_one_request_and_serializes_each_agent(tmp_path, mo
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(another_turn, ("parallel-1", "parallel-2")))
     assert maximum_active == 1
+
+
+@pytest.mark.parametrize("request_id", ["normal-turn", "x" * 256])
+def test_room_turn_uses_bounded_dispatch_id_and_replays_committed_response(
+    tmp_path, monkeypatch, request_id
+):
+    app, _rooms, room_id = _room_turn_test_app(tmp_path, monkeypatch)
+    dispatches = _record_room_dispatches(monkeypatch)
+    payload = {
+        "agent_id": "a2a:review",
+        "message": "Check the release.",
+        "request_id": request_id,
+    }
+
+    first = asyncio.run(request_json(app, "POST", f"/rooms/{room_id}/turns", payload))
+    replay = asyncio.run(request_json(app, "POST", f"/rooms/{room_id}/turns", payload))
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert first.json()["request_id"] == request_id
+    assert first.json()["status"] == "committed"
+    assert replay.json()["request_id"] == request_id
+    assert replay.json()["status"] == "committed"
+    assert replay.json()["reply"] == first.json()["reply"]
+    assert replay.json()["floor"] == first.json()["floor"]
+    assert dispatches == [_expected_room_dispatch_id(room_id, request_id)]
+    assert len(dispatches[0]) < 256
+
+
+def test_room_turn_repairs_pending_maximum_length_request_after_boundary_failure(
+    tmp_path, monkeypatch
+):
+    app, rooms, room_id = _room_turn_test_app(tmp_path, monkeypatch)
+    request_id = "p" * 256
+    # Reproduce the old failure boundary: the room pending write committed,
+    # then the oversized composed registry identifier was rejected.
+    pending = rooms.begin_turn(
+        room_id,
+        request_id=request_id,
+        agent_id="a2a:review",
+        message="Repair the pending boundary.",
+    )
+    assert pending["status"] == "pending"
+    dispatches = _record_room_dispatches(monkeypatch, reply_prefix="Repaired:")
+
+    response = asyncio.run(
+        request_json(
+            app,
+            "POST",
+            f"/rooms/{room_id}/turns",
+            {
+                "agent_id": "a2a:review",
+                "message": "Repair the pending boundary.",
+                "request_id": request_id,
+            },
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "committed"
+    assert response.json()["request_id"] == request_id
+    assert dispatches == [_expected_room_dispatch_id(room_id, request_id)]
+
+
+def test_room_turn_dispatch_digest_does_not_truncate_colliding_prefixes(
+    tmp_path, monkeypatch
+):
+    app, _rooms, room_id = _room_turn_test_app(tmp_path, monkeypatch)
+    request_ids = ("z" * 255 + "a", "z" * 255 + "b")
+    dispatches = _record_room_dispatches(monkeypatch)
+
+    for index, request_id in enumerate(request_ids):
+        response = asyncio.run(
+            request_json(
+                app,
+                "POST",
+                f"/rooms/{room_id}/turns",
+                {
+                    "agent_id": "a2a:review",
+                    "message": f"Message {index}",
+                    "request_id": request_id,
+                },
+            )
+        )
+        assert response.status_code == 200
+
+    assert dispatches == [
+        _expected_room_dispatch_id(room_id, request_id) for request_id in request_ids
+    ]
+    assert dispatches[0] != dispatches[1]
+
+
 def test_room_floor_is_enforced_and_owner_can_take_it_back(tmp_path):
     from plugins.harness_agents.registry import HarnessRegistry
     from plugins.harness_agents.rooms import RoomStore
