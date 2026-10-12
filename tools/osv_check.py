@@ -5,7 +5,7 @@ Vulnerabilities) API to check if the package has any known malware advisories
 (MAL-* IDs).  Regular CVEs are ignored — only confirmed malware is blocked.
 
 The API is free, public, and maintained by Google.  Typical latency is ~300ms.
-Fail-open: network errors allow the package to proceed.
+Fail-closed: if OSV cannot produce a verdict, the package is not launched.
 
 Inspired by Block/goose's extension malware check.
 """
@@ -31,8 +31,8 @@ _TIMEOUT = 10  # seconds
 # incident logged 779K api.osv.dev DNS queries in 16h from revival loops.
 # Malware advisories don't appear or vanish on second-to-second timescales,
 # so a successful verdict (clean OR blocked) is reusable. Network failures
-# are NOT cached: fail-open already covers them, and caching a failure could
-# mask a real advisory once connectivity returns.
+# are NOT cached: callers fail closed for that attempt, and caching a failure
+# would keep blocking after connectivity returns.
 _CACHE_TTL_S = float(os.getenv("OSV_CHECK_CACHE_TTL", "3600"))
 _CACHE_MAX_ENTRIES = 256
 _cache: dict = {}
@@ -72,8 +72,8 @@ def check_package_for_malware(
     package name and ecosystem.  Queries the OSV API for MAL-* advisories.
 
     Returns:
-        An error message string if malware is found, or None if clean/unknown.
-        Returns None (allow) on network errors or unrecognized commands.
+        An error message string if malware is found or OSV cannot produce a
+        verdict, or None if clean. Unrecognized commands are not checked.
     """
     ecosystem = _infer_ecosystem(command)
     if not ecosystem:
@@ -91,10 +91,14 @@ def check_package_for_malware(
     try:
         malware = _query_osv(package, ecosystem, version)
     except Exception as exc:
-        # Fail-open: network errors, timeouts, parse failures → allow.
-        # Deliberately NOT cached — see _CACHE_TTL_S comment.
-        logger.debug("OSV check failed for %s/%s (allowing): %s", ecosystem, package, exc)
-        return None
+        # A missing verdict cannot prove that an untrusted package is clean.
+        # Deliberately NOT cached so a restored OSV service is retried on the
+        # next launch attempt. Keep exception details in logs, not user output.
+        logger.warning("OSV check failed for %s/%s (blocking): %s", ecosystem, package, exc)
+        return (
+            f"BLOCKED: Package '{package}' ({ecosystem}) could not be verified "
+            "against the OSV malware database. Retry when OSV is reachable."
+        )
 
     if malware:
         ids = ", ".join(m["id"] for m in malware[:3])

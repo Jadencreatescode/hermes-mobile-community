@@ -3,30 +3,98 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
+// sprintf-js 1.1.3 has no patched 1.x release. It is reachable only through
+// Electron Builder's development-only packaging path. Keep this exception
+// closed over the exact audit fan-out, lockfile nodes, registry artifacts, and
+// dependency edges so any new advisory, runtime path, or graph drift fails.
 const POLICIES = {
-  electron: {
-    allowedAdvisories: new Set([
-      'https://github.com/advisories/GHSA-9f4c-93c8-jc8g',
-      'https://github.com/advisories/GHSA-r4w5-6pfg-jxp5'
+  '@electron/get': {
+    allowedAdvisories: new Set(),
+    allowedEdges: new Set([
+      'apps/desktop/node_modules/electron:dependencies',
+      'node_modules/app-builder-lib:dependencies'
     ]),
-    allowedEdges: new Set(['apps/desktop:devDependencies']),
-    allowedReferences: new Set(['extract-zip']),
-    allowedNodes: new Set(['apps/desktop/node_modules/electron']),
-    expectedIntegrity: 'sha512-Xj3Hy0Imbu4g0gDIW55w/jJYz94nMO2JRSGYA3LyAn5SwaERCelgZrA21vfH+Bi//SWAWQXddHsMwCqauyMT8g==',
-    expectedResolved: 'https://registry.npmjs.org/electron/-/electron-40.10.2.tgz',
-    expectedVersion: '40.10.2'
+    allowedReferences: new Set(['global-agent']),
+    allowedNodes: new Set(['node_modules/app-builder-lib/node_modules/@electron/get']),
+    expectedIntegrity: 'sha512-F+nKc0xW+kVbBRhFzaMgPy3KwmuNTYX1fx6+FxxoSnNgwYX6LD7AKBTWkU0MQ6IBoe7dz069CNkR673sPAgkCQ==',
+    expectedResolved: 'https://registry.npmjs.org/@electron/get/-/get-3.1.0.tgz',
+    expectedVersion: '3.1.0'
   },
-  'extract-zip': {
-    allowedAdvisories: new Set([
-      'https://github.com/advisories/GHSA-jmr9-qjv8-65gv',
-      'https://github.com/advisories/GHSA-7pqw-9j4j-h8q3'
+  'app-builder-lib': {
+    allowedAdvisories: new Set(),
+    allowedEdges: new Set([
+      'node_modules/dmg-builder:dependencies',
+      'node_modules/electron-builder:dependencies',
+      'node_modules/electron-builder-squirrel-windows:dependencies'
     ]),
-    allowedEdges: new Set(['apps/desktop/node_modules/electron:dependencies']),
+    allowedReferences: new Set([
+      '@electron/get',
+      'dmg-builder',
+      'electron-builder-squirrel-windows'
+    ]),
+    allowedNodes: new Set(['node_modules/app-builder-lib']),
+    expectedIntegrity: 'sha512-2VnyWkqsP5v5XbBhL3tD5Syx8iNPBYsoU7kY4S2fz7wg8Rj/nztWKCUzGKaFRTv0Xwf3/H058CR1Kvtd/3lRow==',
+    expectedResolved: 'https://registry.npmjs.org/app-builder-lib/-/app-builder-lib-26.15.3.tgz',
+    expectedVersion: '26.15.3'
+  },
+  'dmg-builder': {
+    allowedAdvisories: new Set(),
+    allowedEdges: new Set([
+      'node_modules/app-builder-lib:peerDependencies',
+      'node_modules/electron-builder:dependencies'
+    ]),
+    allowedReferences: new Set(['app-builder-lib']),
+    allowedNodes: new Set(['node_modules/dmg-builder']),
+    expectedIntegrity: 'sha512-O3zJUFUYHJKgzPqioHxfxzBzlSC1eXCSr79gMSBKBP5AgjjpmrydMsMLotEg9fAJF36vdUncb+4ndRNxoPdlSQ==',
+    expectedResolved: 'https://registry.npmjs.org/dmg-builder/-/dmg-builder-26.15.3.tgz',
+    expectedVersion: '26.15.3'
+  },
+  'electron-builder': {
+    allowedAdvisories: new Set(),
+    allowedEdges: new Set(['apps/desktop:devDependencies']),
+    allowedReferences: new Set(['app-builder-lib', 'dmg-builder']),
+    allowedNodes: new Set(['node_modules/electron-builder']),
+    expectedIntegrity: 'sha512-a1KM5heqS3gQCZzizXEI8RjJy3QVogULPdeSknt76uLDpBIW/HDGsMg/XgP0riP6PI9COsRvFITKKGDqA8fJxA==',
+    expectedResolved: 'https://registry.npmjs.org/electron-builder/-/electron-builder-26.15.3.tgz',
+    expectedVersion: '26.15.3'
+  },
+  'electron-builder-squirrel-windows': {
+    allowedAdvisories: new Set(),
+    allowedEdges: new Set(['node_modules/app-builder-lib:peerDependencies']),
+    allowedReferences: new Set(['app-builder-lib']),
+    allowedNodes: new Set(['node_modules/electron-builder-squirrel-windows']),
+    expectedIntegrity: 'sha512-Jc19XPV9y9+2bAdZPkXuVNGNIEFBq9poHC61l8Kv6FdK7DRG3+Ic0rerC0DXOaeHNz8yW0fg/JnF8GQROOF5MA==',
+    expectedResolved: 'https://registry.npmjs.org/electron-builder-squirrel-windows/-/electron-builder-squirrel-windows-26.15.3.tgz',
+    expectedVersion: '26.15.3'
+  },
+  'global-agent': {
+    allowedAdvisories: new Set(),
+    allowedEdges: new Set(['node_modules/app-builder-lib/node_modules/@electron/get:optionalDependencies']),
+    allowedReferences: new Set(['roarr']),
+    allowedNodes: new Set(['node_modules/global-agent']),
+    expectedIntegrity: 'sha512-PT6XReJ+D07JvGoxQMkT6qji/jVNfX/h364XHZOWeRzy64sSFr+xJ5OX7LI3b4MPQzdL4H8Y8M0xzPpsVMwA8Q==',
+    expectedResolved: 'https://registry.npmjs.org/global-agent/-/global-agent-3.0.0.tgz',
+    expectedVersion: '3.0.0'
+  },
+  roarr: {
+    allowedAdvisories: new Set(),
+    allowedEdges: new Set(['node_modules/global-agent:dependencies']),
+    allowedReferences: new Set(['sprintf-js']),
+    allowedNodes: new Set(['node_modules/roarr']),
+    expectedIntegrity: 'sha512-CHhPh+UNHD2GTXNYhPWLnU8ONHdI+5DI+4EYIAOaiD63rHeYlZvyh8P+in5999TTSFgUYuKUAjzRI4mdh/p+2A==',
+    expectedResolved: 'https://registry.npmjs.org/roarr/-/roarr-2.15.4.tgz',
+    expectedVersion: '2.15.4'
+  },
+  'sprintf-js': {
+    allowedAdvisories: new Set([
+      'https://github.com/advisories/GHSA-hp3w-g68c-fv3c'
+    ]),
+    allowedEdges: new Set(['node_modules/roarr:dependencies']),
     allowedReferences: new Set(),
-    allowedNodes: new Set(['node_modules/extract-zip']),
-    expectedIntegrity: 'sha512-GDhU9ntwuKyGXdZBUgTIe+vXnWj0fppUEtMDL0+idd5Sta8TGpHssn/eusA9mrPr9qNDym6SxAYZjNvCn/9RBg==',
-    expectedResolved: 'https://registry.npmjs.org/extract-zip/-/extract-zip-2.0.1.tgz',
-    expectedVersion: '2.0.1'
+    allowedNodes: new Set(['node_modules/sprintf-js']),
+    expectedIntegrity: 'sha512-Oo+0REFV59/rz3gfJNKQiBlwfHaSESl1pcGyABQsnnIfWOFt6JNj5gCog2U6MLZ//IGYD+nA8nI+mTShREReaA==',
+    expectedResolved: 'https://registry.npmjs.org/sprintf-js/-/sprintf-js-1.1.3.tgz',
+    expectedVersion: '1.1.3'
   }
 }
 
@@ -151,7 +219,7 @@ export function evaluateAuditReport(report, lock) {
     const via = Array.isArray(finding?.via) ? finding.via : []
     const advisoryDetails = via.filter(source => typeof source !== 'string')
 
-    if (advisoryDetails.length === 0) {
+    if (policy.allowedAdvisories.size > 0 && advisoryDetails.length === 0) {
       errors.push(`${name} has no advisory details to validate`)
     }
 
@@ -215,7 +283,7 @@ function run() {
     console.log('npm audit policy passed with no known vulnerabilities')
   } else {
     console.log(
-      `npm audit policy passed with ${total} documented development only Electron findings`
+      `npm audit policy passed with ${total} documented development-only sprintf-js transitive findings`
     )
   }
 }

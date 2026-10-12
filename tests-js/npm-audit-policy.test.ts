@@ -1,83 +1,81 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 
 import { describe, test } from 'vitest'
 
 import { evaluateAuditReport } from '../scripts/release-security/npm-audit-policy.mjs'
 
-const electronUrl = 'https://github.com/advisories/GHSA-9f4c-93c8-jc8g'
-const protocolUrl = 'https://github.com/advisories/GHSA-r4w5-6pfg-jxp5'
-const extractUrl = 'https://github.com/advisories/GHSA-jmr9-qjv8-65gv'
-const extractWriteUrl = 'https://github.com/advisories/GHSA-7pqw-9j4j-h8q3'
+const sprintfUrl = 'https://github.com/advisories/GHSA-hp3w-g68c-fv3c'
 
-type LockPackage = {
-  dependencies?: Record<string, string>
-  devDependencies?: Record<string, string>
-  dev?: boolean
-  integrity?: string
-  resolved?: string
-  version?: string
-}
+const repositoryLock = JSON.parse(
+  fs.readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8')
+) as Record<string, unknown>
 
 function knownReport() {
   return {
     metadata: {
-      vulnerabilities: { critical: 0, high: 2, moderate: 0, low: 0, info: 0, total: 2 }
+      vulnerabilities: { critical: 0, high: 0, moderate: 8, low: 0, info: 0, total: 8 }
     },
     vulnerabilities: {
-      electron: {
-        severity: 'high',
-        nodes: ['apps/desktop/node_modules/electron'],
-        via: [
-          { severity: 'high', url: electronUrl },
-          { severity: 'moderate', url: protocolUrl },
-          'extract-zip'
-        ]
+      '@electron/get': {
+        severity: 'moderate',
+        nodes: ['node_modules/app-builder-lib/node_modules/@electron/get'],
+        via: ['global-agent']
       },
-      'extract-zip': {
-        severity: 'high',
-        nodes: ['node_modules/extract-zip'],
-        via: [
-          { severity: 'high', url: extractUrl },
-          { severity: 'high', url: extractWriteUrl }
-        ]
+      'app-builder-lib': {
+        severity: 'moderate',
+        nodes: ['node_modules/app-builder-lib'],
+        via: ['@electron/get', 'dmg-builder', 'electron-builder-squirrel-windows']
+      },
+      'dmg-builder': {
+        severity: 'moderate',
+        nodes: ['node_modules/dmg-builder'],
+        via: ['app-builder-lib']
+      },
+      'electron-builder': {
+        severity: 'moderate',
+        nodes: ['node_modules/electron-builder'],
+        via: ['app-builder-lib', 'dmg-builder']
+      },
+      'electron-builder-squirrel-windows': {
+        severity: 'moderate',
+        nodes: ['node_modules/electron-builder-squirrel-windows'],
+        via: ['app-builder-lib']
+      },
+      'global-agent': {
+        severity: 'moderate',
+        nodes: ['node_modules/global-agent'],
+        via: ['roarr']
+      },
+      roarr: {
+        severity: 'moderate',
+        nodes: ['node_modules/roarr'],
+        via: ['sprintf-js']
+      },
+      'sprintf-js': {
+        severity: 'moderate',
+        nodes: ['node_modules/sprintf-js'],
+        via: [{ severity: 'moderate', url: sprintfUrl }]
       }
     }
   }
 }
 
-function developmentLock(): { packages: Record<string, LockPackage> } {
-  return {
-    packages: {
-      '': {},
-      'apps/desktop': { devDependencies: { electron: '40.10.2' } },
-      'apps/desktop/node_modules/electron': {
-        dependencies: { 'extract-zip': '^2.0.1' },
-        dev: true,
-        integrity: 'sha512-Xj3Hy0Imbu4g0gDIW55w/jJYz94nMO2JRSGYA3LyAn5SwaERCelgZrA21vfH+Bi//SWAWQXddHsMwCqauyMT8g==',
-        resolved: 'https://registry.npmjs.org/electron/-/electron-40.10.2.tgz',
-        version: '40.10.2'
-      },
-      'node_modules/extract-zip': {
-        dev: true,
-        integrity: 'sha512-GDhU9ntwuKyGXdZBUgTIe+vXnWj0fppUEtMDL0+idd5Sta8TGpHssn/eusA9mrPr9qNDym6SxAYZjNvCn/9RBg==',
-        resolved: 'https://registry.npmjs.org/extract-zip/-/extract-zip-2.0.1.tgz',
-        version: '2.0.1'
-      }
-    }
-  }
+function developmentLock(): Record<string, unknown> {
+  return structuredClone(repositoryLock)
 }
 
 describe('npm audit policy', () => {
-  test('accepts only the documented Electron development advisories', () => {
+  test('accepts only the exact development-only sprintf-js closure', () => {
     assert.deepEqual(evaluateAuditReport(knownReport(), developmentLock()), {
       errors: [],
       passed: true
     })
   })
 
-  test('rejects an unknown advisory even when it is transitive', () => {
+  test('rejects an unknown advisory even on an allowed package', () => {
     const report = knownReport()
-    report.vulnerabilities.electron.via.push({
+    report.vulnerabilities['sprintf-js'].via.push({
       severity: 'high',
       url: 'https://github.com/advisories/GHSA-unknown'
     })
@@ -88,9 +86,9 @@ describe('npm audit policy', () => {
     assert.match(result.errors.join('\n'), /unapproved advisory/i)
   })
 
-  test('rejects a documented package when advisory details are missing', () => {
+  test('rejects sprintf-js when its advisory details are missing', () => {
     const report = knownReport()
-    report.vulnerabilities['extract-zip'].via = []
+    report.vulnerabilities['sprintf-js'].via = []
 
     const result = evaluateAuditReport(report, developmentLock())
 
@@ -98,9 +96,9 @@ describe('npm audit policy', () => {
     assert.match(result.errors.join('\n'), /no advisory details/i)
   })
 
-  test('rejects a documented advisory when it reaches a shipped dependency', () => {
-    const lock = developmentLock()
-    lock.packages['node_modules/extract-zip'].dev = false
+  test('rejects an exception package when it becomes a shipped dependency', () => {
+    const lock = developmentLock() as { packages: Record<string, { dev?: boolean }> }
+    lock.packages['node_modules/sprintf-js'].dev = false
 
     const result = evaluateAuditReport(knownReport(), lock)
 
@@ -108,9 +106,12 @@ describe('npm audit policy', () => {
     assert.match(result.errors.join('\n'), /not development only/i)
   })
 
-  test('rejects an exception package reached through an unreviewed dependency edge', () => {
-    const lock = developmentLock()
-    lock.packages[''].devDependencies = { 'extract-zip': '2.0.1' }
+  test('rejects the exception through an unreviewed dependency edge', () => {
+    const lock = developmentLock() as {
+      packages: Record<string, { devDependencies?: Record<string, string> }>
+    }
+
+    lock.packages[''].devDependencies = { 'sprintf-js': '1.1.3' }
 
     const result = evaluateAuditReport(knownReport(), lock)
 
@@ -118,10 +119,13 @@ describe('npm audit policy', () => {
     assert.match(result.errors.join('\n'), /unreviewed dependency edge/i)
   })
 
-  test('rejects an exception package whose registry identity or integrity is missing', () => {
-    const lock = developmentLock()
-    delete lock.packages['apps/desktop/node_modules/electron'].resolved
-    delete lock.packages['node_modules/extract-zip'].integrity
+  test('rejects an exception artifact whose registry identity or integrity is missing', () => {
+    const lock = developmentLock() as {
+      packages: Record<string, { integrity?: string; resolved?: string }>
+    }
+
+    delete lock.packages['node_modules/roarr'].resolved
+    delete lock.packages['node_modules/sprintf-js'].integrity
 
     const result = evaluateAuditReport(knownReport(), lock)
 
