@@ -246,6 +246,177 @@ def test_room_store_accepts_only_verified_bots_caps_members_and_replays_turns(tm
     ]
 
 
+def test_room_member_capacity_is_atomic_under_race(tmp_path):
+    from plugins.harness_agents.rooms import RoomStore
+
+    class VerifiedRegistry:
+        @staticmethod
+        def get_agent(_agent_id):
+            return {"verification_state": "verified"}
+
+    database = tmp_path / "rooms.db"
+    rooms = RoomStore(database)
+    room = rooms.create("Capacity race", created_by="owner")
+    registry = VerifiedRegistry()
+    for index in range(5):
+        rooms.add_member(room["id"], f"a2a:existing-{index}", registry=registry)
+
+    pre_transaction_reads = threading.Barrier(2)
+
+    def add(candidate: str) -> str:
+        store = RoomStore(database)
+        original_get = store.get
+        synchronized = False
+
+        def synchronized_get(room_id):
+            nonlocal synchronized
+            result = original_get(room_id)
+            if not synchronized:
+                synchronized = True
+                pre_transaction_reads.wait()
+            return result
+
+        store.get = synchronized_get  # type: ignore[method-assign]
+        try:
+            store.add_member(room["id"], candidate, registry=registry)
+            return "added"
+        except ValueError as error:
+            assert "at most 6" in str(error)
+            return "full"
+
+    candidates = ("a2a:candidate-a", "a2a:candidate-b")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(add, candidates))
+
+    members = RoomStore(database).members(room["id"])
+    assert sorted(outcomes) == ["added", "full"]
+    assert len(members) == 6
+    assert len(set(candidates) & set(members)) == 1
+
+
+@pytest.mark.parametrize("first_writer", ["remove", "handoff"])
+def test_room_remove_and_handoff_preserve_live_floor_under_race(tmp_path, first_writer):
+    from plugins.harness_agents.rooms import RoomStore
+
+    class VerifiedRegistry:
+        @staticmethod
+        def get_agent(_agent_id):
+            return {"verification_state": "verified"}
+
+    database = tmp_path / f"rooms-{first_writer}.db"
+    rooms = RoomStore(database)
+    room = rooms.create("Floor race", created_by="owner")
+    target = "a2a:target"
+    rooms.add_member(room["id"], target, registry=VerifiedRegistry())
+
+    stale_read_complete = threading.Event()
+    allow_transaction = threading.Event()
+
+    def pause_after_first_get(store):
+        original_get = store.get
+        synchronized = False
+
+        def synchronized_get(room_id):
+            nonlocal synchronized
+            result = original_get(room_id)
+            if not synchronized:
+                synchronized = True
+                stale_read_complete.set()
+                assert allow_transaction.wait(timeout=5)
+            return result
+
+        store.get = synchronized_get  # type: ignore[method-assign]
+
+    def handoff_after_stale_read() -> str:
+        store = RoomStore(database)
+        pause_after_first_get(store)
+        try:
+            store.hand_off(room["id"], target)
+            return "handed"
+        except PermissionError:
+            return "denied"
+
+    def remove_after_stale_read() -> str:
+        store = RoomStore(database)
+        pause_after_first_get(store)
+        store.remove_member(room["id"], target)
+        return "removed"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        if first_writer == "remove":
+            future = pool.submit(handoff_after_stale_read)
+            assert stale_read_complete.wait(timeout=5)
+            RoomStore(database).remove_member(room["id"], target)
+        else:
+            future = pool.submit(remove_after_stale_read)
+            assert stale_read_complete.wait(timeout=5)
+            RoomStore(database).hand_off(room["id"], target)
+        allow_transaction.set()
+        future.result(timeout=5)
+
+    final = RoomStore(database).get(room["id"])
+    assert target not in final["members"]
+    assert final["floor"] == "owner"
+
+
+def test_room_reply_handoff_revalidates_target_under_remove_race(tmp_path):
+    from plugins.harness_agents.rooms import RoomStore
+
+    class VerifiedRegistry:
+        @staticmethod
+        def get_agent(_agent_id):
+            return {"verification_state": "verified"}
+
+    database = tmp_path / "reply-handoff-race.db"
+    rooms = RoomStore(database)
+    room = rooms.create("Reply floor race", created_by="owner")
+    speaker = "a2a:speaker"
+    target = "a2a:target"
+    for agent_id in (speaker, target):
+        rooms.add_member(room["id"], agent_id, registry=VerifiedRegistry())
+    rooms.hand_off(room["id"], speaker)
+    rooms.begin_turn(
+        room["id"], request_id="turn", agent_id=speaker, message="Review"
+    )
+
+    stale_read_complete = threading.Event()
+    allow_transaction = threading.Event()
+
+    def complete_after_stale_read():
+        store = RoomStore(database)
+        original_get = store.get
+        synchronized = False
+
+        def synchronized_get(room_id):
+            nonlocal synchronized
+            result = original_get(room_id)
+            if not synchronized:
+                synchronized = True
+                stale_read_complete.set()
+                assert allow_transaction.wait(timeout=5)
+            return result
+
+        store.get = synchronized_get  # type: ignore[method-assign]
+        return store.complete_turn(
+            room["id"],
+            request_id="turn",
+            agent_id=speaker,
+            reply=f"Done. [[handoff: {target}]]",
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(complete_after_stale_read)
+        assert stale_read_complete.wait(timeout=5)
+        RoomStore(database).remove_member(room["id"], target)
+        allow_transaction.set()
+        completed = future.result(timeout=5)
+
+    final = RoomStore(database).get(room["id"])
+    assert completed["floor"] == speaker
+    assert target not in final["members"]
+    assert final["floor"] == speaker
+
+
 def test_public_agent_dto_reports_unknown_without_fresh_evidence(tmp_path):
     api = load_api()
     from plugins.harness_agents.registry import HarnessRegistry

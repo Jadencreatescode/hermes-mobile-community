@@ -165,34 +165,64 @@ class RoomStore:
             ).fetchall()
         return [str(row["agent_id"]) for row in rows]
 
-    def add_member(self, room_id: Any, agent_id: Any, *, registry: Any) -> dict[str, Any]:
+    def add_member(
+        self, room_id: Any, agent_id: Any, *, registry: Any
+    ) -> dict[str, Any]:
         room = self.get(room_id)
         wanted = _bounded_text(agent_id, "Bot identity", 256)
-        held = list(room["members"])
-        if wanted in held:
-            return self.get(room["id"])
-        if len(held) >= MAX_ROOM_MEMBERS:
-            raise ValueError(f"a room holds at most {MAX_ROOM_MEMBERS} Bots")
-        agent = registry.get_agent(wanted)
-        if agent.get("verification_state") != "verified":
-            raise PermissionError("only a verified Bot may join a room")
         with self._connect() as connection:
-            connection.execute(
-                "INSERT INTO room_members (room_id, agent_id, position) VALUES (?, ?, ?)",
-                (room["id"], wanted, len(held)),
-            )
+            connection.execute("BEGIN IMMEDIATE")
+            live = connection.execute(
+                "SELECT 1 FROM rooms WHERE id = ?", (room["id"],)
+            ).fetchone()
+            if live is None:
+                raise LookupError("room not found")
+            existing = connection.execute(
+                "SELECT 1 FROM room_members WHERE room_id = ? AND agent_id = ?",
+                (room["id"], wanted),
+            ).fetchone()
+            if existing is None:
+                member_count = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM room_members WHERE room_id = ?",
+                        (room["id"],),
+                    ).fetchone()[0]
+                )
+                if member_count >= MAX_ROOM_MEMBERS:
+                    raise ValueError(f"a room holds at most {MAX_ROOM_MEMBERS} Bots")
+                agent = registry.get_agent(wanted)
+                if agent.get("verification_state") != "verified":
+                    raise PermissionError("only a verified Bot may join a room")
+                position = int(
+                    connection.execute(
+                        "SELECT COALESCE(MAX(position), -1) + 1 FROM room_members WHERE room_id = ?",
+                        (room["id"],),
+                    ).fetchone()[0]
+                )
+                connection.execute(
+                    "INSERT INTO room_members (room_id, agent_id, position) VALUES (?, ?, ?)",
+                    (room["id"], wanted, position),
+                )
         return self.get(room["id"])
 
     def remove_member(self, room_id: Any, agent_id: Any) -> dict[str, Any]:
         room = self.get(room_id)
         wanted = _bounded_text(agent_id, "Bot identity", 256)
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            live = connection.execute(
+                "SELECT 1 FROM rooms WHERE id = ?", (room["id"],)
+            ).fetchone()
+            if live is None:
+                raise LookupError("room not found")
             connection.execute(
                 "DELETE FROM room_members WHERE room_id = ? AND agent_id = ?",
                 (room["id"], wanted),
             )
-            if room["floor"] == wanted:
-                connection.execute("UPDATE rooms SET floor = 'owner' WHERE id = ?", (room["id"],))
+            connection.execute(
+                "UPDATE rooms SET floor = 'owner' WHERE id = ? AND floor = ?",
+                (room["id"], wanted),
+            )
         return self.get(room["id"])
 
     def _insert_message(
@@ -306,8 +336,6 @@ class RoomStore:
     ) -> dict[str, Any]:
         room = self.get(room_id)
         target = _bounded_text(agent_id, "Bot identity", 256)
-        if target != "owner" and target not in room["members"]:
-            raise PermissionError("the floor can only pass to a member of this room")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             live = connection.execute(
@@ -315,6 +343,15 @@ class RoomStore:
             ).fetchone()
             if live is None:
                 raise LookupError("room not found")
+            if target != "owner":
+                target_is_member = connection.execute(
+                    "SELECT 1 FROM room_members WHERE room_id = ? AND agent_id = ?",
+                    (room["id"], target),
+                ).fetchone()
+                if target_is_member is None:
+                    raise PermissionError(
+                        "the floor can only pass to a member of this room"
+                    )
             if actor != "owner" and live["floor"] != actor:
                 raise PermissionError("only the floor holder may hand off")
             connection.execute(
@@ -446,11 +483,18 @@ class RoomStore:
                 payload_digest=reply_digest,
             )
             floor = target
-            if (
+            wanted_is_member = bool(
                 wanted
-                and (wanted == "owner" or wanted in room["members"])
-                and wanted != target
-            ):
+                and (
+                    wanted == "owner"
+                    or connection.execute(
+                        "SELECT 1 FROM room_members WHERE room_id = ? AND agent_id = ?",
+                        (room["id"], wanted),
+                    ).fetchone()
+                    is not None
+                )
+            )
+            if wanted_is_member and wanted != target:
                 floor = wanted
                 connection.execute(
                     "UPDATE rooms SET floor = ? WHERE id = ?", (floor, room["id"])

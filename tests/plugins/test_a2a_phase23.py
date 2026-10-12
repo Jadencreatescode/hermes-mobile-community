@@ -209,7 +209,15 @@ class TestStreamingEndToEnd:
         from plugins.harness_agents.connectors import A2AConnector
         from tools import url_safety
 
-        adapter, base = _make_live_adapter(monkeypatch)
+        received_messages = []
+
+        def acknowledge_framed_message(event):
+            received_messages.append(event.text)
+            return "REAL V1 ADAPTER ACK"
+
+        adapter, base = _make_live_adapter(
+            monkeypatch, reply_fn=acknowledge_framed_message
+        )
 
         def allow_test_http(url, *, allowlist=None, require_https=True):
             parsed = urlsplit(url)
@@ -230,7 +238,11 @@ class TestStreamingEndToEnd:
             probe = await asyncio.to_thread(connector.probe)
             result = await asyncio.to_thread(connector.send, "real v1 round trip")
             assert probe["protocol"] == "a2a-jsonrpc-1.0"
-            assert result["reply"] == "ECHO: real v1 round trip"
+            assert result["reply"] == "REAL V1 ADAPTER ACK"
+            assert len(received_messages) == 1
+            assert "A2A inbound" in received_messages[0]
+            assert "untrusted external input" in received_messages[0]
+            assert received_messages[0].endswith("\n\nreal v1 round trip")
             assert result["native_task_id"].startswith("task-")
             assert result["native_session_id"].startswith("ctx-")
             assert result["state"] == "idle"
