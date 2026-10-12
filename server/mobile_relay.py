@@ -9,7 +9,7 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import AsyncIterator
 
-from aiohttp import ClientSession, ClientTimeout, DummyCookieJar, WSMsgType, web
+from aiohttp import ClientSession, ClientTimeout, DummyCookieJar, WSCloseCode, WSMsgType, web
 from multidict import CIMultiDict
 from yarl import URL
 
@@ -28,6 +28,10 @@ _HOP_BY_HOP = {
 _NODE_ID = re.compile(r"^[a-z0-9-]+$")
 _BACKEND_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 MAX_REQUEST_BYTES = 64 * 1024 * 1024
+# Desktop file attachments use one base64 data URL in a JSON-RPC frame. This
+# finite ceiling fits the 256 MiB raw attachment contract plus encoding and JSON
+# overhead while still bounding memory on both relay-facing sockets.
+MAX_WEBSOCKET_MESSAGE_BYTES = 384 * 1024 * 1024
 
 STATIC_ROOT = web.AppKey("static_root", Path)
 STATIC_FILES = web.AppKey("static_files", dict[str, tuple[bytes, str]])
@@ -218,11 +222,18 @@ def create_relay_app(
             headers=_forward_headers(request.headers, node_id=node_id, websocket=True, upstream=origin),
             autoping=True,
             heartbeat=30,
+            # aiohttp rejects messages whose length is >= max_msg_size, so add
+            # one to make our documented ceiling inclusive.
+            max_msg_size=MAX_WEBSOCKET_MESSAGE_BYTES + 1,
         )
-        downstream = web.WebSocketResponse(autoping=True, heartbeat=30)
+        downstream = web.WebSocketResponse(
+            autoping=True,
+            heartbeat=30,
+            max_msg_size=MAX_WEBSOCKET_MESSAGE_BYTES + 1,
+        )
         await downstream.prepare(request)
 
-        async def client_to_upstream() -> None:
+        async def client_to_upstream() -> int | None:
             async for message in downstream:
                 if message.type == WSMsgType.TEXT:
                     await upstream_ws.send_str(message.data)
@@ -230,8 +241,9 @@ def create_relay_app(
                     await upstream_ws.send_bytes(message.data)
                 elif message.type in {WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED, WSMsgType.ERROR}:
                     break
+            return downstream.close_code
 
-        async def upstream_to_client() -> None:
+        async def upstream_to_client() -> int | None:
             async for message in upstream_ws:
                 if message.type == WSMsgType.TEXT:
                     await downstream.send_str(message.data)
@@ -239,14 +251,20 @@ def create_relay_app(
                     await downstream.send_bytes(message.data)
                 elif message.type in {WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED, WSMsgType.ERROR}:
                     break
+            return upstream_ws.close_code
 
         tasks = [asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())]
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
-        await asyncio.gather(*done, *pending, return_exceptions=True)
-        await upstream_ws.close()
-        await downstream.close()
+        results = await asyncio.gather(*done, *pending, return_exceptions=True)
+        close_code = (
+            WSCloseCode.MESSAGE_TOO_BIG
+            if WSCloseCode.MESSAGE_TOO_BIG in results
+            else WSCloseCode.OK
+        )
+        await upstream_ws.close(code=close_code)
+        await downstream.close(code=close_code)
         return downstream
 
     async def proxy_websocket(request: web.Request) -> web.WebSocketResponse:
