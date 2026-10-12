@@ -87,6 +87,7 @@ describe('website npm audit policy', () => {
     const lock = structuredClone(repositoryLock) as {
       packages: Record<string, { integrity?: string; version?: string }>
     }
+
     lock.packages['node_modules/chokidar'].version = '0.0.0-drift'
     delete lock.packages['node_modules/chokidar'].integrity
 
