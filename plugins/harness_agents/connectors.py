@@ -7,6 +7,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from plugins.harness_agents.policy import fetch_agent_card, fetch_json
 
+from plugins.platforms.a2a import protocol
+
 _CONNECTOR_OPERATIONS = (
     "probe",
     "start_or_resume",
@@ -20,12 +22,48 @@ _CONNECTOR_OPERATIONS = (
     "close",
 )
 _A2A_CONTROL_METHODS = {
-    "get_state": "tasks/get",
-    "interrupt": "tasks/cancel",
-    "start_or_resume": "message/send",
-    "steer": "message/send",
+    "get_state": "GetTask",
+    "interrupt": "CancelTask",
+    "start_or_resume": "SendMessage",
+    "steer": "SendMessage",
 }
 
+
+def _normalize_task_state(value: Any) -> str:
+    state = str(value or "").strip().upper()
+    return {
+        protocol.STATE_SUBMITTED: "working",
+        "SUBMITTED": "working",
+        protocol.STATE_WORKING: "working",
+        "WORKING": "working",
+        protocol.STATE_INPUT_REQUIRED: "waiting",
+        "INPUT_REQUIRED": "waiting",
+        protocol.STATE_AUTH_REQUIRED: "blocked",
+        "AUTH_REQUIRED": "blocked",
+        protocol.STATE_COMPLETED: "idle",
+        "COMPLETED": "idle",
+        protocol.STATE_FAILED: "blocked",
+        "FAILED": "blocked",
+        protocol.STATE_CANCELED: "idle",
+        "CANCELED": "idle",
+        "CANCELLED": "idle",
+        protocol.STATE_REJECTED: "blocked",
+        "REJECTED": "blocked",
+    }.get(state, "unknown")
+
+def _unwrap_result(response: dict[str, Any], operation: str) -> dict[str, Any]:
+    if "error" in response:
+        raise RuntimeError(f"connector {operation} failed")
+    result = protocol.unwrap_send_message_response(response.get("result"))
+    if not isinstance(result, dict):
+        raise ValueError(f"connector {operation} returned an invalid result")
+    return result
+
+def _protocol_id(value: Any, label: str) -> str:
+    identifier = str(value or "").strip()
+    if len(identifier) > 512 or any(ord(character) < 32 for character in identifier):
+        raise ValueError(f"connector returned an invalid {label}")
+    return identifier
 
 @runtime_checkable
 class Connector(Protocol):
@@ -154,24 +192,25 @@ class A2AConnector:
         method = _A2A_CONTROL_METHODS.get(operation)
         if method is None:
             return self._unsupported(operation)
-        request_id = params.pop("request_id", None) or f"{operation}-{secrets.token_hex(16)}"
+        request_id = (
+            params.pop("request_id", None) or f"{operation}-{secrets.token_hex(16)}"
+        )
         native_session_id = str(params.pop("native_session_id", "") or "").strip()
+        native_task_id = str(params.pop("native_task_id", "") or "").strip()
         if operation in {"start_or_resume", "steer"}:
             prompt = str(params.pop("prompt", params.pop("message", "")) or "").strip()
             if not prompt:
                 raise ValueError(f"connector {operation} requires a message")
             rpc_params: dict[str, Any] = {
-                "message": {
-                    "role": "user",
-                    "parts": [{"type": "text", "text": prompt}],
-                },
-                "contextId": native_session_id or None,
+                "message": protocol.text_message(
+                    protocol.ROLE_USER, prompt, native_session_id
+                ),
                 "metadata": {"intent": operation},
             }
         else:
-            if not native_session_id:
+            if not native_task_id:
                 raise ValueError(f"connector {operation} requires a native task id")
-            rpc_params = {"id": native_session_id}
+            rpc_params = {"taskId": native_task_id}
         response = fetch_json(
             self._rpc_url(),
             allowlist=self._allowlist,
@@ -183,22 +222,21 @@ class A2AConnector:
                 "params": rpc_params,
             },
         )
-        if "error" in response:
-            raise RuntimeError(f"connector {operation} failed")
-        result = response.get("result")
-        if not isinstance(result, dict):
-            raise ValueError(f"connector {operation} returned an invalid result")
+        result = _unwrap_result(response, operation)
         sanitized = _sanitize_result(result)
         if not isinstance(sanitized, dict):
             raise ValueError(f"connector {operation} returned an invalid result")
-        status = sanitized.get("status")
+        status = result.get("status")
         nested_state = status.get("state") if isinstance(status, dict) else ""
-        sanitized["state"] = str(sanitized.get("state") or nested_state or "unknown")
-        sanitized["native_session_id"] = str(
-            sanitized.get("native_session_id")
-            or sanitized.get("contextId")
-            or sanitized.get("id")
-            or native_session_id
+        sanitized["state"] = _normalize_task_state(result.get("state") or nested_state)
+        sanitized["native_session_id"] = _protocol_id(
+            result.get("native_session_id")
+            or result.get("contextId")
+            or native_session_id,
+            "context id",
+        )
+        sanitized["native_task_id"] = _protocol_id(
+            result.get("id") or native_task_id, "task id"
         )
         return sanitized
 
@@ -301,7 +339,11 @@ class A2AConnector:
         }
 
     def send(
-        self, message: str, *, native_session_id: str = "", request_id: str | None = None
+        self,
+        message: str,
+        *,
+        native_session_id: str = "",
+        request_id: str | None = None,
     ) -> dict[str, str]:
         """Send one turn and preserve the peer's native A2A context id."""
         text = message.strip()
@@ -318,11 +360,9 @@ class A2AConnector:
                 "id": connector_event_id,
                 "method": "SendMessage",
                 "params": {
-                    "message": {
-                        "role": "user",
-                        "parts": [{"type": "text", "text": text}],
-                    },
-                    "contextId": native_session_id.strip() or None,
+                    "message": protocol.text_message(
+                        protocol.ROLE_USER, text, native_session_id.strip()
+                    ),
                 },
             },
         )
@@ -331,35 +371,47 @@ class A2AConnector:
             raise RuntimeError(
                 f"send failed: {err.get('message', err) if isinstance(err, dict) else err}"
             )
-        result = response.get("result", {})
+        result = _unwrap_result(response, "send")
         reply = ""
         state = ""
         context_id = native_session_id.strip()
+        task_id = ""
         if isinstance(result, dict):
+            task_id = (
+                _protocol_id(result.get("id"), "task id")
+                if result.get("status")
+                else ""
+            )
             artifacts = result.get("artifacts") or []
             for artifact in artifacts:
-                if isinstance(artifact, dict) and artifact.get("type") == "text":
-                    reply = str(artifact.get("text") or "").strip()
+                if isinstance(artifact, dict):
+                    reply = (
+                        protocol.extract_text(artifact).strip()
+                        or str(artifact.get("text") or "").strip()
+                    )
                     break
             if not reply:
                 status = result.get("status") or {}
                 msg = status.get("message")
                 if isinstance(msg, dict):
-                    reply = str(msg.get("text") or "").strip()
+                    reply = (
+                        protocol.extract_text(msg).strip()
+                        or str(msg.get("text") or "").strip()
+                    )
                 else:
                     reply = str(msg or "").strip()
-            context_id = result.get("contextId") or context_id
+            if not reply and result.get("role"):
+                reply = protocol.extract_text(result).strip()
+            context_id = _protocol_id(
+                result.get("contextId") or context_id, "context id"
+            )
             state = (result.get("status") or {}).get("state", "")
         reply = _sanitize_reply(reply)
-        normalized_state = (
-            state.replace("TASK_STATE_", "").replace("_", "-").lower()
-            if state
-            else "unknown"
-        )
         return {
             "reply": reply,
             "native_session_id": context_id,
-            "state": normalized_state,
+            "native_task_id": task_id,
+            "state": _normalize_task_state(state),
             "connector_event_id": connector_event_id,
         }
 

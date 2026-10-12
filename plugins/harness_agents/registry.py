@@ -297,6 +297,7 @@ class HarnessRegistry:
                     mirror_session_id TEXT NOT NULL,
                     expected_native_session_id TEXT NOT NULL,
                     native_session_id TEXT NOT NULL,
+                    request_digest TEXT NOT NULL DEFAULT '',
                     payload_digest TEXT NOT NULL,
                     user_message TEXT NOT NULL,
                     assistant_reply TEXT NOT NULL,
@@ -313,6 +314,7 @@ class HarnessRegistry:
                     agent_id TEXT PRIMARY KEY,
                     mirror_session_id TEXT NOT NULL,
                     native_session_id TEXT NOT NULL,
+                    native_task_id TEXT NOT NULL DEFAULT '',
                     FOREIGN KEY (agent_id) REFERENCES connected_agents(id)
                         ON DELETE CASCADE
                 );
@@ -357,7 +359,9 @@ class HarnessRegistry:
             )
             existing = {
                 row[1]
-                for row in self._connection.execute("PRAGMA table_info(connected_agents)")
+                for row in self._connection.execute(
+                    "PRAGMA table_info(connected_agents)"
+                )
             }
             additions = {
                 "instructions": "TEXT NOT NULL DEFAULT ''",
@@ -388,6 +392,24 @@ class HarnessRegistry:
                     self._connection.execute(
                         f"ALTER TABLE connected_agents ADD COLUMN {column} {definition}"
                     )
+            binding_columns = {
+                row[1]
+                for row in self._connection.execute(
+                    "PRAGMA table_info(agent_chat_bindings)"
+                )
+            }
+            if "native_task_id" not in binding_columns:
+                self._connection.execute(
+                    "ALTER TABLE agent_chat_bindings ADD COLUMN native_task_id TEXT NOT NULL DEFAULT ''"
+                )
+            commit_columns = {
+                row[1]
+                for row in self._connection.execute("PRAGMA table_info(agent_chat_commits)")
+            }
+            if "request_digest" not in commit_columns:
+                self._connection.execute(
+                    "ALTER TABLE agent_chat_commits ADD COLUMN request_digest TEXT NOT NULL DEFAULT ''"
+                )
             self._connection.execute(
                 """
                 CREATE TRIGGER IF NOT EXISTS connected_agents_updated_at
@@ -408,7 +430,9 @@ class HarnessRegistry:
                 WHERE verification_state = 'verified' AND last_probe_at = ''
                 """
             )
-            self._connection.execute("INSERT OR IGNORE INTO schema_migrations (version) VALUES (2)")
+            self._connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (2)"
+            )
             self._connection.execute(
                 """
                 INSERT OR IGNORE INTO agent_connectors (
@@ -832,11 +856,12 @@ class HarnessRegistry:
             self._connection.execute(
                 """
                 INSERT INTO agent_chat_bindings (
-                    agent_id, mirror_session_id, native_session_id
-                ) VALUES (?, ?, ?)
+                    agent_id, mirror_session_id, native_session_id, native_task_id
+                ) VALUES (?, ?, ?, '')
                 ON CONFLICT(agent_id) DO UPDATE SET
                     mirror_session_id = excluded.mirror_session_id,
-                    native_session_id = excluded.native_session_id
+                    native_session_id = excluded.native_session_id,
+                    native_task_id = ''
                 """,
                 (agent_id, mirror_session_id, native_session_id),
             )
@@ -1084,30 +1109,37 @@ class HarnessRegistry:
         """Persist an idempotent client request before any remote dispatch."""
         from .manifest import redact_agent_text
 
-        safe = _optional_text(redact_agent_text(user_message), "user message", 16_000)
+        raw = _optional_text(user_message, "user message", 16_000)
+        safe = _optional_text(redact_agent_text(raw), "user message", 16_000)
         request_id = _optional_text(request_id, "request id", 256)
         if not safe or not request_id:
             raise ValueError("chat intent fields are required")
-        digest = hashlib.sha256((safe + "\x00").encode()).hexdigest()
+        digest = hashlib.sha256((raw + "\x00").encode()).hexdigest()
         with self._connection:
             existing = self._connection.execute(
                 "SELECT * FROM agent_chat_commits WHERE connector_event_id = ?",
                 (request_id,),
             ).fetchone()
             if existing is not None:
-                if existing["agent_id"] != agent_id or existing["user_message"] != safe:
+                stored_digest = str(existing["request_digest"] or "")
+                same_request = stored_digest == digest if stored_digest else False
+                safe_recovery = raw == str(existing["user_message"])
+                if existing["agent_id"] != agent_id or not (
+                    same_request or safe_recovery
+                ):
                     raise ValueError(
                         "client request identity was reused for another turn"
                     )
                 return
             self._connection.execute(
-                "INSERT INTO agent_chat_commits (connector_event_id, agent_id, mirror_session_id, expected_native_session_id, native_session_id, payload_digest, user_message, assistant_reply, status) VALUES (?, ?, ?, ?, ?, ?, ?, '', 'pending')",
+                "INSERT INTO agent_chat_commits (connector_event_id, agent_id, mirror_session_id, expected_native_session_id, native_session_id, request_digest, payload_digest, user_message, assistant_reply, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 'pending')",
                 (
                     request_id,
                     agent_id,
                     mirror_session_id,
                     expected_native_session_id,
                     expected_native_session_id,
+                    digest,
                     digest,
                     safe,
                 ),
@@ -1330,7 +1362,9 @@ class HarnessRegistry:
         ).fetchall()
         return [self._normalize_event(row) for row in rows]
 
-    def get_chat_history(self, agent_id: str, *, request_id: str = "") -> dict[str, Any]:
+    def get_chat_history(
+        self, agent_id: str, *, request_id: str = ""
+    ) -> dict[str, Any]:
         """Return an agent's committed chat history as ordered messages."""
         rows = self._connection.execute(
             """
@@ -1349,15 +1383,21 @@ class HarnessRegistry:
             if row["user_message"]:
                 messages.append({"role": "user", "content": row["user_message"]})
             if row["assistant_reply"]:
-                messages.append({"role": "assistant", "content": row["assistant_reply"]})
+                messages.append({
+                    "role": "assistant",
+                    "content": row["assistant_reply"],
+                })
 
         request_status = ""
+        pending_message = ""
         if request_id:
             pending = self._connection.execute(
-                "SELECT status FROM agent_chat_commits WHERE agent_id = ? AND connector_event_id = ?",
+                "SELECT status, user_message FROM agent_chat_commits WHERE agent_id = ? AND connector_event_id = ?",
                 (agent_id, request_id),
             ).fetchone()
             request_status = pending["status"] if pending else ""
+            if pending is not None and pending["status"] == "pending":
+                pending_message = str(pending["user_message"] or "")
 
         binding = self._connection.execute(
             "SELECT mirror_session_id FROM agent_chat_bindings WHERE agent_id = ?",
@@ -1368,6 +1408,7 @@ class HarnessRegistry:
             "messages": messages,
             "mirror_session_id": binding["mirror_session_id"] if binding else "",
             "request_status": request_status or None,
+            "pending_message": pending_message or None,
         }
 
     def send_chat_turn(
@@ -1378,6 +1419,7 @@ class HarnessRegistry:
         user_message: str,
         assistant_reply: str,
         native_session_id: str,
+        native_task_id: str = "",
     ) -> dict[str, str]:
         """Record one completed chat turn directly into agent_chat_commits."""
         from .manifest import redact_agent_text
@@ -1411,7 +1453,9 @@ class HarnessRegistry:
                     )
                 )
             ):
-                raise ValueError("client request replay does not match its original turn")
+                raise ValueError(
+                    "client request replay does not match its original turn"
+                )
             if existing is not None and existing["status"] == "committed":
                 return {
                     "connector_event_id": connector_event_id,
@@ -1446,10 +1490,14 @@ class HarnessRegistry:
             )
             self._connection.execute(
                 """
-                UPDATE agent_chat_bindings SET native_session_id = ?
+                UPDATE agent_chat_bindings SET native_session_id = ?, native_task_id = ?
                 WHERE agent_id = ?
                 """,
-                (native_session_id, agent_id),
+                (
+                    native_session_id,
+                    _optional_text(native_task_id, "native task id", 512),
+                    agent_id,
+                ),
             )
             self._connection.execute(
                 """
@@ -1469,7 +1517,7 @@ class HarnessRegistry:
         """Return an agent's persisted chat binding."""
         row = self._connection.execute(
             """
-            SELECT agent_id, mirror_session_id, native_session_id
+            SELECT agent_id, mirror_session_id, native_session_id, native_task_id
             FROM agent_chat_bindings
             WHERE agent_id = ?
             """,
@@ -1481,14 +1529,18 @@ class HarnessRegistry:
             "agent_id": row["agent_id"],
             "mirror_session_id": row["mirror_session_id"],
             "native_session_id": row["native_session_id"],
+            "native_task_id": row["native_task_id"],
         }
 
-    def update_chat_binding(self, agent_id: str, native_session_id: str) -> dict[str, str]:
+    def update_chat_binding(
+        self, agent_id: str, native_session_id: str, native_task_id: str = ""
+    ) -> dict[str, str]:
         native = _optional_text(native_session_id, "native session id", 512)
+        task = _optional_text(native_task_id, "native task id", 512)
         with self._connection:
             cursor = self._connection.execute(
-                "UPDATE agent_chat_bindings SET native_session_id = ? WHERE agent_id = ?",
-                (native, agent_id),
+                "UPDATE agent_chat_bindings SET native_session_id = ?, native_task_id = ? WHERE agent_id = ?",
+                (native, task, agent_id),
             )
             self._connection.execute(
                 "UPDATE connected_agents SET native_session_id = ? WHERE id = ?",

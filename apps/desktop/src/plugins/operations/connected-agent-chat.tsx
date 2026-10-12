@@ -110,6 +110,11 @@ export function ConnectedAgentChatSurface({
       if (result.request_status === 'committed') {
         clearPendingTurn(pending)
         setPendingRequestId('')
+      } else if (result.request_status === 'pending' && result.pending_message) {
+        setDraft(result.pending_message)
+      } else {
+        clearPendingTurn(pending)
+        setPendingRequestId('')
       }
     }).catch(cause => setError(cause instanceof Error ? cause.message : String(cause)))
   }, [agent.agentId, busy, loading, refresh, restored])
@@ -124,6 +129,16 @@ export function ConnectedAgentChatSurface({
 
     try {
       const requestId = pendingRequestId || crypto.randomUUID()
+      const restoredPending = readPendingTurn(agent.agentId)
+
+      if (restoredPending?.requestId === requestId) {
+        const authoritative = await getA2AChatHistory(agent.agentId, requestId)
+
+        if (authoritative.request_status === 'pending' && authoritative.pending_message !== message) {
+          throw new Error('The recovered request can only retry its original message.')
+        }
+      }
+
       setPendingRequestId(requestId)
 
       const pending = {

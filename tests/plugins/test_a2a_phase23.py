@@ -200,6 +200,44 @@ class TestStreamingEndToEnd:
 
         asyncio.run(run())
 
+    def test_public_connector_round_trips_through_real_v1_adapter(self, monkeypatch):
+        from urllib.parse import urlsplit
+
+        import httpx
+
+        from plugins.harness_agents import policy
+        from plugins.harness_agents.connectors import A2AConnector
+        from tools import url_safety
+
+        adapter, base = _make_live_adapter(monkeypatch)
+
+        def allow_test_http(url, *, allowlist=None, require_https=True):
+            parsed = urlsplit(url)
+            return parsed.scheme, str(parsed.hostname), parsed.port or 80
+
+        monkeypatch.setattr(policy, "validate_url", allow_test_http)
+        monkeypatch.setattr(
+            url_safety,
+            "ssrf_safe_http_transport",
+            lambda **kwargs: httpx.HTTPTransport(),
+        )
+
+        async def run():
+            assert await adapter.connect() is True
+            connector = A2AConnector(
+                name="Real adapter", url=base, allowlist=frozenset({"127.0.0.1"})
+            )
+            probe = await asyncio.to_thread(connector.probe)
+            result = await asyncio.to_thread(connector.send, "real v1 round trip")
+            assert probe["protocol"] == "a2a-jsonrpc-1.0"
+            assert result["reply"] == "ECHO: real v1 round trip"
+            assert result["native_task_id"].startswith("task-")
+            assert result["native_session_id"].startswith("ctx-")
+            assert result["state"] == "idle"
+            await adapter.disconnect()
+
+        asyncio.run(run())
+
     def test_tasks_subscribe_replays_terminal_state(self, monkeypatch):
         monkeypatch.delenv("A2A_BEARER_TOKEN", raising=False)
         monkeypatch.delenv("A2A_PEER_TOKENS", raising=False)

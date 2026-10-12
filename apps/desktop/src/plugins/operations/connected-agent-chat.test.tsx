@@ -96,6 +96,49 @@ describe('ConnectedAgentChat', () => {
     expect(window.localStorage.getItem('hermes.operations.connected-agent.outbox.v1')).not.toContain('Crash-safe message')
   })
 
+  it('restores the durable pending text after reload and retries with the same request identity', async () => {
+    window.localStorage.setItem('hermes.operations.connected-agent.outbox.v1', JSON.stringify({
+      agentId: 'a2a:claude-reviewer', requestId: 'durable-request'
+    }))
+    getA2AChatHistory.mockImplementation(async (_agentId: string, requestId?: string) => ({
+      messages: [],
+      mirror_session_id: 'mirror_1',
+      request_status: requestId ? 'pending' : undefined,
+      pending_message: requestId ? 'Original durable message' : undefined
+    }))
+    sendA2AChatMessage.mockResolvedValue({
+      reply: 'Recovered.', state: 'completed', request_status: 'committed',
+      native_session_id: 'ctx-1', connector_event_id: 'durable-request'
+    })
+
+    render(<ConnectedAgentChatSurface agent={harnessAgent()} />)
+    const composer = await screen.findByRole('textbox', { name: 'Message Claude Reviewer' })
+    await waitFor(() => expect((composer as HTMLTextAreaElement).value).toBe('Original durable message'))
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Claude Reviewer' }))
+    await waitFor(() => expect(sendA2AChatMessage).toHaveBeenCalledWith(
+      'a2a:claude-reviewer', 'Original durable message', 'durable-request'
+    ))
+  })
+
+  it('abandons an orphaned pending identity before sending unrelated text', async () => {
+    window.localStorage.setItem('hermes.operations.connected-agent.outbox.v1', JSON.stringify({
+      agentId: 'a2a:claude-reviewer', requestId: 'orphaned-request'
+    }))
+    getA2AChatHistory.mockResolvedValue({ messages: [], mirror_session_id: 'mirror_1' })
+    sendA2AChatMessage.mockResolvedValue({
+      reply: 'New reply.', state: 'idle', request_status: 'committed',
+      native_session_id: 'ctx-1', connector_event_id: 'new-request'
+    })
+
+    render(<ConnectedAgentChatSurface agent={harnessAgent()} />)
+    const composer = await screen.findByRole('textbox', { name: 'Message Claude Reviewer' })
+    await waitFor(() => expect(window.localStorage.getItem('hermes.operations.connected-agent.outbox.v1')).toBeNull())
+    fireEvent.change(composer, { target: { value: 'Unrelated new message' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Claude Reviewer' }))
+    await waitFor(() => expect(sendA2AChatMessage).toHaveBeenCalled())
+    expect(sendA2AChatMessage.mock.calls[0][2]).not.toBe('orphaned-request')
+  })
+
   it('renders the connected conversation as plain workspace content', async () => {
     getA2AChatHistory.mockResolvedValue({
       messages: [

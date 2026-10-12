@@ -466,6 +466,7 @@ export interface A2AChatMessage {
 export interface A2AChatHistory {
   messages: A2AChatMessage[]
   mirror_session_id?: string
+  pending_message?: string
   request_status?: string | null
 }
 
@@ -499,6 +500,7 @@ export async function getA2AChatHistory(agentId: string, requestId = ''): Promis
   return {
     messages,
     mirror_session_id: typeof row.mirror_session_id === 'string' ? row.mirror_session_id : undefined,
+    pending_message: typeof row.pending_message === 'string' ? row.pending_message : undefined,
     request_status: row.request_status === null ? null : typeof row.request_status === 'string' ? row.request_status : null
   }
 }

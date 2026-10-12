@@ -73,7 +73,10 @@ class _MockA2APeerHandler(BaseHTTPRequestHandler):
         try:
             req = json.loads(body)
         except json.JSONDecodeError:
-            return self._json(400, {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}})
+            return self._json(
+                400,
+                {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}},
+            )
 
         method = req.get("method", "")
         req_id = req.get("id", 0)
@@ -83,27 +86,54 @@ class _MockA2APeerHandler(BaseHTTPRequestHandler):
             msg = params.get("message", {})
             text = ""
             for part in msg.get("parts", []):
-                if part.get("type") == "text":
+                if isinstance(part.get("text"), str):
                     text = part.get("text", "")
                     break
             self.messages_received.append(text)
             result = {
-                "status": {"state": "TASK_STATE_COMPLETED"},
-                "artifacts": [{"type": "text", "text": self.reply_text}],
-                "contextId": params.get("contextId") or "mock-session-1",
+                "task": {
+                    "id": "mock-task-1",
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                    "artifacts": [
+                        {
+                            "parts": [
+                                {"text": self.reply_text, "mediaType": "text/plain"}
+                            ]
+                        }
+                    ],
+                    "contextId": msg.get("contextId") or "mock-session-1",
+                }
             }
             return self._json(200, {"jsonrpc": "2.0", "id": req_id, "result": result})
 
         if method.startswith("hermes/"):
-            return self._json(200, {"jsonrpc": "2.0", "id": req_id, "result": {"ok": True}})
+            return self._json(
+                200, {"jsonrpc": "2.0", "id": req_id, "result": {"ok": True}}
+            )
 
-        self._json(200, {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}})
+        self._json(
+            200,
+            {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32601, "message": "Method not found"},
+            },
+        )
 
 
 @pytest.fixture
 def api_module(tmp_path, monkeypatch):
     api = load_api()
-    monkeypatch.setattr(api, "_a2a_registry_path", lambda: tmp_path / "harness_agents.db")
+    from tools import url_safety
+
+    monkeypatch.setattr(
+        url_safety,
+        "ssrf_safe_http_transport",
+        lambda **kwargs: httpx.HTTPTransport(),
+    )
+    monkeypatch.setattr(
+        api, "_a2a_registry_path", lambda: tmp_path / "harness_agents.db"
+    )
     monkeypatch.setattr(api, "_a2a_catalog_path", lambda: tmp_path / "agent_cards.db")
     api._a2a_rate_limiter._user_buckets.clear()
     api._a2a_rate_limiter._global_bucket.clear()
@@ -146,7 +176,11 @@ class TestA2AFullFlow:
             "description": "A friendly mock agent for integration testing",
             "capabilities": {"streaming": False, "pushNotifications": False},
             "supportedInterfaces": [
-                {"protocolBinding": "JSONRPC", "protocolVersion": "1.0", "url": "http://localhost:{port}/"}
+                {
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                    "url": "http://localhost:{port}/",
+                }
             ],
             "skills": [{"id": "greet", "name": "Greeting"}],
         }
@@ -158,10 +192,15 @@ class TestA2AFullFlow:
             card["supportedInterfaces"][0]["url"] = base_url + "/"
 
             app = FastAPI()
+            app.state.auth_required = False
             app.include_router(api_module.router)
 
-            with patch("socket.getaddrinfo", side_effect=_mock_peer_getaddrinfo), patch(
-                "plugins.harness_agents.policy.validate_url", side_effect=_allow_http_validate_url
+            with (
+                patch("socket.getaddrinfo", side_effect=_mock_peer_getaddrinfo),
+                patch(
+                    "plugins.harness_agents.policy.validate_url",
+                    side_effect=_allow_http_validate_url,
+                ),
             ):
                 # 1) Register + confirm (onboard)
                 resp = asyncio.run(
@@ -180,19 +219,25 @@ class TestA2AFullFlow:
             agent_id = payload["agent_id"]
 
             # 2) List agents
-            with patch("socket.getaddrinfo", side_effect=_mock_peer_getaddrinfo), patch(
-                "plugins.harness_agents.policy.validate_url", side_effect=_allow_http_validate_url
+            with (
+                patch("socket.getaddrinfo", side_effect=_mock_peer_getaddrinfo),
+                patch(
+                    "plugins.harness_agents.policy.validate_url",
+                    side_effect=_allow_http_validate_url,
+                ),
             ):
-                resp = asyncio.run(
-                    request_json(app, "GET", "/agents/a2a")
-                )
+                resp = asyncio.run(request_json(app, "GET", "/agents/a2a"))
             assert resp.status_code == 200
             agents = resp.json()["agents"]
             assert any(a["agent_id"] == agent_id for a in agents)
 
             # 3) Chat history (empty at first)
-            with patch("socket.getaddrinfo", side_effect=_mock_peer_getaddrinfo), patch(
-                "plugins.harness_agents.policy.validate_url", side_effect=_allow_http_validate_url
+            with (
+                patch("socket.getaddrinfo", side_effect=_mock_peer_getaddrinfo),
+                patch(
+                    "plugins.harness_agents.policy.validate_url",
+                    side_effect=_allow_http_validate_url,
+                ),
             ):
                 resp = asyncio.run(
                     request_json(app, "GET", f"/agents/a2a/{agent_id}/chat")
@@ -202,8 +247,12 @@ class TestA2AFullFlow:
             assert history.get("messages", []) == []
 
             # 4) Send chat message
-            with patch("socket.getaddrinfo", side_effect=_mock_peer_getaddrinfo), patch(
-                "plugins.harness_agents.policy.validate_url", side_effect=_allow_http_validate_url
+            with (
+                patch("socket.getaddrinfo", side_effect=_mock_peer_getaddrinfo),
+                patch(
+                    "plugins.harness_agents.policy.validate_url",
+                    side_effect=_allow_http_validate_url,
+                ),
             ):
                 resp = asyncio.run(
                     request_json(
@@ -219,8 +268,12 @@ class TestA2AFullFlow:
             assert chat_resp["request_status"] == "committed"
 
             # 5) Chat history now contains the turn
-            with patch("socket.getaddrinfo", side_effect=_mock_peer_getaddrinfo), patch(
-                "plugins.harness_agents.policy.validate_url", side_effect=_allow_http_validate_url
+            with (
+                patch("socket.getaddrinfo", side_effect=_mock_peer_getaddrinfo),
+                patch(
+                    "plugins.harness_agents.policy.validate_url",
+                    side_effect=_allow_http_validate_url,
+                ),
             ):
                 resp = asyncio.run(
                     request_json(app, "GET", f"/agents/a2a/{agent_id}/chat")
@@ -262,13 +315,13 @@ class TestA2AFullFlow:
             assert resp.status_code == 200
 
             # 7) Retrieve meeting
-            resp = asyncio.run(
-                request_json(app, "GET", f"/meetings/{meeting_id}")
-            )
+            resp = asyncio.run(request_json(app, "GET", f"/meetings/{meeting_id}"))
             assert resp.status_code == 200
             fetched = resp.json()["meeting"]
             assert fetched["title"] == "Integration stand-up"
-            assert any(p["connection"] == agent_id for p in fetched.get("participants", []))
+            assert any(
+                p["connection"] == agent_id for p in fetched.get("participants", [])
+            )
 
             # Verify the mock peer actually received the message
             assert _MockA2APeerHandler.messages_received == ["Hello peer"]
@@ -282,7 +335,11 @@ class TestA2AFullFlow:
             "description": "Tries to redirect to an external domain",
             "capabilities": {},
             "supportedInterfaces": [
-                {"protocolBinding": "JSONRPC", "protocolVersion": "1.0", "url": "https://evil.example.com/api"}
+                {
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                    "url": "https://evil.example.com/api",
+                }
             ],
             "skills": [],
         }
@@ -291,10 +348,15 @@ class TestA2AFullFlow:
         try:
             base_url = f"http://localhost:{port}"
             app = FastAPI()
+            app.state.auth_required = False
             app.include_router(api_module.router)
 
-            with patch("socket.getaddrinfo", side_effect=_mock_peer_getaddrinfo), patch(
-                "plugins.harness_agents.policy.validate_url", side_effect=_allow_http_validate_url
+            with (
+                patch("socket.getaddrinfo", side_effect=_mock_peer_getaddrinfo),
+                patch(
+                    "plugins.harness_agents.policy.validate_url",
+                    side_effect=_allow_http_validate_url,
+                ),
             ):
                 resp = asyncio.run(
                     request_json(
@@ -308,13 +370,18 @@ class TestA2AFullFlow:
             # Probe should reject because the interface url crosses origin
             assert resp.status_code == 400
             detail = resp.json().get("detail", "")
-            assert "verification_failed" in detail or "cross" in detail.lower() or "origin" in detail.lower()
+            assert (
+                "verification_failed" in detail
+                or "cross" in detail.lower()
+                or "origin" in detail.lower()
+            )
         finally:
             server.shutdown()
 
     def test_malicious_private_ip_rejected(self, api_module):
         """Direct registration against a loopback IP must be rejected by policy."""
         app = FastAPI()
+        app.state.auth_required = False
         app.include_router(api_module.router)
 
         resp = asyncio.run(
@@ -331,6 +398,7 @@ class TestA2AFullFlow:
     def test_meeting_prevents_too_many_participants(self, api_module):
         """Meeting store enforces participant limits."""
         app = FastAPI()
+        app.state.auth_required = False
         app.include_router(api_module.router)
 
         meeting_id = "meet-int-002"
@@ -340,8 +408,7 @@ class TestA2AFullFlow:
             "agenda": "Too many agents",
             "state": "draft",
             "participants": [
-                {"connection": f"a2a:{i:03d}", "profile": "agent"}
-                for i in range(10)
+                {"connection": f"a2a:{i:03d}", "profile": "agent"} for i in range(10)
             ],
             "currentRound": 0,
             "maxRounds": 3,

@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+import socket
+
 from unittest.mock import patch
+
+import httpx
 
 import pytest
 
@@ -176,6 +180,14 @@ class TestPolicyResolveCapabilities:
 
 
 class TestPolicyFetchJson:
+    @staticmethod
+    def mock_transport(monkeypatch, handler):
+        from tools import url_safety
+
+        monkeypatch.setattr(
+            url_safety, "ssrf_safe_http_transport", lambda: httpx.MockTransport(handler)
+        )
+
     def test_rejects_http(self) -> None:
         with pytest.raises(ValueError, match="HTTPS"):
             policy.fetch_json("http://example.com/test")
@@ -184,55 +196,88 @@ class TestPolicyFetchJson:
         with pytest.raises(ValueError, match="blocked address"):
             policy.fetch_json("https://192.168.1.1/test")
 
-    def test_rejects_redirect(self) -> None:
-        with patch("urllib.request.OpenerDirector.open") as mock_open:
-            from urllib.error import HTTPError
-
-            mock_open.side_effect = HTTPError(
-                "https://example.com", 302, "Found", {}, None
+    def test_rejects_redirect(self, monkeypatch) -> None:
+        self.mock_transport(
+            monkeypatch,
+            lambda request: httpx.Response(
+                302, headers={"Location": "https://evil.example"}
+            ),
+        )
+        with pytest.raises(ValueError, match="redirects are not allowed"):
+            policy.fetch_json(
+                "https://example.com", allowlist=frozenset({"example.com"})
             )
-            with pytest.raises(ValueError, match="redirects are not allowed"):
-                policy.fetch_json("https://example.com", allowlist=frozenset({"example.com"}))
 
-    def test_rejects_oversized_response(self) -> None:
-        with patch("urllib.request.OpenerDirector.open") as mock_open:
-            mock_response = mock_open.return_value.__enter__.return_value
-            mock_response.geturl.return_value = "https://example.com"
-            mock_response.read.return_value = b"x" * (policy._MAX_RESPONSE_BYTES + 1)
-            with pytest.raises(ValueError, match="maximum allowed size"):
-                policy.fetch_json("https://example.com", allowlist=frozenset({"example.com"}))
+    def test_rejects_oversized_response(self, monkeypatch) -> None:
+        self.mock_transport(
+            monkeypatch,
+            lambda request: httpx.Response(
+                200, content=b"x" * (policy._MAX_RESPONSE_BYTES + 1)
+            ),
+        )
+        with pytest.raises(ValueError, match="maximum allowed size"):
+            policy.fetch_json(
+                "https://example.com", allowlist=frozenset({"example.com"})
+            )
 
-    def test_rejects_malformed_json(self) -> None:
-        with patch("urllib.request.OpenerDirector.open") as mock_open:
-            mock_response = mock_open.return_value.__enter__.return_value
-            mock_response.geturl.return_value = "https://example.com"
-            mock_response.read.return_value = b"not json"
-            with pytest.raises(ValueError, match="not valid JSON"):
-                policy.fetch_json("https://example.com", allowlist=frozenset({"example.com"}))
+    def test_rejects_malformed_json(self, monkeypatch) -> None:
+        self.mock_transport(
+            monkeypatch, lambda request: httpx.Response(200, content=b"not json")
+        )
+        with pytest.raises(ValueError, match="not valid JSON"):
+            policy.fetch_json(
+                "https://example.com", allowlist=frozenset({"example.com"})
+            )
 
-    def test_returns_empty_for_empty_body(self) -> None:
-        with patch("urllib.request.OpenerDirector.open") as mock_open:
-            mock_response = mock_open.return_value.__enter__.return_value
-            mock_response.geturl.return_value = "https://example.com"
-            mock_response.read.return_value = b""
-            result = policy.fetch_json("https://example.com", allowlist=frozenset({"example.com"}))
-            assert result == {}
+    def test_returns_empty_for_empty_body(self, monkeypatch) -> None:
+        self.mock_transport(
+            monkeypatch, lambda request: httpx.Response(200, content=b"")
+        )
+        result = policy.fetch_json(
+            "https://example.com", allowlist=frozenset({"example.com"})
+        )
+        assert result == {}
 
-    def test_returns_parsed_json(self) -> None:
-        with patch("urllib.request.OpenerDirector.open") as mock_open:
-            mock_response = mock_open.return_value.__enter__.return_value
-            mock_response.geturl.return_value = "https://example.com"
-            mock_response.read.return_value = json.dumps({"key": "value"}).encode()
-            result = policy.fetch_json("https://example.com", allowlist=frozenset({"example.com"}))
-            assert result == {"key": "value"}
+    def test_returns_parsed_json(self, monkeypatch) -> None:
+        self.mock_transport(
+            monkeypatch,
+            lambda request: httpx.Response(
+                200, content=json.dumps({"key": "value"}).encode()
+            ),
+        )
+        result = policy.fetch_json(
+            "https://example.com", allowlist=frozenset({"example.com"})
+        )
+        assert result == {"key": "value"}
+    def test_rejects_non_object_json(self, monkeypatch) -> None:
+        self.mock_transport(
+            monkeypatch,
+            lambda request: httpx.Response(200, json=["not", "an", "object"]),
+        )
+        with pytest.raises(ValueError, match="must be an object"):
+            policy.fetch_json(
+                "https://example.com", allowlist=frozenset({"example.com"})
+            )
 
-    def test_rejects_final_url_change(self) -> None:
-        with patch("urllib.request.OpenerDirector.open") as mock_open:
-            mock_response = mock_open.return_value.__enter__.return_value
-            mock_response.geturl.return_value = "https://evil.com"
-            mock_response.read.return_value = b"{}"
-            with pytest.raises(ValueError, match="allowlist"):
-                policy.fetch_json("https://example.com", allowlist=frozenset({"example.com"}))
+    def test_blocks_dns_rebinding_at_tcp_connect(self, monkeypatch) -> None:
+        calls = 0
+
+        def resolve(host, port, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            address = "93.184.216.34" if calls == 1 else "127.0.0.1"
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+
+        monkeypatch.setattr(socket, "getaddrinfo", resolve)
+
+        with pytest.raises(ValueError, match="private|blocked"):
+            policy.fetch_json(
+                "https://example.com", allowlist=frozenset({"example.com"})
+            )
+
+        assert calls >= 2
+
+
 
 
 class TestPolicyFetchAgentCard:

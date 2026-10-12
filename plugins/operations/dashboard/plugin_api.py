@@ -10,6 +10,8 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import os
+
 import secrets
 import shlex
 import sys
@@ -418,6 +420,50 @@ def _principal_hash(kind: str, provider: str, identity: str, organization: str =
 
 def _principal_hash_from_request(request: Request) -> str:
     """Resolve the authenticated caller without trusting network addressing."""
+    # Loopback headers rotate at process startup. They authenticate the request
+    # but are not an identity. Bind local ownership to a durable, installation-
+    # private value instead so restarts cannot lock out the real operator.
+    app_state = getattr(getattr(request, "app", None), "state", None)
+    local_mode = getattr(app_state, "auth_required", None) is False
+    if local_mode:
+        path = Path(get_hermes_home()) / "operations" / "installation-owner.key"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            path.parent.chmod(0o700)
+        except OSError:
+            pass
+        created = False
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            created = True
+            try:
+                secret_bytes = secrets.token_hex(32).encode("ascii")
+                os.write(fd, secret_bytes)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        installation_secret = ""
+        try:
+            path.chmod(0o600)
+            for attempt in range(100):
+                installation_secret = path.read_text(encoding="utf-8").strip()
+                if len(installation_secret) == 64:
+                    break
+                if created or attempt == 99:
+                    break
+                time.sleep(0.01)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=503, detail="operations_identity_unavailable"
+            ) from exc
+        if len(installation_secret) != 64 or any(
+            char not in "0123456789abcdef" for char in installation_secret
+        ):
+            raise HTTPException(status_code=503, detail="operations_identity_invalid")
+        return _principal_hash("installation", "local", installation_secret)
     token = getattr(request.state, "token_principal", None)
     if token is not None and str(getattr(token, "principal", "")).strip():
         return _principal_hash(
@@ -433,14 +479,6 @@ def _principal_hash_from_request(request: Request) -> str:
             str(session.user_id),
             str(getattr(session, "org_id", "")),
         )
-    # Loopback desktop authentication is an ephemeral header verified by the
-    # dashboard middleware before plugin dispatch. Hash it; never persist it.
-    session_token = str(request.headers.get("x-hermes-session-token") or "").strip()
-    authorization = str(request.headers.get("authorization") or "").strip()
-    if session_token:
-        return _principal_hash("dashboard-session", "local", session_token)
-    if authorization.lower().startswith("bearer ") and authorization[7:].strip():
-        return _principal_hash("dashboard-session", "local", authorization[7:].strip())
     raise HTTPException(status_code=401, detail="operations_authentication_required")
 
 
@@ -470,6 +508,31 @@ def _authorized_registry(
     registry = HarnessRegistry(_a2a_registry_path())
     try:
         if bootstrap_owner and not registry.has_owner():
+            app_state = getattr(getattr(request, "app", None), "state", None)
+            local_mode = getattr(app_state, "auth_required", None) is False
+            if not local_mode:
+                token = getattr(request.state, "token_principal", None)
+                session = getattr(request.state, "session", None)
+                if token is not None and str(getattr(token, "principal", "")).strip():
+                    identity = (
+                        "token",
+                        str(getattr(token, "provider", "")),
+                        str(token.principal),
+                        "",
+                    )
+                else:
+                    identity = (
+                        "session",
+                        str(getattr(session, "provider", "")),
+                        str(getattr(session, "user_id", "")),
+                        str(getattr(session, "org_id", "")),
+                    )
+                assertion = json.dumps(identity, separators=(",", ":"))
+                trusted = os.getenv("HERMES_OPERATIONS_OWNER", "").strip()
+                if not trusted or not secrets.compare_digest(assertion, trusted):
+                    raise HTTPException(
+                        status_code=403, detail="operations_owner_setup_required"
+                    )
             registry.provision_owner_principal(principal)
         registry.resolve_principal(principal)
         allowed = capability in registry.capabilities_for(principal, agent_id=agent_id)
@@ -483,10 +546,12 @@ def _authorized_registry(
             detail={"capability": capability},
         )
         if not allowed:
-            registry.close()
-            raise HTTPException(status_code=403, detail="operations_owner_or_admin_required")
+            raise HTTPException(
+                status_code=403, detail="operations_owner_or_admin_required"
+            )
         return principal, registry
     except HTTPException:
+        registry.close()
         raise
     except PermissionError as exc:
         try:
@@ -500,7 +565,12 @@ def _authorized_registry(
         except Exception:
             pass
         registry.close()
-        raise HTTPException(status_code=403, detail="operations_owner_or_admin_required") from exc
+        raise HTTPException(
+            status_code=403, detail="operations_owner_or_admin_required"
+        ) from exc
+    except Exception:
+        registry.close()
+        raise
 
 
 class A2ARegisterRequest(BaseModel):
@@ -536,18 +606,14 @@ def _public_agent_summary(agent: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@router.post("/agents/a2a/register")
-def register_a2a_agent(request: Request, body: A2ARegisterRequest):
+def _register_a2a_agent_with_registry(
+    body: A2ARegisterRequest, user_id: str, reg: Any
+) -> dict[str, Any]:
     """Register a new A2A harness agent from a public Agent Card URL.
 
     The agent is created in *pending* state. Pass ``confirm=true`` to
     immediately probe, verify, and bind a per-user mirror session.
     """
-    user_id = _user_id_from_request(request)
-    if not _a2a_rate_limiter.allow(user_id):
-        raise HTTPException(status_code=429, detail="a2a_rate_limited")
-    user_id, reg = _authorized_registry(request, "agent.create")
-
     url = _normalize_a2a_url(body.url)
 
     # Policy validation (SSRF + default-deny)
@@ -565,11 +631,12 @@ def register_a2a_agent(request: Request, body: A2ARegisterRequest):
         from plugins.harness_agents.catalog import AgentCardCatalog
 
         catalog = AgentCardCatalog(_a2a_catalog_path())
-        card = catalog.get(url, allowlist=None)
+        try:
+            card = catalog.get(url, allowlist=None)
+        finally:
+            catalog.close()
     except ValueError as exc:
-        raise HTTPException(
-            status_code=400, detail="a2a_malformed_agent_card"
-        ) from exc
+        raise HTTPException(status_code=400, detail="a2a_malformed_agent_card") from exc
 
     # Schema validation
     name = str(card.get("name") or "").strip()
@@ -581,20 +648,18 @@ def register_a2a_agent(request: Request, body: A2ARegisterRequest):
     try:
         reg.get_agent(agent_id)
     except ValueError:
-        reg.create_agent(
-            {
-                "id": agent_id,
-                "name": name,
-                "handle": name.lower().replace(" ", "-")[:64] or "agent",
-                "description": str(card.get("description") or "")[:4096],
-                "harness": "generic_a2a",
-                "host_id": host,
-                "host_label": host,
-                "connector_url": url,
-                "auth_env": "",
-                "team_id": "",
-            }
-        )
+        reg.create_agent({
+            "id": agent_id,
+            "name": name,
+            "handle": name.lower().replace(" ", "-")[:64] or "agent",
+            "description": str(card.get("description") or "")[:4096],
+            "harness": "generic_a2a",
+            "host_id": host,
+            "host_label": host,
+            "connector_url": url,
+            "auth_env": "",
+            "team_id": "",
+        })
         reg.record_event(
             agent_id,
             principal=user_id,
@@ -642,9 +707,21 @@ def register_a2a_agent(request: Request, body: A2ARegisterRequest):
     agent = reg.get_agent(agent_id)
     return _public_agent_summary(agent)
 
+@router.post("/agents/a2a/register")
+def register_a2a_agent(request: Request, body: A2ARegisterRequest):
+    user_id = _user_id_from_request(request)
+    if not _a2a_rate_limiter.allow(user_id):
+        raise HTTPException(status_code=429, detail="a2a_rate_limited")
+    user_id, reg = _authorized_registry(request, "agent.create")
+    try:
+        return _register_a2a_agent_with_registry(body, user_id, reg)
+    finally:
+        reg.close()
 
-@router.patch("/agents/a2a/{agent_id}")
-def rename_a2a_agent(request: Request, agent_id: str, body: A2ARenameRequest):
+
+def _rename_a2a_agent_with_registry(
+    agent_id: str, body: A2ARenameRequest, user_id: str, reg: Any
+) -> dict[str, Any]:
     """Rename one connected agent.
 
     The id and the handle stay stable, so the connector, the verification state,
@@ -652,13 +729,8 @@ def rename_a2a_agent(request: Request, agent_id: str, body: A2ARenameRequest):
     moves.  A name the operator's other Bots already use is reported back as a
     warning and the rename still lands, because the operator may mean it.
     """
-    user_id = _user_id_from_request(request)
-    if not _a2a_rate_limiter.allow(user_id):
-        raise HTTPException(status_code=429, detail="a2a_rate_limited")
-
     from plugins.harness_agents.registry import _bot_name
 
-    user_id, reg = _authorized_registry(request, "agent.create", agent_id=agent_id)
     try:
         reg.get_agent(agent_id)
     except ValueError:
@@ -699,6 +771,17 @@ def rename_a2a_agent(request: Request, agent_id: str, body: A2ARenameRequest):
     )
     return {**_public_agent_summary(agent), "warnings": warnings}
 
+@router.patch("/agents/a2a/{agent_id}")
+def rename_a2a_agent(request: Request, agent_id: str, body: A2ARenameRequest):
+    user_id = _user_id_from_request(request)
+    if not _a2a_rate_limiter.allow(user_id):
+        raise HTTPException(status_code=429, detail="a2a_rate_limited")
+    user_id, reg = _authorized_registry(request, "agent.create", agent_id=agent_id)
+    try:
+        return _rename_a2a_agent_with_registry(agent_id, body, user_id, reg)
+    finally:
+        reg.close()
+
 
 @router.get("/agents/a2a")
 def list_a2a_agents(request: Request, limit: int = Query(default=50, ge=1, le=100)):
@@ -707,8 +790,11 @@ def list_a2a_agents(request: Request, limit: int = Query(default=50, ge=1, le=10
         raise HTTPException(status_code=429, detail="a2a_rate_limited")
 
     _principal, reg = _authorized_registry(request, "agent.view")
-    agents = reg.list_agents()
-    return {"agents": [_public_agent_summary(a) for a in agents[:limit]]}
+    try:
+        agents = reg.list_agents()
+        return {"agents": [_public_agent_summary(a) for a in agents[:limit]]}
+    finally:
+        reg.close()
 
 
 @router.delete("/agents/a2a/{agent_id}")
@@ -719,19 +805,22 @@ def delete_a2a_agent(request: Request, agent_id: str):
 
     user_id, reg = _authorized_registry(request, "agent.delete", agent_id=agent_id)
     try:
-        reg.get_agent(agent_id)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="a2a_agent_not_found")
+        try:
+            reg.get_agent(agent_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="a2a_agent_not_found")
 
-    reg.delete_agent(agent_id)
-    reg.record_event(
-        agent_id,
-        principal=user_id,
-        event_type="delete",
-        outcome="succeeded",
-        detail={},
-    )
-    return {"agent_id": agent_id, "deleted": True}
+        reg.delete_agent(agent_id)
+        reg.record_event(
+            agent_id,
+            principal=user_id,
+            event_type="delete",
+            outcome="succeeded",
+            detail={},
+        )
+        return {"agent_id": agent_id, "deleted": True}
+    finally:
+        reg.close()
 
 
 @router.get("/agents/a2a/{agent_id}/status")
@@ -742,11 +831,13 @@ def get_a2a_agent_status(request: Request, agent_id: str):
 
     _principal, reg = _authorized_registry(request, "agent.view", agent_id=agent_id)
     try:
-        agent = reg.get_agent(agent_id)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="a2a_agent_not_found")
-
-    return _public_agent_summary(agent)
+        try:
+            agent = reg.get_agent(agent_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="a2a_agent_not_found")
+        return _public_agent_summary(agent)
+    finally:
+        reg.close()
 
 
 class A2AChatSendRequest(BaseModel):
@@ -755,18 +846,22 @@ class A2AChatSendRequest(BaseModel):
 
 
 @router.get("/agents/a2a/{agent_id}/chat")
-def get_a2a_chat_history(request: Request, agent_id: str, request_id: str = Query(default="")):
+def get_a2a_chat_history(
+    request: Request, agent_id: str, request_id: str = Query(default="")
+):
     user_id = _user_id_from_request(request)
     if not _a2a_rate_limiter.allow(user_id):
         raise HTTPException(status_code=429, detail="a2a_rate_limited")
 
     _principal, reg = _authorized_registry(request, "chat.read", agent_id=agent_id)
     try:
-        reg.get_agent(agent_id)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="a2a_agent_not_found")
-
-    return reg.get_chat_history(agent_id, request_id=request_id)
+        try:
+            reg.get_agent(agent_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="a2a_agent_not_found")
+        return reg.get_chat_history(agent_id, request_id=request_id)
+    finally:
+        reg.close()
 
 
 def _send_with_registry(
@@ -791,18 +886,6 @@ def _send_with_registry(
         if "chat.send" not in agent.get("capabilities", []):
             raise HTTPException(status_code=403, detail="a2a_chat_not_advertised")
         stable_request_id = request_id or f"request-{secrets.token_hex(16)}"
-        replay = reg.get_chat_request(agent_id, stable_request_id)
-        if replay is not None and replay["status"] == "committed":
-            if replay["user_message"] != message.strip():
-                raise HTTPException(status_code=409, detail="a2a_request_id_conflict")
-            return {
-                "reply": replay["assistant_reply"],
-                "state": str(agent.get("runtime_state") or "unknown"),
-                "request_status": "committed",
-                "native_session_id": replay["native_session_id"],
-                "connector_event_id": stable_request_id,
-                "duplicate": True,
-            }
         binding = reg.get_chat_binding(agent_id)
         reg.prepare_chat_intent(
             agent_id,
@@ -811,6 +894,16 @@ def _send_with_registry(
             request_id=stable_request_id,
             user_message=message.strip(),
         )
+        replay = reg.get_chat_request(agent_id, stable_request_id)
+        if replay is not None and replay["status"] == "committed":
+            return {
+                "reply": replay["assistant_reply"],
+                "state": str(agent.get("runtime_state") or "unknown"),
+                "request_status": "committed",
+                "native_session_id": replay["native_session_id"],
+                "connector_event_id": stable_request_id,
+                "duplicate": True,
+            }
         connector_url = str(agent.get("connector_url") or "").strip()
         host = str(agent.get("host_id") or "").strip()
         conn = A2AConnector(
@@ -829,6 +922,7 @@ def _send_with_registry(
             user_message=message,
             assistant_reply=result["reply"],
             native_session_id=result["native_session_id"],
+            native_task_id=str(result.get("native_task_id") or ""),
         )
         updated_agent = reg.update_runtime_state(
             agent_id, str(result.get("state") or "unknown")
@@ -929,13 +1023,20 @@ def _run_advertised_control(
         result = getattr(connector, operation)(
             **parameters,
             native_session_id=binding["native_session_id"],
+            native_task_id=binding["native_task_id"],
         )
         if not isinstance(result, dict):
             raise ValueError("connector control returned an invalid result")
         state = str(result.get("state") or probe.get("state") or "unknown")
-        updated_binding = str(result.get("native_session_id") or binding["native_session_id"])
-        if updated_binding != binding["native_session_id"]:
-            reg.update_chat_binding(agent_id, updated_binding)
+        updated_binding = str(
+            result.get("native_session_id") or binding["native_session_id"]
+        )
+        updated_task = str(result.get("native_task_id") or binding["native_task_id"])
+        if (
+            updated_binding != binding["native_session_id"]
+            or updated_task != binding["native_task_id"]
+        ):
+            reg.update_chat_binding(agent_id, updated_binding, updated_task)
         updated_agent = reg.update_runtime_state(
             agent_id,
             state,
@@ -1083,6 +1184,8 @@ class RoomTurnRequest(BaseModel):
 
 
 def _room_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, HTTPException):
+        return exc
     if isinstance(exc, LookupError):
         return HTTPException(status_code=404, detail="room_not_found")
     if isinstance(exc, PermissionError):
@@ -1162,8 +1265,10 @@ def remove_room_member(request: Request, room_id: str, agent_id: str, confirm: b
 def post_room_message(request: Request, room_id: str, body: RoomMessageRequest):
     from plugins.harness_agents.rooms import RoomStore
 
-    _principal, reg = _authorized_registry(request, "chat.send")
+    principal, reg = _authorized_registry(request, "chat.send")
     try:
+        if not reg.is_owner_or_admin(principal):
+            raise HTTPException(status_code=403, detail="room_owner_required")
         message = RoomStore(_rooms_path()).post(
             room_id, body.message, request_id=body.request_id
         )
@@ -1182,7 +1287,9 @@ def handoff_room(request: Request, room_id: str, body: RoomHandoffRequest):
         raise HTTPException(status_code=400, detail="confirmation_required")
     principal, reg = _authorized_registry(request, "chat.send", agent_id=body.agent_id)
     try:
-        return RoomStore(_rooms_path()).hand_off(room_id, body.agent_id, actor=principal)
+        if not reg.is_owner_or_admin(principal):
+            raise HTTPException(status_code=403, detail="room_owner_required")
+        return RoomStore(_rooms_path()).hand_off(room_id, body.agent_id, actor="owner")
     except Exception as exc:
         raise _room_error(exc) from exc
     finally:
@@ -1196,6 +1303,8 @@ def run_room_turn(request: Request, room_id: str, body: RoomTurnRequest):
     principal, reg = _authorized_registry(request, "chat.send", agent_id=body.agent_id)
     store = RoomStore(_rooms_path())
     try:
+        if not reg.is_owner_or_admin(principal):
+            raise HTTPException(status_code=403, detail="room_owner_required")
         turn = store.begin_turn(
             room_id,
             request_id=body.request_id,

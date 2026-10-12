@@ -30,6 +30,12 @@ def _bounded_text(value: Any, label: str, maximum: int) -> str:
     return text
 
 
+def _redacted_bounded_text(value: Any, label: str, maximum: int) -> str:
+    from .manifest import redact_agent_text
+
+    raw = _bounded_text(value, label, maximum)
+    return _bounded_text(redact_agent_text(raw), label, maximum)
+
 class RoomStore:
     """Rooms live beside the operations registry, never in private gateway RPC state."""
 
@@ -60,11 +66,16 @@ class RoomStore:
                     kind TEXT NOT NULL,
                     text TEXT NOT NULL,
                     request_id TEXT NOT NULL DEFAULT '',
+                    payload_digest TEXT NOT NULL DEFAULT '',
                     at TEXT NOT NULL,
                     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS room_messages_room
                     ON room_messages(room_id, id);
+                DROP INDEX IF EXISTS room_messages_request;
+                CREATE UNIQUE INDEX IF NOT EXISTS room_messages_speaker_request
+                    ON room_messages(room_id, speaker, request_id)
+                    WHERE request_id <> '';
                 CREATE TABLE IF NOT EXISTS room_turns (
                     room_id TEXT NOT NULL,
                     request_id TEXT NOT NULL,
@@ -72,6 +83,7 @@ class RoomStore:
                     message TEXT NOT NULL,
                     payload_digest TEXT NOT NULL,
                     reply TEXT NOT NULL DEFAULT '',
+                    reply_digest TEXT NOT NULL DEFAULT '',
                     floor TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL CHECK (status IN ('pending', 'committed')),
                     created_at TEXT NOT NULL,
@@ -81,6 +93,20 @@ class RoomStore:
                 );
                 """
             )
+            message_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(room_messages)")
+            }
+            if "payload_digest" not in message_columns:
+                connection.execute(
+                    "ALTER TABLE room_messages ADD COLUMN payload_digest TEXT NOT NULL DEFAULT ''"
+                )
+            turn_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(room_turns)")
+            }
+            if "reply_digest" not in turn_columns:
+                connection.execute(
+                    "ALTER TABLE room_turns ADD COLUMN reply_digest TEXT NOT NULL DEFAULT ''"
+                )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
@@ -90,7 +116,9 @@ class RoomStore:
         return connection
 
     def create(self, name: Any, *, created_by: str) -> dict[str, Any]:
-        label = " ".join(_bounded_text(name, "room name", MAX_ROOM_NAME_CHARS).split())
+        label = " ".join(
+            _redacted_bounded_text(name, "room name", MAX_ROOM_NAME_CHARS).split()
+        )
         room = {
             "id": uuid.uuid4().hex,
             "name": label,
@@ -103,15 +131,19 @@ class RoomStore:
                 "INSERT INTO rooms (id, name, created_by, created_at, floor) VALUES (?, ?, ?, ?, ?)",
                 tuple(room.values()),
             )
+        room.pop("created_by")
         return {**room, "members": [], "member_count": 0}
 
     def get(self, room_id: Any) -> dict[str, Any]:
         wanted = _bounded_text(room_id, "room id", 64)
         with self._connect() as connection:
-            row = connection.execute("SELECT * FROM rooms WHERE id = ?", (wanted,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM rooms WHERE id = ?", (wanted,)
+            ).fetchone()
         if row is None:
             raise LookupError("room not found")
         room = dict(row)
+        room.pop("created_by", None)
         room["members"] = self.members(wanted)
         room["member_count"] = len(room["members"])
         return room
@@ -163,45 +195,97 @@ class RoomStore:
                 connection.execute("UPDATE rooms SET floor = 'owner' WHERE id = ?", (room["id"],))
         return self.get(room["id"])
 
-    def _post(self, room_id: str, text: str, *, speaker: str, kind: str, request_id: str = "") -> dict[str, Any]:
-        entry = {
+    def _insert_message(
+        self,
+        connection: sqlite3.Connection,
+        room_id: str,
+        text: str,
+        *,
+        speaker: str,
+        kind: str,
+        request_id: str = "",
+        payload_digest: str = "",
+    ) -> dict[str, Any]:
+        entry: dict[str, Any] = {
             "room_id": room_id,
             "speaker": speaker,
             "kind": kind,
-            "text": _bounded_text(text, "room message", MAX_ROOM_MESSAGE_CHARS),
+            "text": _redacted_bounded_text(
+                text, "room message", MAX_ROOM_MESSAGE_CHARS
+            ),
             "request_id": request_id,
+            "payload_digest": payload_digest,
             "at": _now(),
         }
-        with self._connect() as connection:
-            cursor = connection.execute(
-                "INSERT INTO room_messages (room_id, speaker, kind, text, request_id, at) VALUES (?, ?, ?, ?, ?, ?)",
-                tuple(entry.values()),
+        cursor = connection.execute(
+            "INSERT INTO room_messages (room_id, speaker, kind, text, request_id, payload_digest, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            tuple(entry.values()),
+        )
+        entry["id"] = int(cursor.lastrowid or 0)
+        connection.execute(
+            """
+            DELETE FROM room_messages WHERE room_id = ? AND id NOT IN (
+                SELECT id FROM room_messages WHERE room_id = ? ORDER BY id DESC LIMIT ?
             )
-            entry["id"] = int(cursor.lastrowid or 0)
-            connection.execute(
-                """
-                DELETE FROM room_messages WHERE room_id = ? AND id NOT IN (
-                    SELECT id FROM room_messages WHERE room_id = ? ORDER BY id DESC LIMIT ?
-                )
-                """,
-                (room_id, room_id, MAX_TRANSCRIPT_STORED),
-            )
+            """,
+            (room_id, room_id, MAX_TRANSCRIPT_STORED),
+        )
+        entry.pop("payload_digest")
         return entry
+
+    def _post(
+        self, room_id: str, text: str, *, speaker: str, kind: str, request_id: str = ""
+    ) -> dict[str, Any]:
+        with self._connect() as connection:
+            return self._insert_message(
+                connection,
+                room_id,
+                text,
+                speaker=speaker,
+                kind=kind,
+                request_id=request_id,
+            )
 
     def post(self, room_id: Any, text: Any, *, request_id: str = "") -> dict[str, Any]:
         room = self.get(room_id)
         stable = _bounded_text(request_id, "request id", 256) if request_id else ""
-        if stable:
-            with self._connect() as connection:
+        raw_body = _bounded_text(text, "room message", MAX_ROOM_MESSAGE_CHARS)
+        body = _redacted_bounded_text(raw_body, "room message", MAX_ROOM_MESSAGE_CHARS)
+        digest = hashlib.sha256(raw_body.encode()).hexdigest()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if stable:
                 row = connection.execute(
                     "SELECT * FROM room_messages WHERE room_id = ? AND request_id = ? AND speaker = 'owner' LIMIT 1",
                     (room["id"], stable),
                 ).fetchone()
-            if row is not None:
-                if str(row["text"]) != str(text).strip():
-                    raise ValueError("request identity was reused for another room message")
-                return dict(row)
-        return self._post(room["id"], text, speaker="owner", kind="message", request_id=stable)
+                if row is not None:
+                    stored_digest = str(row["payload_digest"] or "")
+                    if (stored_digest and stored_digest != digest) or (
+                        not stored_digest and str(row["text"]) != raw_body
+                    ):
+                        raise ValueError(
+                            "request identity was reused for another room message"
+                        )
+                    result = dict(row)
+                    result.pop("payload_digest", None)
+                    return result
+            live = connection.execute(
+                "SELECT floor FROM rooms WHERE id = ?", (room["id"],)
+            ).fetchone()
+            if live is None:
+                raise LookupError("room not found")
+            if live["floor"] != "owner":
+                raise PermissionError("only the floor holder may post")
+            return self._insert_message(
+                connection,
+                room["id"],
+                body,
+                speaker="owner",
+                kind="message",
+                request_id=stable,
+                payload_digest=digest,
+            )
 
     def transcript(self, room_id: Any, limit: int = 50) -> list[dict[str, Any]]:
         room = self.get(room_id)
@@ -212,83 +296,181 @@ class RoomStore:
                 "SELECT * FROM (SELECT * FROM room_messages WHERE room_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id",
                 (room["id"], limit),
             ).fetchall()
-        return [dict(row) for row in rows]
+        transcript = [dict(row) for row in rows]
+        for entry in transcript:
+            entry.pop("payload_digest", None)
+        return transcript
 
-    def hand_off(self, room_id: Any, agent_id: Any, *, actor: str = "owner") -> dict[str, Any]:
+    def hand_off(
+        self, room_id: Any, agent_id: Any, *, actor: str = "owner"
+    ) -> dict[str, Any]:
         room = self.get(room_id)
         target = _bounded_text(agent_id, "Bot identity", 256)
-        if target not in room["members"]:
+        if target != "owner" and target not in room["members"]:
             raise PermissionError("the floor can only pass to a member of this room")
         with self._connect() as connection:
-            connection.execute("UPDATE rooms SET floor = ? WHERE id = ?", (target, room["id"]))
-        message = self._post(
-            room["id"], f"{actor} handed the floor to {target}", speaker="owner", kind="handoff"
-        )
+            connection.execute("BEGIN IMMEDIATE")
+            live = connection.execute(
+                "SELECT floor FROM rooms WHERE id = ?", (room["id"],)
+            ).fetchone()
+            if live is None:
+                raise LookupError("room not found")
+            if actor != "owner" and live["floor"] != actor:
+                raise PermissionError("only the floor holder may hand off")
+            connection.execute(
+                "UPDATE rooms SET floor = ? WHERE id = ?", (target, room["id"])
+            )
+            actor_label = "owner" if actor == "owner" else actor
+            message = self._insert_message(
+                connection,
+                room["id"],
+                f"{actor_label} handed the floor to {target}",
+                speaker="owner",
+                kind="handoff",
+            )
         return {"room_id": room["id"], "floor": target, "message": message}
 
-    def begin_turn(self, room_id: Any, *, request_id: Any, agent_id: Any, message: Any) -> dict[str, Any]:
+    def begin_turn(
+        self, room_id: Any, *, request_id: Any, agent_id: Any, message: Any
+    ) -> dict[str, Any]:
         room = self.get(room_id)
         stable = _bounded_text(request_id, "request id", 256)
         target = _bounded_text(agent_id, "Bot identity", 256)
-        body = _bounded_text(message, "room message", MAX_ROOM_MESSAGE_CHARS)
+        raw_body = _bounded_text(message, "room message", MAX_ROOM_MESSAGE_CHARS)
+        body = _redacted_bounded_text(raw_body, "room message", MAX_ROOM_MESSAGE_CHARS)
         if target not in room["members"]:
             raise PermissionError("only a member of this room may take a turn")
-        digest = hashlib.sha256(f"{target}\0{body}".encode()).hexdigest()
+        digest = hashlib.sha256(f"{target}\0{raw_body}".encode()).hexdigest()
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 "SELECT * FROM room_turns WHERE room_id = ? AND request_id = ?",
                 (room["id"], stable),
             ).fetchone()
             if existing is not None:
                 if str(existing["payload_digest"]) != digest:
-                    raise ValueError("request identity was reused for another room turn")
+                    raise ValueError(
+                        "request identity was reused for another room turn"
+                    )
                 result = dict(existing)
+                result.pop("payload_digest", None)
+                result.pop("reply_digest", None)
                 result["duplicate"] = True
                 return result
+            live = connection.execute(
+                "SELECT floor FROM rooms WHERE id = ?", (room["id"],)
+            ).fetchone()
+            if live is None:
+                raise LookupError("room not found")
+            if live["floor"] != target:
+                raise PermissionError("only the floor holder may take a turn")
             connection.execute(
                 "INSERT INTO room_turns (room_id, request_id, agent_id, message, payload_digest, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
                 (room["id"], stable, target, body, digest, _now()),
             )
-        self._post(room["id"], body, speaker="owner", kind="message", request_id=stable)
+            self._insert_message(
+                connection,
+                room["id"],
+                body,
+                speaker="owner",
+                kind="message",
+                request_id=stable,
+                payload_digest=digest,
+            )
         return {
-            "room_id": room["id"], "request_id": stable, "agent_id": target,
-            "message": body, "reply": "", "floor": room["floor"], "status": "pending",
+            "room_id": room["id"],
+            "request_id": stable,
+            "agent_id": target,
+            "message": body,
+            "reply": "",
+            "floor": target,
+            "status": "pending",
             "duplicate": False,
         }
 
-    def complete_turn(self, room_id: Any, *, request_id: Any, agent_id: Any, reply: Any) -> dict[str, Any]:
+    def complete_turn(
+        self, room_id: Any, *, request_id: Any, agent_id: Any, reply: Any
+    ) -> dict[str, Any]:
         room = self.get(room_id)
         stable = _bounded_text(request_id, "request id", 256)
         target = _bounded_text(agent_id, "Bot identity", 256)
-        raw_reply = _bounded_text(reply, "room reply", MAX_ROOM_MESSAGE_CHARS)
+        original_reply = _bounded_text(reply, "room reply", MAX_ROOM_MESSAGE_CHARS)
+        raw_reply = _redacted_bounded_text(original_reply, "room reply", MAX_ROOM_MESSAGE_CHARS)
+        reply_digest = hashlib.sha256(original_reply.encode()).hexdigest()
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT * FROM room_turns WHERE room_id = ? AND request_id = ?",
                 (room["id"], stable),
             ).fetchone()
-        if row is None or str(row["agent_id"]) != target:
-            raise ValueError("room turn was not prepared")
-        if row["status"] == "committed":
-            if str(row["reply"]) != raw_reply:
-                raise ValueError("room turn replay does not match its original reply")
-            return {"room_id": room["id"], "request_id": stable, "agent_id": target,
-                    "reply": raw_reply, "floor": str(row["floor"]), "status": "committed"}
+            if row is None or str(row["agent_id"]) != target:
+                raise ValueError("room turn was not prepared")
+            if row["status"] == "committed":
+                stored_digest = str(row["reply_digest"] or "")
+                if (stored_digest and stored_digest != reply_digest) or (
+                    not stored_digest and str(row["reply"]) != original_reply
+                ):
+                    raise ValueError(
+                        "room turn replay does not match its original reply"
+                    )
+                return {
+                    "room_id": room["id"],
+                    "request_id": stable,
+                    "agent_id": target,
+                    "reply": raw_reply,
+                    "floor": str(row["floor"]),
+                    "status": "committed",
+                }
+            live = connection.execute(
+                "SELECT floor FROM rooms WHERE id = ?", (room["id"],)
+            ).fetchone()
+            if live is None or live["floor"] != target:
+                raise PermissionError("only the floor holder may complete a turn")
 
-        match = _HANDOFF.search(raw_reply)
-        wanted = str(match.group("agent")).strip() if match else ""
-        visible = "\n".join(
-            line for line in _HANDOFF_MARKERS.sub("", raw_reply).splitlines() if line.strip()
-        ).strip()
-        if not visible:
-            visible = "(no visible reply)"
-        self._post(room["id"], visible, speaker=target, kind="message", request_id=stable)
-        floor = room["floor"]
-        if wanted and wanted in room["members"] and wanted != target:
-            floor = self.hand_off(room["id"], wanted, actor=target)["floor"]
-        with self._connect() as connection:
-            connection.execute(
-                "UPDATE room_turns SET reply = ?, floor = ?, status = 'committed', committed_at = ? WHERE room_id = ? AND request_id = ? AND status = 'pending'",
-                (raw_reply, floor, _now(), room["id"], stable),
+            match = _HANDOFF.search(raw_reply)
+            wanted = str(match.group("agent")).strip() if match else ""
+            visible = "\n".join(
+                line
+                for line in _HANDOFF_MARKERS.sub("", raw_reply).splitlines()
+                if line.strip()
+            ).strip()
+            if not visible:
+                visible = "(no visible reply)"
+            self._insert_message(
+                connection,
+                room["id"],
+                visible,
+                speaker=target,
+                kind="message",
+                request_id=stable,
+                payload_digest=reply_digest,
             )
-        return {"room_id": room["id"], "request_id": stable, "agent_id": target,
-                "reply": raw_reply, "floor": floor, "status": "committed"}
+            floor = target
+            if (
+                wanted
+                and (wanted == "owner" or wanted in room["members"])
+                and wanted != target
+            ):
+                floor = wanted
+                connection.execute(
+                    "UPDATE rooms SET floor = ? WHERE id = ?", (floor, room["id"])
+                )
+                self._insert_message(
+                    connection,
+                    room["id"],
+                    f"{target} handed the floor to {floor}",
+                    speaker="owner",
+                    kind="handoff",
+                )
+            connection.execute(
+                "UPDATE room_turns SET reply = ?, reply_digest = ?, floor = ?, status = 'committed', committed_at = ? WHERE room_id = ? AND request_id = ? AND status = 'pending'",
+                (raw_reply, reply_digest, floor, _now(), room["id"], stable),
+            )
+        return {
+            "room_id": room["id"],
+            "request_id": stable,
+            "agent_id": target,
+            "reply": raw_reply,
+            "floor": floor,
+            "status": "committed",
+        }
