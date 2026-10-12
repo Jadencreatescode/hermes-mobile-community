@@ -13,8 +13,76 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from hermes_cli.dashboard_auth import (
+    DashboardAuthProvider,
+    LoginStart,
+    Session,
+    clear_providers,
+    register_provider,
+)
+from hermes_cli.dashboard_auth.cookies import (
+    SESSION_AT_COOKIE,
+    SESSION_PROVIDER_COOKIE,
+)
+from hermes_cli.dashboard_auth.middleware import gated_auth_middleware
+
 ROOT = Path(__file__).resolve().parents[2]
 DASHBOARD = ROOT / "plugins" / "operations" / "dashboard"
+PLUGIN_API_PREFIX = "/api/plugins/operations"
+OWNER_COOKIE = f"{SESSION_AT_COOKIE}=owner-session; {SESSION_PROVIDER_COOKIE}=endpoint-test"
+OPERATOR_COOKIE = (
+    f"{SESSION_AT_COOKIE}=operator-session; {SESSION_PROVIDER_COOKIE}=endpoint-test"
+)
+
+
+class StableDashboardSessionProvider(DashboardAuthProvider):
+    """Verify stable fake sessions through the production cookie middleware."""
+
+    name = "endpoint-test"
+    display_name = "A2A endpoint test provider"
+
+    def start_login(self, *, redirect_uri: str) -> LoginStart:
+        raise NotImplementedError
+
+    def complete_login(
+        self,
+        *,
+        code: str,
+        state: str,
+        code_verifier: str,
+        redirect_uri: str,
+    ) -> Session:
+        raise NotImplementedError
+
+    def verify_session(self, *, access_token: str) -> Session | None:
+        identities = {
+            "owner-session": ("owner-user", "owner@example.test", "Owner"),
+            "operator-session": (
+                "operator-user",
+                "operator@example.test",
+                "Operator",
+            ),
+        }
+        identity = identities.get(access_token)
+        if identity is None:
+            return None
+        user_id, email, display_name = identity
+        return Session(
+            user_id=user_id,
+            email=email,
+            display_name=display_name,
+            org_id="owner-org",
+            provider=self.name,
+            expires_at=4_102_444_800,
+            access_token=access_token,
+            refresh_token="",
+        )
+
+    def refresh_session(self, *, refresh_token: str) -> Session:
+        raise NotImplementedError
+
+    def revoke_session(self, *, refresh_token: str) -> None:
+        return None
 
 
 def load_api():
@@ -27,12 +95,27 @@ def load_api():
     return module
 
 
+def build_app(api) -> FastAPI:
+    app = FastAPI()
+    app.state.auth_required = True
+    app.middleware("http")(gated_auth_middleware)
+    app.include_router(api.router, prefix=PLUGIN_API_PREFIX)
+    return app
+
+
 async def request_json(app: FastAPI, method: str, path: str, payload=None, headers=None):
+    if headers is None:
+        headers = {"Cookie": OWNER_COOKIE}
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://operations.test"
     ) as client:
-        return await client.request(method, path, json=payload, headers=headers)
+        return await client.request(
+            method,
+            f"{PLUGIN_API_PREFIX}{path}",
+            json=payload,
+            headers=headers,
+        )
 
 
 @pytest.fixture
@@ -40,16 +123,52 @@ def api_module(tmp_path, monkeypatch):
     api = load_api()
     monkeypatch.setattr(api, "_a2a_registry_path", lambda: tmp_path / "harness_agents.db")
     monkeypatch.setattr(api, "_a2a_catalog_path", lambda: tmp_path / "agent_cards.db")
+    monkeypatch.setenv(
+        "HERMES_OPERATIONS_OWNER",
+        '["session","endpoint-test","owner-user","owner-org"]',
+    )
+    clear_providers()
+    register_provider(StableDashboardSessionProvider())
     # Reset rate limiter for isolation
     api._a2a_rate_limiter._user_buckets.clear()
     api._a2a_rate_limiter._global_bucket.clear()
-    return api
+    yield api
+    clear_providers()
+
+
+class TestA2AAuthorization:
+    def test_unauthenticated_caller_is_rejected(self, api_module):
+        app = build_app(api_module)
+
+        resp = asyncio.run(
+            request_json(app, "GET", "/agents/a2a", headers={})
+        )
+
+        assert resp.status_code == 401
+        assert resp.json()["error"] == "unauthenticated"
+
+    def test_authenticated_non_owner_cannot_register_agent(self, api_module):
+        app = build_app(api_module)
+        owner = asyncio.run(request_json(app, "GET", "/agents/a2a"))
+        assert owner.status_code == 200
+
+        resp = asyncio.run(
+            request_json(
+                app,
+                "POST",
+                "/agents/a2a/register",
+                {"url": "https://example.com/agent"},
+                headers={"Cookie": OPERATOR_COOKIE},
+            )
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "operations_owner_or_admin_required"
 
 
 class TestA2ARegister:
     def test_register_valid_url_creates_pending_agent(self, api_module, tmp_path):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         mock_card = {"name": "Test Agent", "description": "A test agent"}
         with patch("plugins.harness_agents.catalog.AgentCardCatalog") as MockCatalog:
@@ -73,8 +192,7 @@ class TestA2ARegister:
         assert "capabilities" in payload
 
     def test_register_normalizes_well_known_suffixes(self, api_module, tmp_path):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         mock_card = {"name": "Agent Card", "description": "card"}
         with patch("plugins.harness_agents.catalog.AgentCardCatalog") as MockCatalog:
@@ -96,8 +214,7 @@ class TestA2ARegister:
         assert payload["name"] == "Agent Card"
 
     def test_register_rejects_private_ip_with_a2a_destination_not_allowed(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         resp = asyncio.run(
             request_json(
@@ -112,8 +229,7 @@ class TestA2ARegister:
         assert resp.json()["detail"] == "a2a_destination_not_allowed"
 
     def test_register_rejects_metadata_host(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         resp = asyncio.run(
             request_json(
@@ -128,8 +244,7 @@ class TestA2ARegister:
         assert resp.json()["detail"] == "a2a_destination_not_allowed"
 
     def test_register_rejects_malformed_card(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         mock_card = {"description": "missing name"}
         with patch("plugins.harness_agents.catalog.AgentCardCatalog") as MockCatalog:
@@ -149,8 +264,7 @@ class TestA2ARegister:
         assert resp.json()["detail"] == "a2a_malformed_agent_card"
 
     def test_register_confirm_verifies_and_binds_mirror(self, api_module, tmp_path):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         mock_card = {"name": "Confirm Agent", "description": "d"}
         probe_result = {
@@ -180,8 +294,7 @@ class TestA2ARegister:
         assert payload["status"] == "verified"
 
     def test_register_response_contains_no_credentials_or_destination(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         mock_card = {"name": "Safe Agent", "description": "d"}
         with patch("plugins.harness_agents.catalog.AgentCardCatalog") as MockCatalog:
@@ -208,8 +321,7 @@ class TestA2ARegister:
 
 class TestA2AList:
     def test_list_returns_public_safe_summaries(self, api_module, tmp_path):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         # Seed one agent
         from plugins.harness_agents.registry import HarnessRegistry
@@ -243,8 +355,7 @@ class TestA2AList:
 
 class TestA2AStatus:
     def test_status_returns_public_safe_summary(self, api_module, tmp_path):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         from plugins.harness_agents.registry import HarnessRegistry
 
@@ -272,8 +383,7 @@ class TestA2AStatus:
         assert "connector_url" not in json.dumps(payload)
 
     def test_status_404_for_missing_agent(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         resp = asyncio.run(request_json(app, "GET", "/agents/a2a/missing-id/status"))
         assert resp.status_code == 404
@@ -282,8 +392,7 @@ class TestA2AStatus:
 
 class TestA2ADelete:
     def test_delete_removes_agent(self, api_module, tmp_path):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         from plugins.harness_agents.registry import HarnessRegistry
 
@@ -313,8 +422,7 @@ class TestA2ADelete:
         assert resp2.status_code == 404
 
     def test_delete_404_for_missing_agent(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         resp = asyncio.run(request_json(app, "DELETE", "/agents/a2a/missing-id"))
         assert resp.status_code == 404
@@ -323,8 +431,7 @@ class TestA2ADelete:
 
 class TestA2ARateLimiting:
     def test_rate_limit_blocks_excess_requests(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         # Force a very low per-user limit by temporarily overriding constants
         api_module._A2A_RATE_LIMIT_PER_USER = 2
@@ -343,8 +450,7 @@ class TestA2ARateLimiting:
 
 class TestA2ARegisterEdgeCases:
     def test_register_rejects_non_https_url(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         resp = asyncio.run(
             request_json(
@@ -358,8 +464,7 @@ class TestA2ARegisterEdgeCases:
         assert resp.json()["detail"] == "a2a_destination_not_allowed"
 
     def test_register_rejects_url_with_credentials(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         resp = asyncio.run(
             request_json(
@@ -373,8 +478,7 @@ class TestA2ARegisterEdgeCases:
         assert resp.json()["detail"] == "a2a_destination_not_allowed"
 
     def test_register_rejects_localhost(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         resp = asyncio.run(
             request_json(
@@ -388,8 +492,7 @@ class TestA2ARegisterEdgeCases:
         assert resp.json()["detail"] == "a2a_destination_not_allowed"
 
     def test_register_rejects_blocked_ipv6(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         resp = asyncio.run(
             request_json(
@@ -403,8 +506,7 @@ class TestA2ARegisterEdgeCases:
         assert resp.json()["detail"] == "a2a_destination_not_allowed"
 
     def test_register_rejects_malformed_url(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         resp = asyncio.run(
             request_json(
@@ -420,8 +522,7 @@ class TestA2ARegisterEdgeCases:
 
 class TestA2AListEdgeCases:
     def test_list_empty_returns_empty_array(self, api_module):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         resp = asyncio.run(request_json(app, "GET", "/agents/a2a"))
         assert resp.status_code == 200
@@ -431,8 +532,7 @@ class TestA2AListEdgeCases:
 
 class TestA2AStatusExtended:
     def test_status_includes_capabilities_when_verified(self, api_module, tmp_path):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         from plugins.harness_agents.registry import HarnessRegistry
 
@@ -467,8 +567,7 @@ class TestA2AStatusExtended:
         assert "agent.view" in payload["capabilities"]
 
     def test_status_omits_connector_url(self, api_module, tmp_path):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         from plugins.harness_agents.registry import HarnessRegistry
 
@@ -498,8 +597,7 @@ class TestA2AStatusExtended:
 
 class TestA2ADeleteExtended:
     def test_delete_already_deleted_returns_404(self, api_module, tmp_path):
-        app = FastAPI()
-        app.include_router(api_module.router)
+        app = build_app(api_module)
 
         from plugins.harness_agents.registry import HarnessRegistry
 
