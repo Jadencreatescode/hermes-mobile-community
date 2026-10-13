@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shlex
 from pathlib import Path
+
+import yaml
 
 _PATH = Path(__file__).resolve().parents[2] / "scripts" / "ci" / "osv_review_status.py"
 _SPEC = importlib.util.spec_from_file_location("osv_review_status", _PATH)
@@ -250,12 +253,35 @@ def test_invalid_json_fails_closed(tmp_path: Path) -> None:
 
 
 def test_workflow_exports_json_and_required_aggregate_consumes_review() -> None:
-    workflow = (
-        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "osv-scanner.yml"
-    ).read_text(encoding="utf-8")
+    workflow_path = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "osv-scanner.yml"
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    jobs = workflow["jobs"]
 
-    assert "export-results: true" in workflow
-    assert "OSV_RESULTS: ${{ needs.scan.outputs.results }}" in workflow
-    assert "--results \"$RESULTS_PATH\"" in workflow
-    assert "needs: [whatsapp-production-audit, scan, review-findings]" in workflow
-    assert "--required-job review-findings" in workflow
+    assert jobs["scan"]["with"]["export-results"] is True
+
+    review = jobs["review-findings"]
+    assert review["needs"] == "scan"
+    emit = next(step for step in review["steps"] if step.get("id") == "emit")
+    assert emit["env"] == {
+        "OSV_RESULTS": "${{ needs.scan.outputs.results }}",
+        "SCAN_RESULT": "${{ needs.scan.result }}",
+        "RESULTS_PATH": "${{ runner.temp }}/osv-results.json",
+    }
+
+    aggregate = jobs["required-dependency-gates"]
+    assert aggregate["needs"] == ["whatsapp-production-audit", "scan", "review-findings"]
+    gate = next(step for step in aggregate["steps"] if step["name"] == "Fail unless every dependency gate succeeded")
+    assert gate["env"] == {"NEEDS": "${{ toJSON(needs) }}"}
+    assert shlex.split(gate["run"]) == [
+        "python3",
+        "scripts/ci/evaluate_required_jobs.py",
+        "--strict",
+        "--required-job",
+        "whatsapp-production-audit",
+        "--required-job",
+        "scan",
+        "--required-job",
+        "review-findings",
+        "--needs-json",
+        "$NEEDS",
+    ]
