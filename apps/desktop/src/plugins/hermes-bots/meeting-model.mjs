@@ -15,8 +15,49 @@ export const MEETING_LIMITS = Object.freeze({
   maxRounds: 5,
   maxSeats: 6,
   maxSeatLabelLength: 256,
-  maxSeatInstructionsLength: 4_000
+  maxSeatInstructionsLength: 4_000,
+  maxAcceptanceStatementLength: 4_000,
+  minProductionParticipants: 3
 })
+
+// Canonical public meeting schema version. New records are always v2; a legacy
+// record with no schemaVersion hydrates as an ordinary conclusion meeting.
+export const MEETING_SCHEMA_VERSION = 2
+
+// The public package kinds a production meeting may order. The produced output
+// kind is tracked separately as deliverable_package_v1, so the package schema
+// and the product category are never conflated.
+export const MEETING_PRODUCT_KINDS = Object.freeze([
+  'interactive_web_app',
+  'three_scene',
+  'audio_asset',
+  'video_asset',
+  'document'
+])
+
+const _PRODUCT_KIND_SET = new Set(MEETING_PRODUCT_KINDS)
+
+// The complete production bundle. A meeting is a production meeting only when
+// every one of these is present; a partial bundle is refused outright.
+const _PRODUCTION_BUNDLE_FIELDS = Object.freeze([
+  'orchestrator',
+  'producer',
+  'seats',
+  'productKind',
+  'outputTitle',
+  'acceptanceStatement'
+])
+
+// Every field a conclusion meeting must not carry.
+const _PRODUCTION_ONLY_FIELDS = Object.freeze([
+  ..._PRODUCTION_BUNDLE_FIELDS,
+  'productionStage',
+  'artifactBinding'
+])
+
+// The non-identifying public approver label. The real principal lives only in
+// the protected server database, never in a renderer record.
+export const MEETING_APPROVED_BY_LABEL = 'Owner'
 
 export const MEETING_SEAT_ROLES = Object.freeze({
   contributor: 'contributor',
@@ -39,6 +80,19 @@ export const MEETING_PRODUCTION_STAGES = Object.freeze([
 
 const _PRODUCTION_STAGE_SET = new Set(MEETING_PRODUCTION_STAGES)
 
+// Server-owned stage ladder. `completed` is deliberately absent as a target:
+// it is reached only by the exact owner approval transaction on the server.
+const _STAGE_TRANSITIONS = Object.freeze({
+  briefing: Object.freeze(['working']),
+  working: Object.freeze(['production_ready']),
+  production_ready: Object.freeze(['producing']),
+  producing: Object.freeze(['reviewing']),
+  reviewing: Object.freeze(['changes_requested', 'approval_ready']),
+  changes_requested: Object.freeze(['producing']),
+  approval_ready: Object.freeze(['reviewing']),
+  completed: Object.freeze([])
+})
+
 // C5: SHA-256 digest pattern.
 const _SHA256_RE = /^[0-9a-f]{64}$/
 
@@ -60,7 +114,9 @@ function fail(message) {
   throw new MeetingValidationError(message)
 }
 
-// C5: validate an artifact binding object. Returns a frozen copy or throws.
+/** Validate a SERVER-DERIVED artifact binding. The renderer never authors one:
+ *  this only checks that a record the server already wrote is well formed, and
+ *  it refuses any approver other than the non-identifying Owner label. */
 function validateArtifactBinding(value, field = 'artifactBinding') {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     fail(`${field} must be an object`)
@@ -78,22 +134,31 @@ function validateArtifactBinding(value, field = 'artifactBinding') {
       fail(`${field}.${digestKey} must be a 64-character lowercase hex SHA-256 digest`)
     }
   }
-  const approvedBy = requireString(value.approvedBy, `${field}.approvedBy`, MEETING_LIMITS.maxIdLength)
-  if (!Number.isFinite(value.approvedAt) || value.approvedAt < 0) fail(`${field}.approvedAt must be a finite non-negative number`)
+  if (value.approvedBy !== MEETING_APPROVED_BY_LABEL) {
+    fail(`${field}.approvedBy must be the non-identifying ${MEETING_APPROVED_BY_LABEL} label`)
+  }
+  if (!Number.isInteger(value.approvedAt) || value.approvedAt < 1) {
+    fail(`${field}.approvedAt must be a positive integer timestamp`)
+  }
   return Object.freeze({
     outputId,
     artifactVersion: value.artifactVersion,
     gameSha256: value.gameSha256,
     manifestSha256: value.manifestSha256,
     zipSha256: value.zipSha256,
-    approvedBy,
+    approvedBy: MEETING_APPROVED_BY_LABEL,
     approvedAt: value.approvedAt
   })
 }
 
-// Helper: returns true if the meeting is a production meeting (both orchestrator and producer present).
-function isProductionMeeting(meeting) {
-  return Boolean(meeting.orchestrator && meeting.producer)
+/** True when a record carries the production bundle. A meeting is production
+ *  or conclusion; there is no partial shape. */
+export function isProductionMeeting(meeting) {
+  return Boolean(meeting && meeting.orchestrator && meeting.producer && meeting.productKind)
+}
+
+function presentProductionFields(candidate) {
+  return _PRODUCTION_ONLY_FIELDS.filter(field => candidate[field] != null)
 }
 
 function requireRecord(value, field) {
@@ -198,7 +263,12 @@ export function submitContribution(meeting, input) {
   })
 }
 
-export function createMeeting(input) {
+/** Build a draft meeting.
+ *
+ *  `serverOwned` is an INTERNAL flag used only by hydrateMeeting, which is
+ *  reading a record the server already wrote. A client call always leaves it
+ *  false, so a renderer can never author productionStage or artifactBinding. */
+export function createMeeting(input, { serverOwned = false } = {}) {
   const candidate = requireRecord(input, 'meeting')
   requireString(candidate.id, 'id', MEETING_LIMITS.maxIdLength, { noWhitespace: true })
   validateRoute(candidate.source, 'source')
@@ -218,21 +288,51 @@ export function createMeeting(input) {
     fail(`maxRounds must be an integer from 1 to ${MEETING_LIMITS.maxRounds}`)
   }
 
-  // C1: orchestrator+producer mandatory pairing — both present or both absent, and must be distinct.
-  const orchestrator = candidate.orchestrator ? validateRoute(candidate.orchestrator, 'orchestrator') : null
-  const producer = candidate.producer ? validateRoute(candidate.producer, 'producer') : null
-  if (orchestrator && !producer) fail('producer is required when orchestrator is present')
-  if (producer && !orchestrator) fail('orchestrator is required when producer is present')
-  if (orchestrator && producer && routeKey(orchestrator) === routeKey(producer)) {
-    fail('orchestrator and producer must be distinct')
+  // The production bundle is all-or-none. A meeting is either a conclusion
+  // meeting (no production field at all) or a complete production meeting.
+  const present = presentProductionFields(candidate)
+  const production = present.length > 0
+
+  if (production) {
+    const missing = _PRODUCTION_BUNDLE_FIELDS.filter(field => candidate[field] == null)
+    if (missing.length) {
+      fail(`a production meeting requires the complete production bundle; missing: ${missing.join(', ')}`)
+    }
+    if (participants.length < MEETING_LIMITS.minProductionParticipants) {
+      fail(`a production meeting requires at least ${MEETING_LIMITS.minProductionParticipants} participant routes`)
+    }
+    // A client never authors approval evidence.
+    if (!serverOwned && candidate.artifactBinding != null) {
+      fail('artifactBinding is server owned and cannot be authored by a client')
+    }
   }
 
-  // C3: ordered seats — optional array, each bot unique, roles restricted, max 6 seats.
+  const orchestrator = production ? validateRoute(candidate.orchestrator, 'orchestrator') : null
+  const producer = production ? validateRoute(candidate.producer, 'producer') : null
+
+  if (production) {
+    if (!participants.some(route => routeKey(route) === routeKey(orchestrator))) {
+      fail('orchestrator must be a participant')
+    }
+    if (!participants.some(route => routeKey(route) === routeKey(producer))) {
+      fail('producer must be a participant')
+    }
+    if (routeKey(orchestrator) === routeKey(producer)) {
+      fail('orchestrator and producer must be distinct participants')
+    }
+  }
+
+  // Ordered seat bijection: every participant occupies exactly one seat, and
+  // at least one reviewer seat differs from both the orchestrator and producer.
   const seats = []
-  if (candidate.seats != null) {
+  if (production) {
     if (!Array.isArray(candidate.seats)) fail('seats must be an array')
-    if (candidate.seats.length > MEETING_LIMITS.maxSeats) fail(`seats must contain at most ${MEETING_LIMITS.maxSeats} items`)
+    if (candidate.seats.length !== participants.length) {
+      fail('production seats must assign every participant exactly once')
+    }
+    const participantKeys = new Set(participants.map(routeKey))
     const seenBotKeys = new Set()
+    const reviewerKeys = []
     for (let index = 0; index < candidate.seats.length; index++) {
       const rawSeat = candidate.seats[index]
       if (rawSeat == null || typeof rawSeat !== 'object' || Array.isArray(rawSeat)) {
@@ -248,33 +348,51 @@ export function createMeeting(input) {
         ? requireString(rawSeat.instructions, `seats[${index}].instructions`, MEETING_LIMITS.maxSeatInstructionsLength)
         : undefined
       const botKey = routeKey(bot)
-      if (seenBotKeys.has(botKey)) fail('seats must contain unique bots')
+      if (!participantKeys.has(botKey)) fail('every seat bot must be a meeting participant')
+      if (seenBotKeys.has(botKey)) fail('production seats must assign every participant exactly once')
       seenBotKeys.add(botKey)
-      // C2: reviewer seat cannot be the producer.
-      if (role === 'reviewer' && producer && botKey === routeKey(producer)) {
-        fail('reviewer seat cannot be the producer')
-      }
+      if (role === 'reviewer') reviewerKeys.push(botKey)
       seats.push(Object.freeze({ bot: copyRoute(bot), role, label, ...(instructions !== undefined ? { instructions } : {}) }))
+    }
+    if (seenBotKeys.size !== participantKeys.size) {
+      fail('production seats must assign every participant exactly once')
+    }
+    if (!reviewerKeys.length) fail('production requires at least one independent reviewer seat')
+    const excluded = new Set([routeKey(orchestrator), routeKey(producer)])
+    if (reviewerKeys.some(key => excluded.has(key))) {
+      fail('a reviewer seat must differ from both the orchestrator and the producer')
     }
   }
 
-  // C6: productionStage — optional, only valid on production meetings.
+  let productKind
+  let outputTitle
+  let acceptanceStatement
   let productionStage
-  if (candidate.productionStage != null) {
-    if (!orchestrator || !producer) fail('productionStage requires orchestrator and producer')
-    const stage = String(candidate.productionStage)
-    if (!_PRODUCTION_STAGE_SET.has(stage)) fail('productionStage is not a valid production stage')
-    productionStage = stage
-  }
 
-  // C5: artifactBinding — optional, only valid on production meetings.
-  let artifactBinding
-  if (candidate.artifactBinding != null) {
-    if (!orchestrator || !producer) fail('artifactBinding requires orchestrator and producer')
-    artifactBinding = validateArtifactBinding(candidate.artifactBinding)
+  if (production) {
+    productKind = requireString(candidate.productKind, 'productKind', 64, { noWhitespace: true })
+    if (!_PRODUCT_KIND_SET.has(productKind)) fail('productKind is not a public package kind')
+    outputTitle = requireString(candidate.outputTitle, 'outputTitle', MEETING_LIMITS.maxTitleLength)
+    acceptanceStatement = requireString(
+      candidate.acceptanceStatement,
+      'acceptanceStatement',
+      MEETING_LIMITS.maxAcceptanceStatementLength
+    )
+    // productionStage is server owned. A new client draft may only declare
+    // briefing; hydration accepts whatever stage the server advanced to.
+    productionStage = MEETING_PRODUCTION_STAGES[0]
+    if (candidate.productionStage != null) {
+      const stage = String(candidate.productionStage)
+      if (!_PRODUCTION_STAGE_SET.has(stage)) fail('productionStage is not a valid production stage')
+      if (!serverOwned && stage !== productionStage) {
+        fail('productionStage is server owned; a new production meeting starts at briefing')
+      }
+      productionStage = stage
+    }
   }
 
   return Object.freeze({
+    schemaVersion: MEETING_SCHEMA_VERSION,
     id: candidate.id,
     source: copyRoute(candidate.source),
     title: candidate.title,
@@ -289,11 +407,17 @@ export function createMeeting(input) {
     dissent: Object.freeze([]),
     actionItems: Object.freeze([]),
     state: 'draft',
-    ...(orchestrator ? { orchestrator: copyRoute(orchestrator) } : {}),
-    ...(producer ? { producer: copyRoute(producer) } : {}),
-    ...(seats.length ? { seats: Object.freeze(seats) } : {}),
-    ...(productionStage !== undefined ? { productionStage } : {}),
-    ...(artifactBinding !== undefined ? { artifactBinding } : {})
+    ...(production
+      ? {
+          orchestrator: copyRoute(orchestrator),
+          producer: copyRoute(producer),
+          seats: Object.freeze(seats),
+          productKind,
+          outputTitle,
+          acceptanceStatement,
+          productionStage
+        }
+      : {})
   })
 }
 
@@ -307,13 +431,27 @@ export const resumeMeeting = meeting => transitionMeeting(meeting, ['waiting'], 
 export const cancelMeeting = meeting => transitionMeeting(meeting, ['draft', 'running', 'waiting'], 'cancelled')
 export const failMeeting = meeting => transitionMeeting(meeting, ['draft', 'running', 'waiting'], 'failed')
 
-// C6: advance production stage. Both orchestrator and producer must be present.
+/** Advance one legal production stage. This mirrors the server ladder so the
+ *  renderer can predict eligibility; the server remains the only writer, and
+ *  `completed` is unreachable here because only owner approval reaches it. */
 export function advanceProductionStage(meeting, stage) {
   if (!isProductionMeeting(meeting)) {
-    throw new MeetingTransitionError('advanceProductionStage requires orchestrator and producer')
+    throw new MeetingTransitionError('advanceProductionStage requires a production meeting')
   }
   if (!_PRODUCTION_STAGE_SET.has(stage)) {
     throw new MeetingValidationError('productionStage is not a valid production stage')
+  }
+  if (stage === 'completed') {
+    throw new MeetingTransitionError(
+      'the completed stage is reached only through the exact owner approval transaction'
+    )
+  }
+  if (['completed', 'cancelled', 'failed'].includes(meeting.state)) {
+    throw new MeetingTransitionError('a terminal meeting cannot advance its production stage')
+  }
+  const current = meeting.productionStage ?? MEETING_PRODUCTION_STAGES[0]
+  if (!_STAGE_TRANSITIONS[current].includes(stage)) {
+    throw new MeetingTransitionError(`production stage ${current} cannot advance to ${stage}`)
   }
   return Object.freeze({ ...meeting, productionStage: stage })
 }
@@ -365,6 +503,14 @@ function copyActionItem(meetingId, value, index, participants) {
 
 export function concludeMeeting(meeting, input) {
   if (!['running', 'waiting'].includes(meeting?.state)) throw new MeetingTransitionError('only an active meeting can conclude')
+  // The generic conclude path belongs to ordinary discussion meetings. A
+  // production meeting completes only through the exact owner approval
+  // transaction, which the server performs atomically with the binding.
+  if (isProductionMeeting(meeting)) {
+    throw new MeetingTransitionError(
+      'a production meeting completes only through the exact owner approval transaction'
+    )
+  }
   const candidate = requireRecord(input, 'conclusion')
   const chair = validateRoute(candidate.chair, 'conclusion.chair')
   if (routeKey(chair) !== routeKey(meeting.chair)) throw new MeetingTransitionError('only the chair can conclude the meeting')
@@ -372,23 +518,12 @@ export function concludeMeeting(meeting, input) {
   const dissent = Object.freeze(boundedArray(candidate.dissent, 'dissent', MEETING_LIMITS.maxDissentCount).map((row, index) => copyDissent(row, index, meeting.participants)))
   const actionItems = Object.freeze(boundedArray(candidate.actionItems, 'actionItems', MEETING_LIMITS.maxActionItemCount).map((row, index) => copyActionItem(meeting.id, row, index, meeting.participants)))
 
-  // C4: production meetings cannot reach completed without a valid artifactBinding.
-  let artifactBinding = meeting.artifactBinding
-  if (isProductionMeeting(meeting)) {
-    const bindingInput = candidate.artifactBinding != null ? candidate.artifactBinding : meeting.artifactBinding
-    if (bindingInput == null) {
-      throw new MeetingTransitionError('production meeting cannot complete without an approved artifact binding')
-    }
-    artifactBinding = validateArtifactBinding(bindingInput)
-  }
-
   return Object.freeze({
     ...meeting,
     decisions,
     dissent,
     actionItems,
-    state: 'completed',
-    ...(artifactBinding !== undefined ? { artifactBinding } : {})
+    state: 'completed'
   })
 }
 
@@ -433,6 +568,9 @@ function freezeHydrated(record) {
       ...seat,
       bot: copyRoute(seat.bot)
     }))) } : {}),
+    ...(record.productKind !== undefined ? { productKind: record.productKind } : {}),
+    ...(record.outputTitle !== undefined ? { outputTitle: record.outputTitle } : {}),
+    ...(record.acceptanceStatement !== undefined ? { acceptanceStatement: record.acceptanceStatement } : {}),
     ...(record.productionStage !== undefined ? { productionStage: record.productionStage } : {}),
     ...(record.artifactBinding !== undefined ? { artifactBinding: Object.freeze({ ...record.artifactBinding }) } : {})
   })
@@ -443,7 +581,7 @@ export function hydrateMeeting(serialized) {
   let record
   try { record = JSON.parse(serialized) } catch { fail('meeting payload is not valid JSON') }
   const candidate = requireRecord(record, 'meeting')
-  const base = createMeeting(candidate)
+  const base = createMeeting(candidate, { serverOwned: true })
   const allowedStates = new Set(['draft', 'running', 'waiting', 'completed', 'cancelled', 'failed'])
   if (!allowedStates.has(candidate.state)) fail('meeting state is invalid')
   if (!Number.isInteger(candidate.currentRound) || candidate.currentRound < 0 || candidate.currentRound > base.maxRounds) fail('currentRound is invalid')
@@ -459,21 +597,40 @@ export function hydrateMeeting(serialized) {
   const dissent = boundedArray(candidate.dissent, 'dissent', MEETING_LIMITS.maxDissentCount).map((row, index) => copyDissent(row, index, base.participants))
   const actions = boundedArray(candidate.actionItems, 'actionItems', MEETING_LIMITS.maxActionItemCount).map((row, index) => copyActionItem(base.id, row, index, base.participants))
 
-  // C6: restore productionStage if present (already validated inside createMeeting above).
-  // C5: restore artifactBinding if present.
+  // production_stage and artifact_binding are SERVER truth. Hydration accepts
+  // whatever stage the server advanced to and revalidates the binding shape,
+  // but a completed production meeting must carry an approved binding and a
+  // completed stage — nothing else can present itself as approved.
+  const production = isProductionMeeting(base)
+  let productionStage = base.productionStage
+  if (production && candidate.productionStage != null) {
+    const stage = String(candidate.productionStage)
+    if (!_PRODUCTION_STAGE_SET.has(stage)) fail('productionStage is not a valid production stage')
+    productionStage = stage
+  }
+
   let artifactBinding
   if (candidate.artifactBinding != null) {
+    if (!production) fail('artifactBinding requires a production meeting')
     artifactBinding = validateArtifactBinding(candidate.artifactBinding)
   }
 
-  // C4: production meetings in completed state must have an artifact binding.
-  if (candidate.state === 'completed' && base.orchestrator && base.producer) {
-    if (artifactBinding == null) fail('production meeting cannot complete without an approved artifact binding')
+  if (production && candidate.state === 'completed') {
+    if (artifactBinding == null) {
+      fail('a completed production meeting requires an approved artifact binding')
+    }
+    if (productionStage !== 'completed') {
+      fail('a completed production meeting requires the completed production stage')
+    }
+  }
+  if (artifactBinding != null && (candidate.state !== 'completed' || productionStage !== 'completed')) {
+    fail('artifactBinding requires a completed production meeting')
   }
 
   const hydrated = {
     ...rebuilt,
     state: candidate.state,
+    ...(production ? { productionStage } : {}),
     currentRound: candidate.currentRound,
     evidenceRefs: copyEvidenceRefs(candidate.evidenceRefs),
     decisions: Object.freeze(decisions),

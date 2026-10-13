@@ -1,8 +1,8 @@
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 
 import { BotAvatar } from './bot-avatar'
 import type { OperationsAgentModel } from './data'
-import type { MeetingRecord } from './meetings'
+import { isProductionMeeting, type MeetingRecord } from './meetings'
 
 const MEETING_CUES: Record<MeetingRecord['state'], { accent: string; label: string; lighting: string; orb: string }> = {
   cancelled: { accent: 'bg-slate-400', label: 'Meeting cancelled', lighting: 'dimmed', orb: 'bg-slate-400/60' },
@@ -76,6 +76,7 @@ export function MeetingRoom({
   onOpenConversation,
   onOpenConversations,
   onOpenDetails,
+  output,
   thinkingParticipant
 }: {
   agents: OperationsAgentModel[]
@@ -85,6 +86,10 @@ export function MeetingRoom({
   onOpenConversation?: (participant: MeetingRecord['participants'][number]) => void
   onOpenConversations?: () => void
   onOpenDetails?: () => void
+  /** The output lifecycle panel for a production meeting. It mounts INSIDE
+   *  this room rather than on a separate production page, so stage, versions,
+   *  review findings, and approval live where the meeting already is. */
+  output?: ReactNode
   thinkingParticipant?: MeetingRecord['participants'][number] | null
 }) {
   const speaker = latestSpeaker(meeting)
@@ -271,6 +276,15 @@ export function MeetingRoom({
       })}
 
       <div aria-hidden className="pointer-events-none absolute inset-x-[18%] bottom-2 h-6 rounded-[50%] bg-black/50 blur-xl" />
+
+      {output && isProductionMeeting(meeting) ? (
+        <div
+          className="absolute inset-x-2 bottom-2 z-40 max-h-[52%] overflow-y-auto md:inset-x-6"
+          data-testid="meeting-room-output"
+        >
+          {output}
+        </div>
+      ) : null}
     </section>
   )
 }

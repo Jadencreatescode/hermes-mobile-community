@@ -20,8 +20,8 @@ import time
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 try:
     from hermes_constants import get_hermes_home
@@ -76,6 +76,32 @@ meeting_store_module = _load_meeting_store_module()
 MeetingStore = meeting_store_module.MeetingStore
 MeetingVersionConflict = meeting_store_module.VersionConflict
 ImmutableMeetingHistory = meeting_store_module.ImmutableMeetingHistory
+ServerOwnedField = meeting_store_module.ServerOwnedField
+InvalidMeetingTransition = meeting_store_module.InvalidMeetingTransition
+
+
+def _load_dashboard_module(filename: str, module_name: str):
+    """Load a sibling Operations module through the existing convention."""
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    path = Path(__file__).with_name(filename)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Operations module could not load: {filename}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+package_module = _load_dashboard_module(
+    "deliverable_package.py", "hermes_operations_deliverable_package"
+)
+output_store_module = _load_dashboard_module(
+    "meeting_output_store.py", "hermes_operations_meeting_output_store"
+)
+MeetingOutputStore = output_store_module.MeetingOutputStore
 
 router = APIRouter()
 
@@ -98,6 +124,139 @@ def _meeting_db_path() -> Path:
 
 def _meeting_store() -> MeetingStore:
     return MeetingStore(_meeting_db_path(), clock=_clock)
+
+
+def _artifact_root() -> Path:
+    return Path(get_hermes_home()) / "operations" / "artifacts"
+
+
+def _output_store() -> MeetingOutputStore:
+    """The output lifecycle shares the one public meeting database."""
+    return MeetingOutputStore(_meeting_db_path(), _artifact_root(), clock=_clock)
+
+
+# ---------------------------------------------------------------------------
+# Authorization and error mapping for meeting + output lifecycle routes
+# ---------------------------------------------------------------------------
+
+#: Public error codes. Bodies carry a stable code and nothing else, so a
+#: refusal can never leak a host path, a claim token, SQL, or an identity.
+def _code(value: str) -> dict[str, str]:
+    return {"error": value}
+
+
+def _authorize_view(request: Request) -> str:
+    """Read routes require the existing Operations view capability."""
+    principal, registry = _authorized_registry(request, "agent.view")
+    try:
+        return principal
+    finally:
+        registry.close()
+
+
+def _authorize_mutation(request: Request) -> str:
+    """Meeting and output mutations require owner/admin mutation authority."""
+    principal, registry = _authorized_registry(request, "team.manage")
+    try:
+        return principal
+    finally:
+        registry.close()
+
+
+def _authorize_owner(request: Request) -> str:
+    """Approval additionally re-checks owner/admin on the live registry."""
+    principal, registry = _authorized_registry(request, "team.manage")
+    try:
+        if not registry.is_owner_or_admin(principal):
+            raise HTTPException(
+                status_code=403, detail=_code("operations_owner_or_admin_required")
+            )
+        return principal
+    finally:
+        registry.close()
+
+
+def _output_http_error(exc: Exception) -> HTTPException:
+    """Map store failures onto stable public status codes and codes."""
+    if isinstance(exc, HTTPException):
+        return exc
+    module = output_store_module
+    mapping: list[tuple[type, int, str]] = [
+        (module.PackageLimitExceeded, 413, "operations_package_limit_exceeded"),
+        (module.DeterministicCheckFailed, 422, "operations_deterministic_check_failed"),
+        (module.CollectionFailed, 422, "operations_collection_failed"),
+        (module.ArtifactUnavailable, 422, "operations_artifact_unavailable"),
+        (module.PackageInvalid, 422, "operations_package_invalid"),
+        (module.ReviewerNotEligible, 403, "operations_reviewer_not_eligible"),
+        (module.ReviewClaimRequired, 403, "operations_review_claim_required"),
+        (module.ProducerNotEligible, 403, "operations_producer_not_eligible"),
+        (module.ProducerSessionMismatch, 403, "operations_producer_session_mismatch"),
+        (module.WorkspaceClaimInvalid, 403, "operations_collection_claim_invalid"),
+        (module.OutputNotFound, 404, "operations_output_not_found"),
+        (module.OutputVersionConflict, 409, "operations_output_version_conflict"),
+        (MeetingVersionConflict, 409, "operations_meeting_version_conflict"),
+        (module.IdempotencyConflict, 409, "operations_idempotency_conflict"),
+        (module.ClaimActive, 409, "operations_claim_active"),
+        (module.ClaimBindingMismatch, 409, "operations_claim_binding_mismatch"),
+        (module.ClaimExhausted, 409, "operations_claim_exhausted"),
+        (module.ReviewActive, 409, "operations_review_active"),
+        (module.InvalidOutputTransition, 409, "operations_invalid_transition"),
+        (InvalidMeetingTransition, 409, "operations_invalid_transition"),
+        (ServerOwnedField, 409, "operations_server_owned_field"),
+        (ImmutableMeetingHistory, 409, "operations_immutable_history"),
+    ]
+    for kind, status, code in mapping:
+        if isinstance(exc, kind):
+            return HTTPException(status_code=status, detail=_code(code))
+    if isinstance(exc, KeyError):
+        return HTTPException(status_code=404, detail=_code("operations_output_not_found"))
+    if isinstance(exc, PermissionError):
+        return HTTPException(status_code=403, detail=_code("operations_forbidden"))
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=400, detail=_code("operations_request_invalid"))
+    return HTTPException(status_code=500, detail=_code("operations_internal_error"))
+
+
+def _idempotency_key(request: Request) -> str:
+    value = (request.headers.get("Idempotency-Key") or "").strip()
+    if not value:
+        return ""
+    if len(value) > output_store_module.MAX_IDEMPOTENCY_KEY_CHARS or "\x00" in value:
+        raise HTTPException(status_code=400, detail=_code("operations_idempotency_key_invalid"))
+    return value
+
+
+def _idempotent(
+    store: MeetingOutputStore,
+    request: Request,
+    action: str,
+    payload: object,
+    run,
+    *,
+    resource: str,
+) -> Any:
+    """Replay an identical lifecycle request; conflict on a changed payload.
+
+    ``resource`` carries the mutation's path identifiers (meeting id, output
+    id, run id, review request id). It is hashed with the action and the body,
+    so the SAME key presented against a DIFFERENT resource is a 409 rather than
+    a replay of some other resource's response. It is required, not defaulted:
+    a new mutation route cannot forget it.
+
+    ``run`` receives the lifecycle transaction's connection and must do all of
+    its durable work on it: the replay check, the mutation, and the stored
+    response commit together or not at all.
+    """
+    request_hash = output_store_module.canonical_request_hash([action, resource, payload])
+    try:
+        return store.run_idempotent(
+            action=action,
+            key=_idempotency_key(request),
+            request_hash=request_hash,
+            mutate=run,
+        )
+    except Exception as exc:
+        raise _output_http_error(exc) from exc
 
 
 def _known_profiles() -> list[str]:
@@ -311,30 +470,32 @@ def put_critical_policy(request: CriticalPolicyPut):
 
 
 @router.get("/meetings")
-def list_meetings(limit: int = Query(default=50, ge=1, le=meeting_store_module.MAX_LIST_LIMIT)):
+def list_meetings(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=meeting_store_module.MAX_LIST_LIMIT),
+):
+    _authorize_view(request)
     return {"meetings": _meeting_store().list(limit=limit)}
 
 
 @router.get("/meetings/{meeting_id}")
-def get_meeting(meeting_id: str):
+def get_meeting(request: Request, meeting_id: str):
+    _authorize_view(request)
     try:
         return _meeting_store().get(meeting_id)
     except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=404, detail="Meeting not found") from exc
+        raise HTTPException(status_code=404, detail=_code("operations_meeting_not_found")) from exc
 
 
 @router.put("/meetings/{meeting_id}")
-def put_meeting(meeting_id: str, request: MeetingPut):
-    if request.record.get("id") != meeting_id:
-        raise HTTPException(status_code=400, detail="Meeting id does not match route")
+def put_meeting(request: Request, meeting_id: str, body: MeetingPut):
+    _authorize_mutation(request)
+    if body.record.get("id") != meeting_id:
+        raise HTTPException(status_code=400, detail=_code("operations_meeting_id_mismatch"))
     try:
-        return _meeting_store().put(request.record, expected_version=request.expected_version)
-    except MeetingVersionConflict as exc:
-        raise HTTPException(status_code=409, detail="Meeting version conflict") from exc
-    except ImmutableMeetingHistory as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _meeting_store().put(body.record, expected_version=body.expected_version)
+    except Exception as exc:
+        raise _output_http_error(exc) from exc
 
 
 @router.get("/connected-agents")
@@ -1342,3 +1503,514 @@ def run_room_turn(request: Request, room_id: str, body: RoomTurnRequest):
         raise _room_error(exc) from exc
     finally:
         reg.close()
+
+
+# ---------------------------------------------------------------------------
+# Public production-meeting output lifecycle
+#
+# Every route below runs inside the existing authenticated Operations REST
+# authority. Read routes need the view capability; mutations need the
+# owner/admin mutation authority; approval re-checks owner/admin and derives
+# the approver from request authentication. No route accepts an approver, an
+# approval time, a hash the client invented, or a host path.
+# ---------------------------------------------------------------------------
+
+
+class _ClosedRequest(BaseModel):
+    """Base for every production-lifecycle request body.
+
+    The model is CLOSED: an unexpected field is a 422, not a silently dropped
+    one. That is what makes "the producer never chooses a host path" checkable
+    at the boundary — a smuggled ``cwd``/``workspace`` is refused outright
+    instead of being ignored and looking accepted.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProductionBriefRequest(_ClosedRequest):
+    expected_version: int = Field(ge=1)
+    brief: str = Field(min_length=1, max_length=output_store_module.MAX_BRIEF_CHARS)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=output_store_module.MAX_EVIDENCE_REFS)
+
+
+class ProductionRunRequest(_ClosedRequest):
+    expected_version: int = Field(ge=1)
+    producer_session_id: str = Field(min_length=1, max_length=output_store_module.MAX_SESSION_REF_CHARS)
+    submission_id: str = Field(min_length=1, max_length=128)
+
+
+class RunClaimRequest(_ClosedRequest):
+    request_id: str = Field(min_length=1, max_length=128)
+    session_id: str = Field(min_length=1, max_length=output_store_module.MAX_SESSION_REF_CHARS)
+
+
+class RunCollectRequest(_ClosedRequest):
+    collection_claim: str = Field(min_length=16, max_length=256)
+
+
+class ReviewRunRequest(_ClosedRequest):
+    expected_output_version: int = Field(ge=1)
+    reviewer: dict
+
+
+class ReviewFinding(_ClosedRequest):
+    severity: Literal["low", "medium", "high", "critical"]
+    code: str = Field(min_length=1, max_length=64)
+    detail: str = Field(min_length=1, max_length=output_store_module.MAX_FINDING_DETAIL_CHARS)
+    path: Optional[str] = Field(default=None, max_length=512)
+
+
+class ReviewCompleteRequest(_ClosedRequest):
+    verdict: Literal["verified", "changes_requested"]
+    findings: list[ReviewFinding] = Field(default_factory=list, max_length=output_store_module.MAX_FINDINGS)
+
+
+class RevisionRunRequest(_ClosedRequest):
+    expected_output_version: int = Field(ge=1)
+    producer_session_id: str = Field(min_length=1, max_length=output_store_module.MAX_SESSION_REF_CHARS)
+
+
+class ApproveOutputRequest(_ClosedRequest):
+    """The exact approval request. There is no approver or approval-time field."""
+
+    meeting_id: str = Field(min_length=1, max_length=128)
+    expected_meeting_version: int = Field(ge=1)
+    expected_output_version: int = Field(ge=1)
+    artifact_version: int = Field(ge=1)
+    game_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    manifest_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    zip_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+
+
+def _output_eligibility(output: dict[str, Any]) -> dict[str, bool]:
+    """Server-declared action eligibility. The UI shows only what is true."""
+    state = output["state"]
+    current = int(output["current_artifact_version"])
+    return {
+        "produce": state == "candidate" and current == 0,
+        "review": state == "reviewing" and current > 0,
+        "revise": state == "changes_requested",
+        "approve": state == "verified" and int(output["verified_artifact_version"]) > 0,
+        "preview": current > 0,
+        "download": current > 0,
+    }
+
+
+def _output_dto(store: MeetingOutputStore, output: dict[str, Any]) -> dict[str, Any]:
+    versions = store.list_versions(output["output_id"])
+    return {
+        "output": output,
+        "eligibility": _output_eligibility(output),
+        "versions": versions,
+        "reviews": store.list_review_runs(output["output_id"]),
+    }
+
+
+@router.get("/meetings/{meeting_id}/outputs")
+def list_meeting_outputs(
+    request: Request,
+    meeting_id: str,
+    limit: int = Query(default=20, ge=1, le=output_store_module.MAX_LIST_LIMIT),
+):
+    _authorize_view(request)
+    store = _output_store()
+    try:
+        outputs = store.list_outputs(meeting_id, limit=limit)
+    except Exception as exc:
+        raise _output_http_error(exc) from exc
+    return {
+        "meeting_id": meeting_id,
+        "outputs": [
+            {"output": row, "eligibility": _output_eligibility(row)} for row in outputs
+        ],
+    }
+
+
+@router.get("/meeting-outputs/{output_id}")
+def get_meeting_output(request: Request, output_id: str):
+    _authorize_view(request)
+    store = _output_store()
+    try:
+        return _output_dto(store, store.get_output(output_id))
+    except Exception as exc:
+        raise _output_http_error(exc) from exc
+
+
+@router.get("/meeting-outputs/{output_id}/versions")
+def list_meeting_output_versions(
+    request: Request,
+    output_id: str,
+    limit: int = Query(default=50, ge=1, le=output_store_module.MAX_LIST_LIMIT),
+):
+    _authorize_view(request)
+    store = _output_store()
+    try:
+        store.get_output(output_id)
+        return {"output_id": output_id, "versions": store.list_versions(output_id, limit=limit)}
+    except Exception as exc:
+        raise _output_http_error(exc) from exc
+
+
+@router.get("/meeting-outputs/{output_id}/recovery")
+def get_meeting_output_recovery(request: Request, output_id: str):
+    """Durable lifecycle truth after a reload or a process restart."""
+    _authorize_view(request)
+    store = _output_store()
+    try:
+        return store.recover_output(output_id)
+    except Exception as exc:
+        raise _output_http_error(exc) from exc
+
+
+@router.post("/meetings/{meeting_id}/production-brief")
+def freeze_production_brief(request: Request, meeting_id: str, body: ProductionBriefRequest):
+    """Freeze the orchestrator brief and reach the production_ready stage."""
+    _authorize_mutation(request)
+    store = _output_store()
+
+    def run(db):
+        try:
+            frozen = store.freeze_production_brief(
+                meeting_id,
+                expected_meeting_version=body.expected_version,
+                brief=body.brief,
+                evidence_refs=body.evidence_refs,
+                connection=db,
+            )
+        except Exception as exc:
+            raise _output_http_error(exc) from exc
+        return {
+            "meeting_id": frozen["meeting_id"],
+            "meeting_version": frozen["meeting_version"],
+            "brief_hash": frozen["brief_hash"],
+            "acceptance_statement": frozen["acceptance_statement"],
+            "evidence_refs": frozen["evidence_refs"],
+            "production_stage": frozen["meeting"]["production_stage"],
+        }
+
+    return _idempotent(
+        store, request, "production.brief", body.model_dump(), run, resource=meeting_id
+    )
+
+
+@router.post("/meetings/{meeting_id}/production-runs")
+def create_production_run(request: Request, meeting_id: str, body: ProductionRunRequest):
+    """Checkpoint a producer run and mint its server-owned workspace."""
+    _authorize_mutation(request)
+    store = _output_store()
+
+    def run(db):
+        try:
+            created = store.begin_production_run(
+                meeting_id=meeting_id,
+                expected_meeting_version=body.expected_version,
+                producer_session_id=body.producer_session_id,
+                submission_id=body.submission_id,
+                connection=db,
+            )
+        except Exception as exc:
+            raise _output_http_error(exc) from exc
+        # Authenticated dispatcher response. It carries the server-assigned
+        # cwd because a producer session cannot be created without it, and it
+        # NEVER carries the single-use collection claim. The cwd appears in no
+        # meeting record, no output DTO, and no error body.
+        return {
+            "run_id": created["run_id"],
+            "output_id": created["output_id"],
+            "kind": created["kind"],
+            "meeting_id": created["meeting_id"],
+            "meeting_version": created["meeting_version"],
+            "parent_artifact_version": created["parent_artifact_version"],
+            "cwd": created["cwd"],
+        }
+
+    return _idempotent(
+        store, request, "production.run", body.model_dump(), run, resource=meeting_id
+    )
+
+
+@router.post("/meeting-outputs/{output_id}/revision-runs")
+def create_revision_run(request: Request, output_id: str, body: RevisionRunRequest):
+    """Open a revision run bound to the rejected parent artifact version."""
+    _authorize_mutation(request)
+    store = _output_store()
+
+    def run(db):
+        try:
+            created = store.begin_revision_run(
+                output_id,
+                expected_output_version=body.expected_output_version,
+                producer_session_id=body.producer_session_id,
+                connection=db,
+            )
+        except Exception as exc:
+            raise _output_http_error(exc) from exc
+        # Same dispatcher contract as a production run: the assigned cwd, and
+        # never the collection claim.
+        return {
+            "run_id": created["run_id"],
+            "output_id": created["output_id"],
+            "kind": created["kind"],
+            "meeting_id": created["meeting_id"],
+            "meeting_version": created["meeting_version"],
+            "parent_artifact_version": created["parent_artifact_version"],
+            "cwd": created["cwd"],
+        }
+
+    return _idempotent(
+        store, request, "revision.run", body.model_dump(), run, resource=output_id
+    )
+
+
+def _claim_run(request: Request, run_id: str, body: RunClaimRequest, *, kind: str | None):
+    """Claim a producer dispatch and hand the dispatcher its assigned cwd."""
+    _authorize_mutation(request)
+    store = _output_store()
+    try:
+        # One transaction binds the actual producer session, takes the dispatch
+        # claim, and reads the dispatcher-only cwd + collection claim. Nothing
+        # is handed out unless the whole binding committed.
+        return store.claim_dispatch(
+            run_id,
+            kind=kind,
+            request_id=body.request_id,
+            session_id=body.session_id,
+        )
+    except Exception as exc:
+        raise _output_http_error(exc) from exc
+
+
+@router.post("/meeting-output-runs/{run_id}/claim")
+def claim_output_run(request: Request, run_id: str, body: RunClaimRequest):
+    return _claim_run(request, run_id, body, kind=None)
+
+
+@router.post("/meeting-output-revision-runs/{request_id}/claim")
+def claim_revision_run(request: Request, request_id: str, body: RunClaimRequest):
+    return _claim_run(request, request_id, body, kind="revision")
+
+
+def _collect_run(request: Request, run_id: str, body: RunCollectRequest, *, kind: str | None):
+    _authorize_mutation(request)
+    store = _output_store()
+
+    def run(db):
+        try:
+            run_row = store.get_run(run_id, connection=db)
+            if kind is not None and run_row["kind"] != kind:
+                raise output_store_module.OutputNotFound(run_id)
+            receipt = store.collect_run(
+                run_id, claim_token=body.collection_claim, connection=db
+            )
+            output = store.get_output(run_row["output_id"], connection=db)
+        except Exception as exc:
+            raise _output_http_error(exc) from exc
+        return {"receipt": receipt, "output": output, "eligibility": _output_eligibility(output)}
+
+    return _idempotent(
+        store, request, "run.collect", {"run_id": run_id}, run, resource=run_id
+    )
+
+
+@router.post("/meeting-output-runs/{run_id}/collect")
+def collect_output_run(request: Request, run_id: str, body: RunCollectRequest):
+    return _collect_run(request, run_id, body, kind=None)
+
+
+@router.post("/meeting-output-revision-runs/{request_id}/collect")
+def collect_revision_run(request: Request, request_id: str, body: RunCollectRequest):
+    return _collect_run(request, request_id, body, kind="revision")
+
+
+@router.post("/meeting-outputs/{output_id}/review-runs")
+def create_review_run(request: Request, output_id: str, body: ReviewRunRequest):
+    """Open an independent review bound to exactly one artifact version."""
+    _authorize_mutation(request)
+    store = _output_store()
+
+    def run(db):
+        try:
+            return store.begin_review_run(
+                output_id,
+                reviewer=body.reviewer,
+                expected_output_version=body.expected_output_version,
+                connection=db,
+            )
+        except Exception as exc:
+            raise _output_http_error(exc) from exc
+
+    return _idempotent(
+        store, request, "review.run", body.model_dump(), run, resource=output_id
+    )
+
+
+@router.post("/meeting-output-review-runs/{request_id}/claim")
+def claim_review_run(request: Request, request_id: str, body: RunClaimRequest):
+    """Claim a reviewer dispatch. Reviewers never receive a writable path."""
+    _authorize_mutation(request)
+    store = _output_store()
+    try:
+        # One transaction reads the review, its output version, and the meeting
+        # version and binds all three into the claim, so a verdict can never be
+        # authorized against versions that had already moved.
+        return store.claim_review_dispatch(
+            request_id,
+            dispatch_request_id=body.request_id,
+            session_id=body.session_id,
+        )
+    except Exception as exc:
+        raise _output_http_error(exc) from exc
+
+
+@router.post("/meeting-output-review-runs/{request_id}/complete")
+def complete_review_run(request: Request, request_id: str, body: ReviewCompleteRequest):
+    """Record a verdict. A verified verdict needs every check to pass."""
+    _authorize_mutation(request)
+    store = _output_store()
+
+    def run(db):
+        try:
+            completed = store.complete_review_run(
+                request_id,
+                verdict=body.verdict,
+                findings=[finding.model_dump(exclude_none=True) for finding in body.findings],
+                connection=db,
+            )
+            output = store.get_output(completed["output_id"], connection=db)
+        except Exception as exc:
+            raise _output_http_error(exc) from exc
+        return {
+            "review": completed,
+            "output": output,
+            "eligibility": _output_eligibility(output),
+        }
+
+    return _idempotent(
+        store, request, "review.complete", body.model_dump(), run, resource=request_id
+    )
+
+
+@router.post("/meeting-outputs/{output_id}/approve")
+def approve_meeting_output(request: Request, output_id: str, body: ApproveOutputRequest):
+    """The exact owner approval transaction."""
+    principal = _authorize_owner(request)
+    store = _output_store()
+
+    def run(db):
+        try:
+            approved = store.approve_output(
+                output_id,
+                meeting_id=body.meeting_id,
+                expected_meeting_version=body.expected_meeting_version,
+                expected_output_version=body.expected_output_version,
+                artifact_version=body.artifact_version,
+                game_sha256=body.game_sha256,
+                manifest_sha256=body.manifest_sha256,
+                zip_sha256=body.zip_sha256,
+                # Derived from request authentication, never from the body.
+                approver_digest=principal,
+                connection=db,
+            )
+        except Exception as exc:
+            raise _output_http_error(exc) from exc
+        return {
+            "output": approved["output"],
+            "eligibility": _output_eligibility(approved["output"]),
+            "meeting": approved["meeting"],
+            "meeting_version": approved["meeting_version"],
+            "artifact_binding": approved["artifact_binding"],
+        }
+
+    return _idempotent(
+        store, request, "output.approve", body.model_dump(), run, resource=output_id
+    )
+
+
+_ARTIFACT_RESPONSE_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "private, no-store",
+}
+
+
+@router.get("/meeting-outputs/{output_id}/versions/{artifact_version}/files/{path:path}")
+def preview_meeting_output_file(
+    request: Request,
+    output_id: str,
+    artifact_version: int,
+    path: str,
+):
+    """Preview one declared member. Hash knowledge is not authorization."""
+    _authorize_view(request)
+    store = _output_store()
+    try:
+        store.get_output(output_id)
+        member = store.read_member(output_id, artifact_version, path)
+    except Exception as exc:
+        raise _output_http_error(exc) from exc
+
+    disposition = package_module.preview_disposition(member.media_type, member.preview_policy)
+    cap = package_module.preview_byte_cap(member.preview_policy)
+    if disposition == "attachment" or cap <= 0:
+        return Response(
+            content=member.payload,
+            media_type="application/octet-stream",
+            headers={
+                **_ARTIFACT_RESPONSE_HEADERS,
+                "Content-Disposition": "attachment; filename=\"artifact.bin\"",
+                "X-Hermes-Artifact-Sha256": member.sha256,
+                "X-Hermes-Preview-Policy": member.preview_policy,
+            },
+        )
+    if len(member.payload) > cap:
+        raise HTTPException(status_code=413, detail=_code("operations_preview_too_large"))
+    if member.preview_policy == "text":
+        try:
+            member.payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(
+                status_code=422, detail=_code("operations_preview_not_utf8")
+            ) from exc
+    return Response(
+        content=member.payload,
+        media_type=member.media_type,
+        headers={
+            **_ARTIFACT_RESPONSE_HEADERS,
+            "Content-Disposition": "inline",
+            "X-Hermes-Artifact-Sha256": member.sha256,
+            "X-Hermes-Preview-Policy": member.preview_policy,
+        },
+    )
+
+
+@router.get("/meeting-outputs/{output_id}/versions/{artifact_version}/download")
+def download_meeting_output_package(request: Request, output_id: str, artifact_version: int):
+    """Stream the stored immutable package as an attachment."""
+    _authorize_view(request)
+    store = _output_store()
+    try:
+        output = store.get_output(output_id)
+        version = store.get_version(output_id, artifact_version)
+        payload = store.package_bytes(output_id, artifact_version)
+    except Exception as exc:
+        raise _output_http_error(exc) from exc
+
+    approved = int(output["approved_artifact_version"]) == int(artifact_version)
+    verified = int(output["verified_artifact_version"]) == int(artifact_version)
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={
+            **_ARTIFACT_RESPONSE_HEADERS,
+            "Content-Disposition": (
+                f'attachment; filename="deliverable-v{int(artifact_version)}.zip"'
+            ),
+            "X-Hermes-Artifact-Sha256": version["zip_sha256"],
+            "X-Hermes-Artifact-Status": (
+                "approved" if approved else "verified" if verified else "candidate"
+            ),
+        },
+    )

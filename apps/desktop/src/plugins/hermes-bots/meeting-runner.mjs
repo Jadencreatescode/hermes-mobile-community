@@ -86,6 +86,261 @@ function pendingInput(state, participant, session, before) {
   return null
 }
 
+/** Session restrictions for one meeting turn, by role.
+ *
+ *  Ordinary discussion turns stay clarify-only — that is the existing contract
+ *  and it does not change. A producer turn is the one exception: it may receive
+ *  the minimum execution toolset needed to write package files, and it is
+ *  confined to the server-minted workspace cwd. A reviewer turn gets a
+ *  read-only, server-prepared summary and never a writable artifact path.
+ *
+ *  This only ever *requests* toolsets. session.create still intersects the
+ *  request with the profile's own authority, so this cannot widen a profile
+ *  and must never be used to try. */
+export function meetingRoleRestrictions(role = 'discussion', { cwd = '' } = {}) {
+  const base = {
+    ...MEETING_SESSION_RESTRICTIONS,
+    enabled_toolsets: [...MEETING_SESSION_RESTRICTIONS.enabled_toolsets]
+  }
+
+  if (role === 'producer') {
+    if (!cwd) {
+      throw new Error('a producer turn requires the server-minted workspace cwd')
+    }
+
+    return Object.freeze({
+      ...base,
+      // clarify + the minimum file authority a deliverable needs.
+      enabled_toolsets: Object.freeze([...base.enabled_toolsets, 'file']),
+      cwd
+    })
+  }
+
+  if (role === 'reviewer') {
+    // A reviewer reads a prepared summary. No cwd, no file authority: it must
+    // not share the producer workspace or receive a writable artifact path.
+    return Object.freeze(base)
+  }
+
+  if (role !== 'discussion') {
+    throw new Error(`unknown meeting turn role: ${role}`)
+  }
+
+  return Object.freeze(base)
+}
+
+function roleSessionParams(role, participant, cwd, extra = {}) {
+  const policy = meetingRoleRestrictions(role, { cwd })
+
+  return {
+    ...policy,
+    enabled_toolsets: [...policy.enabled_toolsets],
+    profile: participant.profile,
+    ...extra
+  }
+}
+
+/** The index just past a prompt this turn already dispatched, or -1. */
+function dispatchedPromptIndex(messages, prompt) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+
+    if (message?.role === 'user' && messageContent(message).trim() === prompt.trim()) {
+      return index
+    }
+  }
+
+  return -1
+}
+
+/** Run ONE role-scoped turn: ensure the session, checkpoint, dispatch once,
+ *  then poll for the reply.
+ *
+ *  The order is load-bearing. The session binding is checkpointed BEFORE
+ *  prompt.submit, so a reload always finds the session that owns the dispatch;
+ *  and the prompt is submitted only when the durable state does not already
+ *  show it, so a recovered turn polls instead of dispatching twice.
+ *
+ *  Session authority comes from meetingRoleRestrictions: a producer turn is
+ *  confined to the server-minted cwd and asks for clarify + file only; a
+ *  reviewer turn gets neither a cwd nor file authority. session.create still
+ *  intersects the request with the profile's own authority. */
+export async function runRoleTurn(options = {}) {
+  const {
+    role,
+    cwd = '',
+    participant,
+    prompt,
+    sessions = {},
+    request,
+    onCheckpoint,
+    sleep: rawSleep,
+    maxPolls: rawMaxPolls,
+    pollMs: rawPollMs,
+    dispatched = false
+  } = options
+
+  if (typeof request !== 'function') throw new Error('request function is required')
+  if (!participant?.connectionId || !participant?.profile) {
+    throw new Error('a role turn requires a source-qualified participant')
+  }
+
+  const text = typeof prompt === 'string' ? prompt.trim() : ''
+
+  if (text.length < 1 || text.length > 8_000) {
+    throw new Error('the turn prompt must be 1 through 8000 characters')
+  }
+
+  // Refuses a producer turn with no server-minted cwd before any request.
+  const policy = meetingRoleRestrictions(role, { cwd })
+  const sleep = typeof rawSleep === 'function'
+    ? rawSleep
+    : ms => new Promise(resolve => setTimeout(resolve, ms))
+  const maxPolls = Math.max(1, Math.min(Number(rawMaxPolls || DEFAULT_MAX_POLLS), DEFAULT_MAX_POLLS))
+  const pollMs = Math.max(0, Number(rawPollMs ?? DEFAULT_POLL_MS))
+  const next = { ...sessions }
+  const key = routeKey(participant)
+  const known = next[key]
+  let runtime = null
+  let stored = known || null
+
+  if (known) {
+    try {
+      const resumed = await request(participant, 'session.resume', roleSessionParams(
+        role, participant, cwd, { session_id: known, omit_messages: true }
+      ))
+
+      if (resumed?.session_id) {runtime = resumed.session_id}
+    } catch {
+      // A stale stored id falls through to a fresh hidden role session.
+    }
+  }
+
+  if (!runtime) {
+    const created = await request(participant, 'session.create', roleSessionParams(
+      role, participant, cwd, { title: `Meeting role: ${role}`, hidden: true }
+    ))
+
+    runtime = created?.session_id || null
+    stored = created?.stored_session_id || created?.session_key || runtime
+  }
+
+  if (!runtime) {
+    return { status: 'unavailable', text: '', pending: null, sessions: next, dispatched: false }
+  }
+
+  if (stored) {next[key] = stored}
+
+  // Checkpoint the binding before the prompt exists anywhere.
+  if (typeof onCheckpoint === 'function') {
+    await onCheckpoint({ participant, role, sessions: { ...next } })
+  }
+
+  const resumeParams = () => roleSessionParams(role, participant, cwd, {
+    session_id: stored || runtime
+  })
+  let before = 0
+  // `alreadyDispatched` means "this prompt is already in flight or in history".
+  // `submitted` means "THIS call is the one that submitted it".
+  let alreadyDispatched = Boolean(dispatched)
+  let submitted = false
+
+  try {
+    const state = await request(participant, 'session.resume', resumeParams())
+    const messages = Array.isArray(state?.messages) ? state.messages : []
+    const existing = dispatchedPromptIndex(messages, text)
+
+    if (existing >= 0) {
+      alreadyDispatched = true
+      before = existing + 1
+    } else {
+      before = messages.length
+
+      if (state?.inflight || state?.running) {
+        // Something is already running in this session; never add a prompt.
+        alreadyDispatched = true
+      }
+    }
+
+    const pending = pendingInput(state, participant, stored || runtime, before)
+
+    if (pending) {
+      return { status: 'waiting', text: '', pending, sessions: next, dispatched: submitted }
+    }
+  } catch {
+    return {
+      status: 'waiting',
+      text: '',
+      pending: {
+        kind: 'baseline',
+        participant,
+        session: stored || runtime,
+        before: null,
+        reason: 'The role session history baseline could not be verified.'
+      },
+      sessions: next,
+      dispatched: false
+    }
+  }
+
+  if (!alreadyDispatched) {
+    await request(participant, 'prompt.submit', {
+      session_id: runtime,
+      text,
+      ...(policy.cwd ? { cwd: policy.cwd } : {})
+    })
+    alreadyDispatched = true
+    submitted = true
+  }
+
+  for (let poll = 0; poll < maxPolls; poll += 1) {
+    await sleep(pollMs)
+    let state
+
+    try {
+      state = await request(participant, 'session.resume', resumeParams())
+    } catch {
+      continue
+    }
+
+    const pending = pendingInput(state, participant, stored || runtime, before)
+
+    if (pending) {
+      return { status: 'waiting', text: '', pending, sessions: next, dispatched: submitted }
+    }
+
+    if (state?.inflight || state?.running) continue
+
+    const messages = Array.isArray(state?.messages) ? state.messages : []
+
+    for (let index = messages.length - 1; index >= before; index -= 1) {
+      if (messages[index]?.role === 'assistant') {
+        return {
+          status: 'ready',
+          text: assistantText(messages[index]),
+          pending: null,
+          sessions: next,
+          dispatched: submitted
+        }
+      }
+    }
+  }
+
+  return {
+    status: 'timeout',
+    text: '',
+    pending: {
+      kind: 'timeout',
+      participant,
+      session: stored || runtime,
+      before,
+      reason: 'The role turn timed out before a verified reply.'
+    },
+    sessions: next,
+    dispatched: submitted
+  }
+}
+
 function meetingSessionParams(participant, extra = {}) {
   return {
     ...MEETING_SESSION_RESTRICTIONS,

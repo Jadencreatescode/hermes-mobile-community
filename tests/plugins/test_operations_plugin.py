@@ -465,7 +465,12 @@ def test_meeting_store_is_bounded_compare_and_swap_and_append_only(tmp_path):
         expected_version=1,
     )
     assert updated["version"] == 2
-    assert updated["meeting"]["contributions"] == [contribution]
+    # Schema v2 is canonical snake_case; camelCase input is accepted and
+    # normalized rather than stored as a second spelling.
+    assert updated["meeting"]["contributions"] == [
+        {**{key: value for key, value in contribution.items() if key != "evidenceRefs"},
+         "evidence_refs": contribution["evidenceRefs"]}
+    ]
 
     with pytest.raises(api.VersionConflict):
         store.put(meeting_record(state="cancelled"), expected_version=1)
@@ -568,7 +573,9 @@ def test_meeting_store_accepts_semantically_complete_conclusion(tmp_path):
     stored = store.put(completed, expected_version=0)
 
     assert stored["meeting"]["decisions"][0]["id"] == "release"
-    assert stored["meeting"]["action_items"][0]["dedupeKey"].endswith(":publish")
+    assert stored["meeting"]["action_items"][0]["dedupe_key"].endswith(":publish")
+    assert stored["meeting"]["action_items"][0]["owner_route"] == reviewer
+    assert stored["meeting"]["schema_version"] == api.SCHEMA_VERSION
 
 
 def test_meeting_store_accepts_harness_agent_participants(tmp_path):
@@ -821,10 +828,38 @@ def test_meeting_store_rejects_round_run_started_at_beyond_javascript_safe_integ
         )
 
 
+def test_meeting_api_requires_the_existing_operations_authority(tmp_path, monkeypatch):
+    api = load_api()
+    home = tmp_path / "hermes-home"
+    (home / "operations").mkdir(parents=True)
+    monkeypatch.setattr(api, "get_hermes_home", lambda: home)
+    monkeypatch.setattr(api, "_meeting_db_path", lambda: home / "meetings.db")
+    monkeypatch.setattr(api, "_a2a_registry_path", lambda: home / "harness_agents.db")
+
+    # No local-owner mode and no token/session principal: every meeting route
+    # refuses rather than reading or writing durable meeting state.
+    app = FastAPI()
+    app.include_router(api.router)
+
+    for method, path, payload in (
+        ("GET", "/meetings?limit=10", None),
+        ("GET", "/meetings/meeting_release_1", None),
+        ("PUT", "/meetings/meeting_release_1", {"record": meeting_record(), "expected_version": 0}),
+    ):
+        response = asyncio.run(request_json(app, method, path, payload))
+        assert response.status_code == 401, (method, path)
+        assert response.json()["detail"] == "operations_authentication_required"
+
+
 def test_meeting_api_persists_versioned_records_and_returns_conflicts(tmp_path, monkeypatch):
     api = load_api()
-    monkeypatch.setattr(api, "_meeting_db_path", lambda: tmp_path / "meetings.db")
+    home = tmp_path / "hermes-home"
+    (home / "operations").mkdir(parents=True)
+    monkeypatch.setattr(api, "get_hermes_home", lambda: home)
+    monkeypatch.setattr(api, "_meeting_db_path", lambda: home / "meetings.db")
+    monkeypatch.setattr(api, "_a2a_registry_path", lambda: home / "harness_agents.db")
     app = FastAPI()
+    app.state.auth_required = False
     app.include_router(api.router)
 
     created = asyncio.run(
@@ -832,6 +867,7 @@ def test_meeting_api_persists_versioned_records_and_returns_conflicts(tmp_path, 
     )
     assert created.status_code == 200
     assert created.json()["version"] == 1
+    assert created.json()["meeting"]["schema_version"] == 2
 
     listed = asyncio.run(request_json(app, "GET", "/meetings?limit=10"))
     assert [row["meeting"]["id"] for row in listed.json()["meetings"]] == ["meeting_release_1"]
@@ -846,6 +882,7 @@ def test_meeting_api_persists_versioned_records_and_returns_conflicts(tmp_path, 
     )
     assert conflict.status_code == 409
     assert set(conflict.json()) == {"detail"}
+    assert conflict.json()["detail"] == {"error": "operations_meeting_version_conflict"}
 
 
 def test_connected_agents_endpoint_returns_verified_only_and_hides_local(tmp_path, monkeypatch):

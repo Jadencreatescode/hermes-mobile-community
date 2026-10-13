@@ -144,8 +144,10 @@ describe('Meetings graphical room integration', () => {
       runner_sessions: { 'local::reviewer': 'stored-reviewer' },
       state: 'waiting'
     }
+
     const writes: Array<Record<string, unknown>> = []
     let version = 1
+
     const rest = vi.fn(async (path: string, options?: { body?: { record?: Record<string, unknown> } }) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting: waitingMeeting, version }] }
@@ -190,6 +192,7 @@ describe('Meetings graphical room integration', () => {
       ...meeting,
       runner_sessions: { 'local::reviewer': 'stored-reviewer' }
     }
+
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting: chooserMeeting, version: 1 }] }
@@ -234,6 +237,7 @@ describe('Meetings graphical room integration', () => {
       ...meeting,
       runner_sessions: { 'local::reviewer': 'stored-reviewer' }
     }
+
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting: nativeMeeting, version: 1 }] }
@@ -281,9 +285,11 @@ describe('Meetings graphical room integration', () => {
       ...meeting,
       runner_sessions: { 'local::reviewer': 'stored-reviewer' }
     }
+
     const prompt = '  Check the final release evidence.  '
     const requestIdentity = '00000000-0000-4000-8000-000000000001'
     const randomUUID = vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(requestIdentity)
+
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting: nativeMeeting, version: 1 }] }
@@ -295,10 +301,12 @@ describe('Meetings graphical room integration', () => {
 
       throw new Error(`Unexpected REST call: ${path}`)
     })
+
     let resumes = 0
 
     requestProfile.mockImplementation(async (_route: unknown, method: string) => {
       if (method === 'prompt.submit') {return { ok: true }}
+
       if (method === 'session.resume') {
         resumes += 1
 
@@ -351,12 +359,15 @@ describe('Meetings graphical room integration', () => {
 
   it('warns after ambiguous native delivery without clearing or retrying the prompt', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
+
     const nativeMeeting = {
       ...meeting,
       runner_sessions: { 'local::reviewer': 'stored-reviewer' }
     }
+
     const typedPrompt = '  Decide whether to send this again.  '
     const deliveryWarning = 'Your prompt may have been submitted, but delivery could not be confirmed. It was not retried.'
+
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting: nativeMeeting, version: 1 }] }
@@ -371,6 +382,7 @@ describe('Meetings graphical room integration', () => {
 
     requestProfile.mockImplementation(async (_route: unknown, method: string) => {
       if (method === 'prompt.submit') {throw new Error('Connection dropped after submit.')}
+
       if (method === 'session.resume') {
         return {
           messages: [{ role: 'assistant', content: 'Earlier evidence.' }],
@@ -411,6 +423,7 @@ describe('Meetings graphical room integration', () => {
       runner_sessions: { 'local::reviewer': 'stored-reviewer' },
       state: 'completed'
     }
+
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting: completedMeeting, version: 2 }] }
@@ -439,10 +452,12 @@ describe('Meetings graphical room integration', () => {
 
   it('polls an open participant conversation every 2500ms and stops after close', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
+
     const nativeMeeting = {
       ...meeting,
       runner_sessions: { 'local::reviewer': 'stored-reviewer' }
     }
+
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting: nativeMeeting, version: 1 }] }
@@ -478,6 +493,7 @@ describe('Meetings graphical room integration', () => {
         'local::reviewer': 'stored-reviewer'
       }
     }
+
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting: nativeMeeting, version: 1 }] }
@@ -485,6 +501,7 @@ describe('Meetings graphical room integration', () => {
 
       throw new Error(`Unexpected REST call: ${path}`)
     })
+
     let resolveChair!: (value: unknown) => void
     let resolveReviewer!: (value: unknown) => void
     const chairResponse = new Promise(resolve => { resolveChair = resolve })
@@ -586,10 +603,12 @@ describe('Meetings graphical room integration', () => {
         state: 'idle'
       }
     ]
+
     const eligibilitySnapshot: OperationsSnapshot = {
       ...snapshot,
       agents: [chair, unsupportedAgents[0], reviewer, unsupportedAgents[1], a2aAgent, ...unsupportedAgents.slice(2)]
     }
+
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting, version: 1 }] }
@@ -612,6 +631,7 @@ describe('Meetings graphical room integration', () => {
       'Review Bot · This device',
       'A2A Harness Bot · A2A Harness'
     ])
+
     for (const agent of unsupportedAgents) {
       expect(within(setup).queryByText(new RegExp(agent.displayName))).toBeNull()
     }
@@ -619,6 +639,7 @@ describe('Meetings graphical room integration', () => {
 
   it('uses public neutral acceptance criteria when concluding with an action item', async () => {
     let putBody: { record?: { action_items?: Array<{ acceptanceCriteria?: string }> } } | undefined
+
     const rest = vi.fn(async (path: string, options?: { body?: typeof putBody }) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting, version: 1 }] }
@@ -644,7 +665,8 @@ describe('Meetings graphical room integration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Conclude meeting' }))
 
     await waitFor(() => expect(putBody).toBeDefined())
-    expect(putBody?.record?.action_items?.[0]?.acceptanceCriteria).toBe('Verify the completed result.')
+    expect((putBody?.record?.action_items?.[0] as Record<string, unknown> | undefined)?.acceptance_criteria)
+      .toBe('Verify the completed result.')
   })
 
   it('keeps setup and meeting records behind deliberate controls', async () => {
@@ -682,6 +704,7 @@ describe('Meetings graphical room integration', () => {
         started_at: Date.now()
       }
     }
+
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting: freshMeeting, version: 2 }] }
@@ -711,6 +734,7 @@ describe('Meetings graphical room integration', () => {
         participant: { connection: 'local', profile: 'chair' }
       }]
     }
+
     const rest = vi.fn(async (path: string, options?: { body?: { record?: unknown } }) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting: liveMeeting, version: 1 }] }
@@ -722,6 +746,7 @@ describe('Meetings graphical room integration', () => {
 
       throw new Error(`Unexpected REST call: ${path}`)
     })
+
     let rejectRequest!: (cause: Error) => void
     const participantRequest = new Promise((_resolve, reject) => { rejectRequest = reject })
 
@@ -761,6 +786,7 @@ describe('Meetings graphical room integration', () => {
         started_at: Date.now() - (10 * 60 * 1000) - 1
       }
     }
+
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/meetings?')) {
         return { meetings: [{ meeting: staleMeeting, version: 2 }] }
@@ -878,6 +904,7 @@ describe('PB4 – seat/role assignment controls (C3)', () => {
       if (path.startsWith('/meetings?')) { return { meetings: [] } }
       throw new Error(`Unexpected REST call: ${path}`)
     })
+
     unbind = bindOperationsApi(rest as never)
 
     render(<MeetingsView snapshot={snapshot} />)
@@ -900,6 +927,7 @@ describe('PB4 – seat/role assignment controls (C3)', () => {
       if (path.startsWith('/meetings?')) { return { meetings: [] } }
       throw new Error(`Unexpected REST call: ${path}`)
     })
+
     unbind = bindOperationsApi(rest as never)
 
     render(<MeetingsView snapshot={snapshot} />)
@@ -925,6 +953,7 @@ describe('PB4 – seat/role assignment controls (C3)', () => {
       if (path.startsWith('/meetings?')) { return { meetings: [] } }
       throw new Error(`Unexpected REST call: ${path}`)
     })
+
     unbind = bindOperationsApi(rest as never)
 
     render(<MeetingsView snapshot={snapshot} />)
@@ -940,254 +969,586 @@ describe('PB4 – seat/role assignment controls (C3)', () => {
   })
 })
 
-describe('PB4 – orchestrator/producer designation controls (C1)', () => {
-  it('production roles fieldset is hidden until 2+ participants are checked', async () => {
+const productionMeetingWire = {
+  ...meeting,
+  state: 'running',
+  participants: [
+    { connection: 'local', profile: 'chair' },
+    { connection: 'local', profile: 'reviewer' },
+    { connection: 'a2a', profile: 'agent-1' }
+  ],
+  contributions: [],
+  current_round: 1,
+  orchestrator: { connection: 'local', profile: 'chair' },
+  producer: { connection: 'local', profile: 'reviewer' },
+  seats: [
+    { bot: { connection: 'local', profile: 'chair' }, role: 'specialist', label: 'Orchestrator' },
+    { bot: { connection: 'local', profile: 'reviewer' }, role: 'contributor', label: 'Producer' },
+    { bot: { connection: 'a2a', profile: 'agent-1' }, role: 'reviewer', label: 'Independent reviewer' }
+  ],
+  product_kind: 'document',
+  output_title: 'Onboarding guide',
+  acceptance_statement: 'A reviewer confirms every onboarding step is reproducible.',
+  production_stage: 'production_ready'
+}
+
+const outputWire = {
+  output_id: 'mout_1',
+  meeting_id: 'meeting-room-1',
+  kind: 'deliverable_package_v1',
+  product_kind: 'document',
+  title: 'Onboarding guide',
+  summary: 'A reviewer confirms every onboarding step is reproducible.',
+  brief: 'Produce the guide.',
+  brief_hash: 'd'.repeat(64),
+  producer: { connection: 'local', profile: 'reviewer' },
+  source_meeting_version: 1,
+  current_artifact_version: 1,
+  verified_artifact_version: 1,
+  approved_artifact_version: 0,
+  state: 'verified',
+  version: 4,
+  findings: [],
+  created_at: 1,
+  updated_at: 2
+}
+
+const outputVersionWire = {
+  output_id: 'mout_1',
+  artifact_version: 1,
+  schema_version: 1,
+  runtime_version: '1',
+  game_sha256: 'a'.repeat(64),
+  manifest_sha256: 'b'.repeat(64),
+  zip_sha256: 'c'.repeat(64),
+  total_byte_size: 31,
+  parent_artifact_version: null,
+  manifest: {
+    product_kind: 'document',
+    title: 'Onboarding guide',
+    summary: 'A one-page guide.',
+    primary_file: 'index.txt',
+    files: [{
+      path: 'index.txt',
+      media_type: 'text/plain',
+      role: 'primary',
+      preview_policy: 'text',
+      byte_size: 31,
+      sha256: 'a'.repeat(64)
+    }]
+  },
+  created_at: 1
+}
+
+describe('production brief collection at creation', () => {
+  async function openCreateDialog() {
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/meetings?')) { return { meetings: [] } }
       throw new Error(`Unexpected REST call: ${path}`)
     })
+
     unbind = bindOperationsApi(rest as never)
 
     render(<MeetingsView snapshot={snapshot} />)
     await screen.findByText('The council chamber is empty')
-
     fireEvent.click(screen.getByRole('button', { name: 'New meeting' }))
+
+    return rest
+  }
+
+  it('hides the production brief until three participants are chosen', async () => {
+    await openCreateDialog()
+
     expect(screen.queryByRole('group', { name: /Production roles/i })).toBeNull()
 
-    const allCheckboxes = screen.getAllByRole('checkbox')
-    fireEvent.click(allCheckboxes[0]) // 1 participant — still hidden
+    const boxes = screen.getAllByRole('checkbox')
+    fireEvent.click(boxes[0])
+    fireEvent.click(boxes[1])
     expect(screen.queryByRole('group', { name: /Production roles/i })).toBeNull()
 
-    fireEvent.click(allCheckboxes[1]) // 2 participants — should appear
+    fireEvent.click(boxes[2])
     await waitFor(() => expect(screen.getByRole('group', { name: /Production roles/i })).toBeTruthy())
   })
 
-  it('orchestrator and producer selectors are present once 2+ participants are chosen', async () => {
-    const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [] } }
-      throw new Error(`Unexpected REST call: ${path}`)
-    })
-    unbind = bindOperationsApi(rest as never)
+  it('collects product kind, output title, and acceptance statement', async () => {
+    await openCreateDialog()
+    const boxes = screen.getAllByRole('checkbox')
+    boxes.slice(0, 3).forEach(box => fireEvent.click(box))
 
-    render(<MeetingsView snapshot={snapshot} />)
-    await screen.findByText('The council chamber is empty')
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Product kind' })).toBeTruthy())
 
-    fireEvent.click(screen.getByRole('button', { name: 'New meeting' }))
-    const allCheckboxes = screen.getAllByRole('checkbox')
-    fireEvent.click(allCheckboxes[0])
-    fireEvent.click(allCheckboxes[1])
+    const kinds = Array.from(
+      screen.getByRole('combobox', { name: 'Product kind' }).querySelectorAll('option')
+    ).map(option => (option as HTMLOptionElement).value)
 
-    await waitFor(() => {
-      expect(screen.getByRole('combobox', { name: /Orchestrator/i })).toBeTruthy()
-      expect(screen.getByRole('combobox', { name: /Producer/i })).toBeTruthy()
-    })
+    expect(kinds).toContain('document')
+    expect(kinds).toContain('interactive_web_app')
+    expect(screen.getByLabelText('Output title')).toBeTruthy()
+    expect(screen.getByLabelText('Acceptance statement')).toBeTruthy()
   })
 
-  it('shows validation error when only orchestrator is set but not producer', async () => {
-    const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [] } }
-      if (path.startsWith('/meetings/')) { return { meeting, version: 1 } }
-      throw new Error(`Unexpected REST call: ${path}`)
-    })
-    unbind = bindOperationsApi(rest as never)
+  it('never offers a production stage, hash, or approver input', async () => {
+    await openCreateDialog()
+    const boxes = screen.getAllByRole('checkbox')
+    boxes.slice(0, 3).forEach(box => fireEvent.click(box))
 
-    render(<MeetingsView snapshot={snapshot} />)
-    await screen.findByText('The council chamber is empty')
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Product kind' })).toBeTruthy())
 
-    fireEvent.click(screen.getByRole('button', { name: 'New meeting' }))
-    const allCheckboxes = screen.getAllByRole('checkbox')
-    fireEvent.click(allCheckboxes[0])
-    fireEvent.click(allCheckboxes[1])
+    for (const label of [
+      /production stage/i, /game sha/i, /manifest sha/i, /zip sha/i,
+      /approved by/i, /approved at/i, /output id/i
+    ]) {
+      expect(screen.queryByLabelText(label)).toBeNull()
+    }
+  })
 
-    // Fill required title/agenda
+  it('refuses a partial production bundle without writing anything', async () => {
+    const rest = await openCreateDialog()
+    const boxes = screen.getAllByRole('checkbox')
+    boxes.slice(0, 3).forEach(box => fireEvent.click(box))
+
     fireEvent.change(screen.getByPlaceholderText('Meeting title'), { target: { value: 'Prod test' } })
-    fireEvent.change(screen.getByPlaceholderText('Agenda and decision required'), { target: { value: 'Agenda here' } })
+    fireEvent.change(
+      screen.getByPlaceholderText('Agenda and decision required'),
+      { target: { value: 'Agenda here' } }
+    )
 
-    await waitFor(() => expect(screen.getByRole('combobox', { name: /Orchestrator/i })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Orchestrator' })).toBeTruthy())
 
-    // Set orchestrator but leave producer empty
-    const orchestratorSelect = screen.getByRole('combobox', { name: /Orchestrator/i })
-    const orchestratorOptions = Array.from(orchestratorSelect.querySelectorAll('option'))
-    const firstReal = orchestratorOptions.find(o => (o as HTMLOptionElement).value !== '')
-    if (firstReal) {
-      fireEvent.change(orchestratorSelect, { target: { value: (firstReal as HTMLOptionElement).value } })
+    const orchestrator = screen.getByRole('combobox', { name: 'Orchestrator' })
+
+    const option = Array.from(orchestrator.querySelectorAll('option'))
+      .find(row => (row as HTMLOptionElement).value !== '') as HTMLOptionElement
+
+    fireEvent.change(orchestrator, { target: { value: option.value } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create room' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert', { hidden: true }).textContent)
+        .toContain('needs both an orchestrator and a producer')
+    })
+    expect(rest.mock.calls.every(([path]) => String(path).startsWith('/meetings?'))).toBe(true)
+  })
+
+  it('requires an independent reviewer seat before creating a production meeting', async () => {
+    const rest = await openCreateDialog()
+    const boxes = screen.getAllByRole('checkbox')
+    boxes.slice(0, 3).forEach(box => fireEvent.click(box))
+
+    fireEvent.change(screen.getByPlaceholderText('Meeting title'), { target: { value: 'Prod test' } })
+    fireEvent.change(
+      screen.getByPlaceholderText('Agenda and decision required'),
+      { target: { value: 'Agenda here' } }
+    )
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Orchestrator' })).toBeTruthy())
+
+    const orchestrator = screen.getByRole('combobox', { name: 'Orchestrator' })
+
+    const orchestratorValues = Array.from(orchestrator.querySelectorAll('option'))
+      .map(row => (row as HTMLOptionElement).value).filter(Boolean)
+
+    fireEvent.change(orchestrator, { target: { value: orchestratorValues[0] } })
+
+    const producer = screen.getByRole('combobox', { name: 'Producer' })
+
+    const producerValues = Array.from(producer.querySelectorAll('option'))
+      .map(row => (row as HTMLOptionElement).value).filter(Boolean)
+
+    fireEvent.change(producer, { target: { value: producerValues[0] } })
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Product kind' }), { target: { value: 'document' } })
+    fireEvent.change(screen.getByLabelText('Output title'), { target: { value: 'Onboarding guide' } })
+    fireEvent.change(
+      screen.getByLabelText('Acceptance statement'),
+      { target: { value: 'A reviewer confirms every step.' } }
+    )
+
+    // Every participant is seated, but no seat is an independent reviewer.
+    for (const name of ['Chair Bot', 'Review Bot', 'A2A Harness Bot']) {
+      fireEvent.change(
+        screen.getByRole('combobox', { name: new RegExp(`Role for ${name}`, 'i') }),
+        { target: { value: 'contributor' } }
+      )
     }
 
     fireEvent.click(screen.getByRole('button', { name: 'Create room' }))
 
     await waitFor(() => {
-      const alert = screen.getByRole('alert', { hidden: true })
-      expect(alert.textContent).toContain('Orchestrator and producer must both be set together.')
+      expect(screen.getByRole('alert', { hidden: true }).textContent)
+        .toContain('reviewer seat that is neither the orchestrator nor the producer')
     })
-  })
-
-  it('production meeting details shows orchestrator and producer rows', async () => {
-    const productionMeeting = {
-      ...meeting,
-      state: 'running',
-      orchestrator: { connectionId: 'local', profile: 'chair' },
-      producer: { connectionId: 'local', profile: 'reviewer' }
-    }
-
-    const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [{ meeting: productionMeeting, version: 1 }] } }
-      throw new Error(`Unexpected REST call: ${path}`)
-    })
-    unbind = bindOperationsApi(rest as never)
-
-    render(<MeetingsView snapshot={snapshot} />)
-    await screen.findByRole('region', { name: 'Bot meeting room' })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Meeting details' }))
-    const details = screen.getByRole('dialog', { name: 'Meeting details' })
-
-    await waitFor(() => {
-      expect(details.textContent).toContain('Production roles')
-      expect(details.textContent).toContain('Orchestrator')
-      expect(details.textContent).toContain('Producer')
-    })
+    expect(rest.mock.calls.every(([path]) => String(path).startsWith('/meetings?'))).toBe(true)
   })
 })
 
-describe('PB4 – artifact-binding submission UI (C4/C5)', () => {
-  it('artifact binding fieldset is hidden for ordinary (non-production) meetings', async () => {
+describe('production meeting completion is approval only', () => {
+  function bindProduction(outputs: unknown[] = []) {
     const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [{ meeting, version: 1 }] } }
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [{ meeting: productionMeetingWire, version: 1 }] }
+      }
+
+      if (path.endsWith('/outputs?limit=20')) { return { outputs } }
+
+      if (path.startsWith('/meetings/')) { return { meeting: productionMeetingWire, version: 1 } }
       throw new Error(`Unexpected REST call: ${path}`)
     })
+
     unbind = bindOperationsApi(rest as never)
+
+    return rest
+  }
+
+  it('offers no conclude form and no artifact-binding fields for a production meeting', async () => {
+    bindProduction()
 
     render(<MeetingsView snapshot={snapshot} />)
     await screen.findByRole('region', { name: 'Bot meeting room' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Meeting details' }))
-    // The conclude section should be present (meeting is running)
-    await waitFor(() => expect(screen.getByRole('button', { name: /Conclude meeting/i })).toBeTruthy())
+    const details = await screen.findByRole('dialog', { name: 'Meeting details' })
 
-    // But artifact binding fieldset must NOT appear for an ordinary meeting.
-    expect(screen.queryByRole('group', { name: /Artifact binding/i })).toBeNull()
-  })
-
-  it('artifact binding fieldset appears for production meetings in the conclude section', async () => {
-    const productionMeeting = {
-      ...meeting,
-      state: 'running',
-      orchestrator: { connectionId: 'local', profile: 'chair' },
-      producer: { connectionId: 'local', profile: 'reviewer' }
-    }
-
-    const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [{ meeting: productionMeeting, version: 1 }] } }
-      throw new Error(`Unexpected REST call: ${path}`)
-    })
-    unbind = bindOperationsApi(rest as never)
-
-    render(<MeetingsView snapshot={snapshot} />)
-    await screen.findByRole('region', { name: 'Bot meeting room' })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Meeting details' }))
-
-    await waitFor(() => {
-      expect(screen.getByRole('group', { name: /Artifact binding/i })).toBeTruthy()
-    })
-
-    // All required sub-fields should be present.
-    expect(screen.getByRole('textbox', { name: /Output ID/i })).toBeTruthy()
-    expect(screen.getByRole('spinbutton', { name: /Artifact version/i })).toBeTruthy()
-    expect(screen.getByRole('textbox', { name: /Game SHA-256/i })).toBeTruthy()
-    expect(screen.getByRole('textbox', { name: /Manifest SHA-256/i })).toBeTruthy()
-    expect(screen.getByRole('textbox', { name: /Zip SHA-256/i })).toBeTruthy()
-    expect(screen.getByRole('textbox', { name: /Approved by/i })).toBeTruthy()
-    expect(screen.getByRole('spinbutton', { name: /Approved at/i })).toBeTruthy()
-  })
-
-  it('concluding a production meeting without artifact binding shows a validation error', async () => {
-    const productionMeeting = {
-      ...meeting,
-      state: 'running',
-      orchestrator: { connectionId: 'local', profile: 'chair' },
-      producer: { connectionId: 'local', profile: 'reviewer' }
-    }
-
-    const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [{ meeting: productionMeeting, version: 1 }] } }
-      throw new Error(`Unexpected REST call: ${path}`)
-    })
-    unbind = bindOperationsApi(rest as never)
-
-    render(<MeetingsView snapshot={snapshot} />)
-    await screen.findByRole('region', { name: 'Bot meeting room' })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Meeting details' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: /Conclude meeting/i })).toBeTruthy())
-
-    // Click conclude without filling artifact form
-    fireEvent.click(screen.getByRole('button', { name: /Conclude meeting/i }))
-
-    await waitFor(() => {
-      const alert = screen.getByRole('alert', { hidden: true })
-      expect(alert.textContent).toContain('Fill in all artifact-binding fields correctly')
-    })
-
-    // Verify the PUT was never called — ordinary meeting was not created/modified.
-    expect(rest).not.toHaveBeenCalledWith(expect.stringMatching(/^\/meetings\//), expect.anything())
-  })
-
-  it('zero regression — ordinary meeting conclude still works without artifact binding form', async () => {
-    const concludedMeeting = { ...meeting, state: 'completed', decisions: [{ id: 'd1', text: 'Ship it', evidenceRefs: [] }], dissent: [], action_items: [] }
-    const putSpy = vi.fn(async (path: string, _opts: unknown) => {
-      if (path.startsWith('/meetings/')) { return { meeting: concludedMeeting, version: 2 } }
-      throw new Error(`Unexpected REST call: ${path}`)
-    })
-
-    const rest = vi.fn(async (path: string, opts?: unknown) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [{ meeting, version: 1 }] } }
-      if (opts) { return putSpy(path, opts) }
-      throw new Error(`Unexpected REST call: ${path}`)
-    })
-    unbind = bindOperationsApi(rest as never)
-
-    render(<MeetingsView snapshot={snapshot} />)
-    await screen.findByRole('region', { name: 'Bot meeting room' })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Meeting details' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: /Conclude meeting/i })).toBeTruthy())
-
-    // Ordinary meeting: no artifact binding fieldset, clicking conclude should attempt PUT.
+    await waitFor(() => expect(details.textContent).toContain('Production completion'))
+    expect(screen.queryByRole('button', { name: /Conclude meeting/i })).toBeNull()
     expect(screen.queryByRole('group', { name: /Artifact binding/i })).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: /Conclude meeting/i }))
+    for (const label of [/output id/i, /game sha/i, /manifest sha/i, /zip sha/i, /approved by/i, /approved at/i]) {
+      expect(screen.queryByLabelText(label)).toBeNull()
+    }
 
-    // The PUT to conclude should be called (no validation gate blocks ordinary meetings).
-    await waitFor(() => {
-      expect(rest).toHaveBeenCalledWith(expect.stringMatching(/^\/meetings\//), expect.anything())
+    expect(details.textContent).toContain('document')
+    expect(details.textContent).toContain('Onboarding guide')
+  })
+
+  it('keeps the conclude form for an ordinary conclusion meeting', async () => {
+    const rest = vi.fn(async (path: string) => {
+      if (path.startsWith('/meetings?')) { return { meetings: [{ meeting, version: 1 }] } }
+
+      if (path.endsWith('/outputs?limit=20')) { return { outputs: [] } }
+      throw new Error(`Unexpected REST call: ${path}`)
     })
+
+    unbind = bindOperationsApi(rest as never)
+
+    render(<MeetingsView snapshot={snapshot} />)
+    await screen.findByRole('region', { name: 'Bot meeting room' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Meeting details' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Conclude meeting/i })).toBeTruthy())
+    expect(screen.queryByRole('group', { name: /Artifact binding/i })).toBeNull()
+    // An ordinary meeting never asks the output lifecycle for anything.
+    expect(rest.mock.calls.every(([path]) => !String(path).endsWith('/outputs?limit=20'))).toBe(true)
+  })
+
+  it('mounts the deliverable package panel inside the existing meeting room', async () => {
+    // The real list route answers with output + eligibility only, so the view
+    // must fetch the selected output's DETAIL to render versions and reviews.
+    const rest = vi.fn(async (path: string) => {
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [{ meeting: productionMeetingWire, version: 1 }] }
+      }
+
+      if (path.endsWith('/outputs?limit=20')) {
+        return {
+          meeting_id: 'meeting-room-1',
+          outputs: [{
+            output: outputWire,
+            eligibility: { approve: true, download: true, preview: true }
+          }]
+        }
+      }
+
+      if (path === '/meeting-outputs/mout_1') {
+        return {
+          output: outputWire,
+          eligibility: { approve: true, download: true, preview: true },
+          versions: [outputVersionWire],
+          reviews: []
+        }
+      }
+
+      if (path.startsWith('/meetings/')) { return { meeting: productionMeetingWire, version: 1 } }
+      throw new Error(`Unexpected REST call: ${path}`)
+    })
+
+    unbind = bindOperationsApi(rest as never)
+
+    render(<MeetingsView snapshot={snapshot} />)
+    await screen.findByRole('region', { name: 'Bot meeting room' })
+
+    const panel = await screen.findByTestId('deliverable-package-output')
+
+    expect(screen.getByTestId('meeting-room-output').contains(panel)).toBe(true)
+    expect(screen.getByTestId('output-state').textContent).toBe('Verified')
+    expect(panel.textContent).toContain('game_sha256')
+    expect(screen.getByRole('button', { name: /Approve this artifact version/ })).toBeTruthy()
+  })
+
+  it('freezes the production brief through the authenticated brief route', async () => {
+    const briefed = { ...productionMeetingWire, production_stage: 'briefing' }
+
+    const rest = vi.fn(async (path: string, options?: { body?: unknown }) => {
+      if (path.startsWith('/meetings?')) { return { meetings: [{ meeting: briefed, version: 1 }] } }
+
+      if (path.endsWith('/outputs?limit=20')) { return { outputs: [] } }
+
+      if (path.endsWith('/production-brief')) {
+        return {
+          meeting_version: 3,
+          brief_hash: 'd'.repeat(64),
+          production_stage: 'production_ready',
+          acceptance_statement: briefed.acceptance_statement,
+          evidence_refs: []
+        }
+      }
+
+      if (path.startsWith('/meetings/')) { return { meeting: briefed, version: 1 } }
+      throw new Error(`Unexpected REST call: ${path}`)
+    })
+
+    unbind = bindOperationsApi(rest as never)
+
+    render(<MeetingsView snapshot={snapshot} />)
+    await screen.findByRole('region', { name: 'Bot meeting room' })
+
+    fireEvent.change(screen.getByLabelText('Production brief'), {
+      target: { value: 'Produce a one-page onboarding guide.' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Freeze the production brief' }))
+
+    await waitFor(() => {
+      expect(rest.mock.calls.some(([path]) => String(path).endsWith('/production-brief'))).toBe(true)
+    })
+
+    const call = rest.mock.calls.find(([path]) => String(path).endsWith('/production-brief'))!
+    expect(call[0]).toBe('/meetings/meeting-room-1/production-brief')
+    expect((call[1] as { body: Record<string, unknown> }).body).toEqual({
+      expected_version: 1,
+      brief: 'Produce a one-page onboarding guide.',
+      evidence_refs: []
+    })
+    // The freeze is replay-safe for the exact meeting version it saw.
+    expect((call[1] as { headers: Record<string, string> }).headers)
+      .toEqual({ 'Idempotency-Key': 'brief-meeting-room-1-1' })
   })
 })
 
-describe('PB4 – seat assignments shown in details view (C3)', () => {
-  it('displays seat role badges in meeting details when seats are present', async () => {
-    const meetingWithSeats = {
-      ...meeting,
-      // add a2a as a 3rd participant so we can assign it reviewer seat (C2: reviewer seat != producer)
-      participants: [
-        { connection: 'local', profile: 'chair' },
-        { connection: 'local', profile: 'reviewer' },
-        { connection: 'a2a', profile: 'agent-1' }
-      ],
-      orchestrator: { connectionId: 'local', profile: 'chair' },
-      producer: { connectionId: 'local', profile: 'reviewer' },
-      seats: [
-        { bot: { connectionId: 'local', profile: 'chair' }, role: 'contributor', label: 'Lead author' },
-        // C2: reviewer seat cannot be the producer — use a2a agent here
-        { bot: { connectionId: 'a2a', profile: 'agent-1' }, role: 'reviewer', label: 'Code reviewer' }
-      ]
-    }
+describe('the produce action for a production_ready meeting', () => {
+  const remoteProducerWire = {
+    ...productionMeetingWire,
+    participants: [
+      { connection: 'local', profile: 'chair' },
+      { connection: 'remote-1', profile: 'reviewer' },
+      { connection: 'a2a', profile: 'agent-1' }
+    ],
+    producer: { connection: 'remote-1', profile: 'reviewer' },
+    seats: [
+      { bot: { connection: 'local', profile: 'chair' }, role: 'specialist', label: 'Orchestrator' },
+      { bot: { connection: 'remote-1', profile: 'reviewer' }, role: 'contributor', label: 'Producer' },
+      { bot: { connection: 'a2a', profile: 'agent-1' }, role: 'reviewer', label: 'Independent reviewer' }
+    ]
+  }
 
-    const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [{ meeting: meetingWithSeats, version: 1 }] } }
+  it('renders Produce with zero outputs and drives the real dispatch route', async () => {
+    const paths: string[] = []
+
+    const rest = vi.fn(async (
+      path: string,
+      _init?: { body?: unknown; headers?: Record<string, string> }
+    ) => {
+      paths.push(path)
+
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [{ meeting: productionMeetingWire, version: 1 }] }
+      }
+
+      // The real list response: output + eligibility only, no versions/reviews.
+      if (path.endsWith('/outputs?limit=20')) { return { outputs: [] } }
+
+      if (path.endsWith('/production-runs')) {
+        return {
+          run_id: 'mrun_1',
+          output_id: 'mout_1',
+          kind: 'production',
+          meeting_id: 'meeting-room-1',
+          meeting_version: 2,
+          parent_artifact_version: null,
+          cwd: '/server/owned/workspaces/mrun_1'
+        }
+      }
+
+      if (path.endsWith('/claim')) {
+        return {
+          run_id: 'mrun_1',
+          output_id: 'mout_1',
+          kind: 'production',
+          session_id: 'stored-session-1',
+          claim: { claim_id: 'mclaim_1', renewals: 0, expires_at: 9 },
+          producer: { connection: 'local', profile: 'reviewer' },
+          workspace: { cwd: '/server/owned/workspaces/mrun_1' },
+          collection_claim: 'collection-claim-token-value',
+          brief: 'Produce the guide.',
+          brief_hash: 'd'.repeat(64),
+          acceptance_statement: 'A reviewer confirms every step.',
+          parent_artifact_version: null
+        }
+      }
+
+      if (path.endsWith('/collect')) {
+        return {
+          receipt: {
+            run_id: 'mrun_1', output_id: 'mout_1', artifact_version: 1,
+            parent_artifact_version: null, game_sha256: 'a'.repeat(64),
+            manifest_sha256: 'b'.repeat(64), zip_sha256: 'c'.repeat(64),
+            total_byte_size: 31, collected_at: 4
+          },
+          output: outputWire,
+          eligibility: { review: true, preview: true, download: true }
+        }
+      }
+
+      // The runner reads the authoritative brief back from the output.
+      if (path === '/meeting-outputs/mout_1') {
+        return { output: outputWire, eligibility: { review: true }, versions: [], reviews: [] }
+      }
+
+      if (path.startsWith('/meetings/')) { return { meeting: productionMeetingWire, version: 1 } }
       throw new Error(`Unexpected REST call: ${path}`)
     })
+
+    const dispatched: string[] = []
+    const history: Array<{ content: string; role: string }> = []
+    requestProfile.mockImplementation(async (
+      _route: unknown,
+      method: string,
+      params?: Record<string, unknown>
+    ) => {
+      dispatched.push(method)
+
+      if (method === 'session.create') {
+        return { session_id: 'runtime-session-1', stored_session_id: 'stored-session-1' }
+      }
+
+      if (method === 'prompt.submit') {
+        // The producer writes its package and answers once.
+        history.push({ content: String(params?.text ?? ''), role: 'user' })
+        history.push({ content: 'Wrote output/deliverable.json.', role: 'assistant' })
+
+        return { ok: true }
+      }
+
+      return {
+        session_id: 'runtime-session-1',
+        inflight: false,
+        running: false,
+        messages: [...history]
+      }
+    })
+
+    unbind = bindOperationsApi(rest as never)
+
+    render(<MeetingsView snapshot={snapshot} />)
+    await screen.findByRole('region', { name: 'Bot meeting room' })
+
+    // No artifact exists yet, so the package panel is not mounted — but the
+    // produce control is, because the stage says the meeting is ready.
+    expect(screen.queryByTestId('deliverable-package-output')).toBeNull()
+    const produce = await screen.findByRole('button', { name: 'Produce the deliverable' })
+
+    fireEvent.click(produce)
+
+    await waitFor(
+      () => expect(paths.some(path => path.endsWith('/collect'))).toBe(true),
+      { timeout: 10_000 }
+    )
+
+    const created = rest.mock.calls.find(([path]) => String(path).endsWith('/production-runs'))!
+
+    expect(created[0]).toBe('/meetings/meeting-room-1/production-runs')
+    // The run opens with a bounded PROVISIONAL reference: the real session id
+    // cannot exist yet, because creating it needs the cwd this call mints.
+    expect((created[1] as { body: Record<string, unknown> }).body).toEqual({
+      expected_version: 1,
+      producer_session_id: 'provisional-production-meeting-room-1',
+      submission_id: 'submission-meeting-room-1-1'
+    })
+
+    // The claim carried the ACTUAL session id, and it happened before the prompt.
+    const claim = rest.mock.calls.find(([path]) => String(path).endsWith('/claim'))!
+
+    expect((claim[1] as { body: Record<string, unknown> }).body)
+      .toEqual({ request_id: 'dispatch-mrun_1', session_id: 'stored-session-1' })
+    expect(dispatched.indexOf('session.create')).toBeLessThan(dispatched.indexOf('prompt.submit'))
+    // The claim is taken before the prompt, with the real session id.
+    expect(paths.indexOf('/meeting-output-runs/mrun_1/claim')).toBeGreaterThanOrEqual(0)
+    expect(dispatched.filter(method => method === 'prompt.submit')).toHaveLength(1)
+
+    // The producer session was confined to the server-assigned cwd.
+    const params = requestProfile.mock.calls.find(call => call[1] === 'session.create')?.[2] as
+      Record<string, unknown>
+
+    expect(params.cwd).toBe('/server/owned/workspaces/mrun_1')
+    expect(params.enabled_toolsets).toEqual(['clarify', 'file'])
+
+    // Collecting refreshes meetings AND the output list.
+    await waitFor(() => {
+      const after = paths.slice(paths.findIndex(path => path.endsWith('/collect')))
+
+      expect(after.some(path => path.startsWith('/meetings?'))).toBe(true)
+      expect(after.some(path => path.endsWith('/outputs?limit=20'))).toBe(true)
+    })
+  })
+
+  it('shows a remote producer as visibly ineligible instead of offering Produce', async () => {
+    const rest = vi.fn(async (path: string) => {
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [{ meeting: remoteProducerWire, version: 1 }] }
+      }
+
+      if (path.endsWith('/outputs?limit=20')) { return { outputs: [] } }
+
+      if (path.startsWith('/meetings/')) { return { meeting: remoteProducerWire, version: 1 } }
+      throw new Error(`Unexpected REST call: ${path}`)
+    })
+
+    unbind = bindOperationsApi(rest as never)
+
+    render(
+      <MeetingsView
+        snapshot={{
+          ...snapshot,
+          sources: [
+            ...snapshot.sources,
+            { id: 'remote-1', kind: 'remote', label: 'Remote host', reachable: true, status: 'online' }
+          ]
+        }}
+      />
+    )
+    await screen.findByRole('region', { name: 'Bot meeting room' })
+
+    const notice = await screen.findByTestId('producer-ineligible')
+
+    expect(notice.textContent).toContain('Only a producer Bot on this device')
+    expect(notice.textContent).toContain('remote Bot')
+    expect(screen.queryByRole('button', { name: 'Produce the deliverable' })).toBeNull()
+    // Nothing was dispatched and no run was created.
+    expect(requestProfile.mock.calls.every(call => call[0] === 'operations.meetings.list')).toBe(true)
+    expect(rest.mock.calls.every(([path]) => !String(path).endsWith('/production-runs'))).toBe(true)
+  })
+})
+
+describe('seat assignments shown in details view', () => {
+  it('displays seat role badges for every seated participant', async () => {
+    const rest = vi.fn(async (path: string) => {
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [{ meeting: productionMeetingWire, version: 1 }] }
+      }
+
+      if (path.endsWith('/outputs?limit=20')) { return { outputs: [] } }
+      throw new Error(`Unexpected REST call: ${path}`)
+    })
+
     unbind = bindOperationsApi(rest as never)
 
     render(<MeetingsView snapshot={snapshot} />)
@@ -1198,11 +1559,10 @@ describe('PB4 – seat assignments shown in details view (C3)', () => {
 
     await waitFor(() => {
       expect(details.textContent).toContain('Seats')
-      expect(details.textContent).toContain('contributor')
-      expect(details.textContent).toContain('Lead author')
+      expect(details.textContent).toContain('specialist')
+      expect(details.textContent).toContain('Orchestrator')
       expect(details.textContent).toContain('reviewer')
-      expect(details.textContent).toContain('Code reviewer')
+      expect(details.textContent).toContain('Independent reviewer')
     })
   })
 })
-

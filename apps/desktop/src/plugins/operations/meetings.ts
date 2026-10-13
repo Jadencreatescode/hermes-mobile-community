@@ -5,7 +5,7 @@
 import * as meetingModel from '../hermes-bots/meeting-model.mjs'
 // @ts-expect-error The sibling ESM runner has no declaration file.
 // eslint-disable-next-line no-restricted-imports
-import { filterMeetingHistory, meetingMarker, runStructuredMeetingRound, stripMeetingMarkers } from '../hermes-bots/meeting-runner.mjs'
+import { filterMeetingHistory, meetingMarker, meetingRoleRestrictions as meetingRoleRestrictionsEsm, runRoleTurn, runStructuredMeetingRound, stripMeetingMarkers } from '../hermes-bots/meeting-runner.mjs'
 
 import { operationsApi } from './api'
 import { getA2AChatHistory, type OperationsAgentModel, sendA2AChatMessage } from './data'
@@ -24,6 +24,15 @@ const {
 
 const { buildKanbanCreatePayloads } = meetingModel
 
+/** The role-scoped session policy from the shared meeting engine. Re-exported
+ *  here so this file stays the ONLY untyped boundary onto the ESM model. */
+export function meetingRoleRestrictions(
+  role: 'discussion' | 'producer' | 'reviewer',
+  options: { cwd?: string } = {}
+): Readonly<Record<string, unknown>> {
+  return meetingRoleRestrictionsEsm(role, options) as Readonly<Record<string, unknown>>
+}
+
 export interface RouteIdentity {
   readonly connectionId: string
   readonly profile: string
@@ -35,7 +44,8 @@ export interface MeetingRoundRun {
   readonly startedAt: number
 }
 
-// C5: artifact binding fields required for production-meeting completion.
+/** Server-derived approval evidence. The renderer never authors one; the
+ *  `approvedBy` label is always the non-identifying `Owner`. */
 export interface ArtifactBinding {
   readonly outputId: string
   readonly artifactVersion: number
@@ -46,7 +56,9 @@ export interface ArtifactBinding {
   readonly approvedAt: number
 }
 
-// C3: a seat in a production meeting.
+/** One ordered seat in a production meeting. Seats are a bijection onto the
+ *  participants, with at least one reviewer distinct from the orchestrator and
+ *  the producer. */
 export interface SeatAssignment {
   readonly bot: RouteIdentity
   readonly role: 'contributor' | 'thinker' | 'specialist' | 'reviewer'
@@ -72,15 +84,24 @@ export interface MeetingRecord {
   readonly source: RouteIdentity
   readonly state: 'draft' | 'running' | 'waiting' | 'completed' | 'cancelled' | 'failed'
   readonly title: string
-  // C1: orchestrator+producer pairing (both present or both absent).
+  readonly schemaVersion?: number
+  // The production bundle is all-or-none: either every field below is present
+  // (a production meeting) or none of them is (a conclusion meeting).
   readonly orchestrator?: RouteIdentity
   readonly producer?: RouteIdentity
-  // C3: ordered seat assignments.
   readonly seats?: readonly SeatAssignment[]
-  // C6: production stage (only valid when orchestrator+producer present).
+  readonly productKind?: string
+  readonly outputTitle?: string
+  readonly acceptanceStatement?: string
+  /** Server-owned. A meeting PUT may echo it, never create or change it. */
   readonly productionStage?: string
-  // C5: artifact binding (required to complete a production meeting).
+  /** Server-owned. Written only by the exact owner approval transaction. */
   readonly artifactBinding?: ArtifactBinding
+}
+
+/** True when a record carries the production bundle. */
+export function isProductionMeeting(meeting: MeetingRecord): boolean {
+  return Boolean(meeting.orchestrator && meeting.producer && meeting.productKind)
 }
 
 export type MeetingTransition = 'start' | 'speak' | 'pass' | 'wait' | 'resume' | 'conclude' | 'cancel' | 'fail'
@@ -219,10 +240,49 @@ function freezeJson(value: unknown): unknown {
   return value
 }
 
+/** Rename a record's snake_case keys into the internal camelCase model. */
+function renameKeys(value: unknown, mapping: Record<string, string>): Record<string, unknown> {
+  const source = objectRow(value)
+  const result: Record<string, unknown> = {}
+
+  for (const [key, item] of Object.entries(source)) {
+    result[mapping[key] ?? key] = item
+  }
+
+  return result
+}
+
+const CONTRIBUTION_KEYS = { evidence_refs: 'evidenceRefs' }
+const DECISION_KEYS = { evidence_refs: 'evidenceRefs' }
+
+const ACTION_ITEM_KEYS = {
+  owner_route: 'ownerRoute',
+  acceptance_criteria: 'acceptanceCriteria',
+  due_intent: 'dueIntent',
+  dedupe_key: 'dedupeKey'
+}
+
+const BINDING_KEYS = {
+  output_id: 'outputId',
+  artifact_version: 'artifactVersion',
+  game_sha256: 'gameSha256',
+  manifest_sha256: 'manifestSha256',
+  zip_sha256: 'zipSha256',
+  approved_by: 'approvedBy',
+  approved_at: 'approvedAt'
+}
+
+function seatFromWire(value: unknown): Record<string, unknown> {
+  const seat = objectRow(value)
+
+  return { ...seat, bot: routeFromWire(seat.bot) }
+}
+
 export function meetingFromWire(value: unknown): MeetingRecord {
   const row = objectRow(value)
 
   const normalized = {
+    schemaVersion: Number(row.schemaVersion ?? row.schema_version ?? 2),
     id: String(row.id ?? ''),
     source: routeFromWire(row.source),
     title: String(row.title ?? ''),
@@ -232,28 +292,44 @@ export function meetingFromWire(value: unknown): MeetingRecord {
     state: String(row.state ?? 'draft'),
     maxRounds: Number(row.maxRounds ?? row.max_rounds ?? 1),
     currentRound: Number(row.currentRound ?? row.current_round ?? 0),
-    contributions: array(row.contributions).map(item => nestedRoute(item, 'participant', 'participant')),
+    contributions: array(row.contributions).map(item => ({
+      ...renameKeys(item, CONTRIBUTION_KEYS),
+      participant: routeFromWire(objectRow(item).participant)
+    })),
     evidenceRefs: array(row.evidenceRefs ?? row.evidence),
-    decisions: array(row.decisions),
-    dissent: array(row.dissent).map(item => nestedRoute(item, 'participant', 'participant')),
-    actionItems: array(row.actionItems ?? row.action_items).map(item => nestedRoute(item, 'ownerRoute', 'owner_route')),
-    // C1: orchestrator/producer — normalize wire keys if present.
+    decisions: array(row.decisions).map(item => renameKeys(item, DECISION_KEYS)),
+    dissent: array(row.dissent).map(item => ({
+      ...renameKeys(item, DECISION_KEYS),
+      participant: routeFromWire(objectRow(item).participant)
+    })),
+    actionItems: array(row.actionItems ?? row.action_items).map(item => {
+      const renamed = renameKeys(item, ACTION_ITEM_KEYS)
+
+      return { ...renamed, ownerRoute: routeFromWire(renamed.ownerRoute) }
+    }),
+    // The production bundle. Every field arrives in canonical snake_case;
+    // camelCase is accepted so a legacy response still hydrates.
     ...(row.orchestrator != null ? { orchestrator: routeFromWire(row.orchestrator) } : {}),
     ...(row.producer != null ? { producer: routeFromWire(row.producer) } : {}),
-    // C3: seats — pass through as-is; createMeeting/hydrateMeeting validates and normalizes.
-    ...(row.seats != null ? { seats: row.seats } : {}),
-    // C6: productionStage.
+    ...(row.seats != null ? { seats: array(row.seats).map(seatFromWire) } : {}),
+    ...(row.productKind != null ? { productKind: row.productKind } :
+        row.product_kind != null ? { productKind: row.product_kind } : {}),
+    ...(row.outputTitle != null ? { outputTitle: row.outputTitle } :
+        row.output_title != null ? { outputTitle: row.output_title } : {}),
+    ...(row.acceptanceStatement != null ? { acceptanceStatement: row.acceptanceStatement } :
+        row.acceptance_statement != null ? { acceptanceStatement: row.acceptance_statement } : {}),
     ...(row.productionStage != null ? { productionStage: row.productionStage } :
         row.production_stage != null ? { productionStage: row.production_stage } : {}),
-    // C5: artifactBinding.
-    ...(row.artifactBinding != null ? { artifactBinding: row.artifactBinding } :
-        row.artifact_binding != null ? { artifactBinding: row.artifact_binding } : {})
+    ...(row.artifactBinding != null ? { artifactBinding: renameKeys(row.artifactBinding, BINDING_KEYS) } :
+        row.artifact_binding != null ? { artifactBinding: renameKeys(row.artifact_binding, BINDING_KEYS) } : {})
   }
 
   const hydrated = hydrateMeeting(JSON.stringify(normalized)) as MeetingRecord
+
   const pending = row.pending === undefined
     ? undefined
     : freezeJson(nestedRoute(row.pending, 'participant', 'participant'))
+
   const roundRun = roundRunFromWire(row.roundRun ?? row.round_run)
   const rawSessions = row.runnerSessions ?? row.runner_sessions
 
@@ -276,8 +352,44 @@ export function meetingFromWire(value: unknown): MeetingRecord {
   })
 }
 
+/** Rename the internal camelCase keys back onto the canonical wire. */
+function wireKeys(value: unknown, mapping: Record<string, string>): Record<string, unknown> {
+  const source = objectRow(value)
+  const result: Record<string, unknown> = {}
+
+  for (const [key, item] of Object.entries(source)) {
+    result[mapping[key] ?? key] = item
+  }
+
+  return result
+}
+
+const CONTRIBUTION_WIRE = { evidenceRefs: 'evidence_refs' }
+
+const ACTION_ITEM_WIRE = {
+  ownerRoute: 'owner_route',
+  acceptanceCriteria: 'acceptance_criteria',
+  dueIntent: 'due_intent',
+  dedupeKey: 'dedupe_key'
+}
+
+const BINDING_WIRE = {
+  outputId: 'output_id',
+  artifactVersion: 'artifact_version',
+  gameSha256: 'game_sha256',
+  manifestSha256: 'manifest_sha256',
+  zipSha256: 'zip_sha256',
+  approvedBy: 'approved_by',
+  approvedAt: 'approved_at'
+}
+
+/** Serialize to the ONE canonical wire schema: snake_case everywhere, including
+ *  every nested history row and the whole production bundle. The server-owned
+ *  `production_stage` and `artifact_binding` are echoed back unchanged — the
+ *  backend refuses a PUT that creates or alters either. */
 export function meetingToWire(meeting: MeetingRecord): Record<string, unknown> {
   return {
+    schema_version: meeting.schemaVersion ?? 2,
     id: meeting.id,
     source: routeToWire(meeting.source),
     title: meeting.title,
@@ -287,15 +399,21 @@ export function meetingToWire(meeting: MeetingRecord): Record<string, unknown> {
     state: meeting.state,
     max_rounds: meeting.maxRounds,
     current_round: meeting.currentRound,
-    contributions: meeting.contributions.map(item => {
-      const row = objectRow(item)
-
-      return { ...row, participant: routeToWire(routeFromWire(row.participant)) }
-    }),
+    contributions: meeting.contributions.map(item => ({
+      ...wireKeys(item, CONTRIBUTION_WIRE),
+      participant: routeToWire(routeFromWire(objectRow(item).participant))
+    })),
     evidence: meeting.evidenceRefs,
-    decisions: meeting.decisions,
-    dissent: meeting.dissent,
-    action_items: meeting.actionItems,
+    decisions: meeting.decisions.map(item => wireKeys(item, CONTRIBUTION_WIRE)),
+    dissent: meeting.dissent.map(item => ({
+      ...wireKeys(item, CONTRIBUTION_WIRE),
+      participant: routeToWire(routeFromWire(objectRow(item).participant))
+    })),
+    action_items: meeting.actionItems.map(item => {
+      const renamed = wireKeys(item, ACTION_ITEM_WIRE)
+
+      return { ...renamed, owner_route: routeToWire(routeFromWire(renamed.owner_route)) }
+    }),
     ...(meeting.pending === undefined ? {} : { pending: meeting.pending }),
     ...(meeting.roundRun === undefined
       ? {}
@@ -307,15 +425,20 @@ export function meetingToWire(meeting: MeetingRecord): Record<string, unknown> {
           }
         }),
     ...(meeting.runnerSessions === undefined ? {} : { runner_sessions: meeting.runnerSessions }),
-    // C1: orchestrator/producer pairing.
     ...(meeting.orchestrator !== undefined ? { orchestrator: routeToWire(meeting.orchestrator) } : {}),
     ...(meeting.producer !== undefined ? { producer: routeToWire(meeting.producer) } : {}),
-    // C3: seats.
-    ...(meeting.seats !== undefined ? { seats: meeting.seats } : {}),
-    // C6: productionStage.
-    ...(meeting.productionStage !== undefined ? { productionStage: meeting.productionStage } : {}),
-    // C5: artifactBinding.
-    ...(meeting.artifactBinding !== undefined ? { artifactBinding: meeting.artifactBinding } : {})
+    ...(meeting.seats === undefined
+      ? {}
+      : { seats: meeting.seats.map(seat => ({ ...seat, bot: routeToWire(seat.bot) })) }),
+    ...(meeting.productKind !== undefined ? { product_kind: meeting.productKind } : {}),
+    ...(meeting.outputTitle !== undefined ? { output_title: meeting.outputTitle } : {}),
+    ...(meeting.acceptanceStatement !== undefined
+      ? { acceptance_statement: meeting.acceptanceStatement }
+      : {}),
+    ...(meeting.productionStage !== undefined ? { production_stage: meeting.productionStage } : {}),
+    ...(meeting.artifactBinding !== undefined
+      ? { artifact_binding: wireKeys(meeting.artifactBinding, BINDING_WIRE) }
+      : {})
   }
 }
 
@@ -366,11 +489,15 @@ export function createMeetingDraft(input: {
   participants: RouteIdentity[]
   source: RouteIdentity
   title: string
-  // C1: optional production pairing.
+  // The production bundle is all-or-none. Pass every field for a production
+  // meeting, or none of them for an ordinary conclusion meeting. There is no
+  // productionStage or artifactBinding input: both are server owned.
   orchestrator?: RouteIdentity
   producer?: RouteIdentity
-  // C3: optional ordered seat assignments.
   seats?: Array<{ bot: RouteIdentity; role: string; label: string; instructions?: string }>
+  productKind?: string
+  outputTitle?: string
+  acceptanceStatement?: string
 }): MeetingRecord {
   return createMeeting(input) as MeetingRecord
 }
@@ -473,6 +600,7 @@ function meetingMessageContent(value: unknown): string {
   const content = row.content ?? row.text
 
   if (typeof content === 'string') {return content.trim()}
+
   if (!Array.isArray(content)) {return ''}
 
   return content.map(part => {
@@ -531,6 +659,7 @@ function meetingRequestIdentity(meeting: MeetingRecord, participant: RouteIdenti
     participant.connectionId,
     participant.profile
   ])
+
   let hash = 0xcbf29ce484222325n
 
   for (const byte of new TextEncoder().encode(input)) {
@@ -596,6 +725,7 @@ export async function getMeetingParticipantConversation(
       source: 'meeting'
     }
   ))
+
   const messages = meetingMessages(stripMeetingMarkers(state.messages, meeting.id))
 
   return {
@@ -679,6 +809,7 @@ export async function injectMeetingParticipantPrompt(
     connectionModes,
     agents
   )
+
   const runtimeSessionId = before.runtimeSessionId
 
   if (!runtimeSessionId) {
@@ -717,6 +848,140 @@ export async function injectMeetingParticipantPrompt(
   }
 }
 
+/** Why a route cannot run a local production or review turn. Shown verbatim:
+ *  an ineligible route is reported, never faked. */
+export const DISPATCH_LOCAL_ONLY_REASON =
+  'Only a Bot on this device can run this turn: it needs the local Operations workspace filesystem.'
+
+export type MeetingRouteKind = 'local' | 'remote' | 'a2a' | 'unknown'
+
+/** Classify one seat's route for dispatch eligibility. */
+export function meetingRouteKind(
+  route: RouteIdentity,
+  connectionModes: Record<string, 'local' | 'remote'>,
+  agents: OperationsAgentModel[] = []
+): MeetingRouteKind {
+  if (agents.some(agent =>
+    agent.sourceKind === 'a2a'
+    && agent.sourceId === route.connectionId
+    && agent.profile === route.profile
+  )) {
+    return 'a2a'
+  }
+
+  const mode = connectionModes[route.connectionId]
+
+  if (mode === 'local') {return 'local'}
+
+  if (mode === 'remote') {return 'remote'}
+
+  return 'unknown'
+}
+
+/** True only for a seat this device can run a workspace-bound turn for. */
+export function isLocalDispatchRoute(
+  route: RouteIdentity,
+  connectionModes: Record<string, 'local' | 'remote'>,
+  agents: OperationsAgentModel[] = []
+): boolean {
+  return meetingRouteKind(route, connectionModes, agents) === 'local'
+}
+
+export interface MeetingRoleTurnResult {
+  readonly status: 'ready' | 'waiting' | 'timeout' | 'unavailable'
+  readonly text: string
+  readonly pending: unknown
+  readonly dispatched: boolean
+  readonly meeting: MeetingRecord
+  readonly version: number
+}
+
+/** Run ONE role-scoped turn for a seat through the existing session engine.
+ *
+ *  The session binding is checkpointed into the durable meeting record BEFORE
+ *  the prompt is submitted, so a reload finds the session that owns the
+ *  dispatch instead of starting a second one. A remote or public A2A seat is
+ *  refused outright: a workspace-bound turn cannot be faked for a route that
+ *  cannot reach this device's filesystem. */
+export async function runMeetingRoleTurn(
+  host: MeetingRpcHost,
+  meeting: MeetingRecord,
+  version: number,
+  participant: RouteIdentity,
+  connectionModes: Record<string, 'local' | 'remote'>,
+  input: {
+    role: 'producer' | 'reviewer'
+    prompt: string
+    cwd?: string
+    dispatched?: boolean
+    agents?: OperationsAgentModel[]
+    maxPolls?: number
+    pollMs?: number
+    sleep?: (ms: number) => Promise<void>
+    /** Runs once the durable session binding is checkpointed and BEFORE the
+     *  prompt is submitted. The production dispatcher claims the run here, so
+     *  the claim always carries the real stored session id and always precedes
+     *  the first prompt. A throw here aborts the turn without dispatching. */
+    onSessionBound?: (storedSessionId: string) => Promise<void> | void
+  }
+): Promise<MeetingRoleTurnResult> {
+  assertMeetingParticipant(meeting, participant)
+
+  if (!isLocalDispatchRoute(participant, connectionModes, input.agents ?? [])) {
+    throw new Error(DISPATCH_LOCAL_ONLY_REASON)
+  }
+
+  let latest: VersionedMeeting = { meeting, version }
+
+  const result = await runRoleTurn({
+    role: input.role,
+    ...(input.cwd ? { cwd: input.cwd } : {}),
+    participant: { ...participant },
+    prompt: input.prompt,
+    sessions: { ...(meeting.runnerSessions ?? {}) },
+    dispatched: input.dispatched === true,
+    ...(input.maxPolls === undefined ? {} : { maxPolls: input.maxPolls }),
+    ...(input.pollMs === undefined ? {} : { pollMs: input.pollMs }),
+    ...(input.sleep === undefined ? {} : { sleep: input.sleep }),
+    onCheckpoint: async (checkpoint: { sessions: Readonly<Record<string, string>> }) => {
+      const {
+        pending: discardedPending,
+        roundRun: discardedRoundRun,
+        runnerSessions: discardedSessions,
+        ...meetingWithoutRunState
+      } = latest.meeting
+
+      void discardedPending
+      void discardedRoundRun
+      void discardedSessions
+
+      latest = await putMeeting(Object.freeze({
+        ...meetingWithoutRunState,
+        runnerSessions: Object.freeze({ ...checkpoint.sessions })
+      }) as MeetingRecord, latest.version)
+      await input.onSessionBound?.(
+        checkpoint.sessions[meetingParticipantKey(participant)] ?? ''
+      )
+    },
+    request: async (route: RouteIdentity, method: string, params: Record<string, unknown>) =>
+      host.requestProfile(meetingParticipantRoute(route, connectionModes), method, params)
+  }) as {
+    status: MeetingRoleTurnResult['status']
+    text: string
+    pending: unknown
+    dispatched: boolean
+  }
+
+  return {
+    status: result.status,
+    text: result.text,
+    pending: result.pending ?? null,
+    dispatched: result.dispatched === true,
+    meeting: latest.meeting,
+    version: latest.version
+  }
+}
+
 export interface RunMeetingRoundOptions {
   readonly agents?: OperationsAgentModel[]
   readonly now?: () => number
@@ -733,6 +998,7 @@ export async function runMeetingRound(
 ): Promise<VersionedMeeting & { conflict: boolean; pending: unknown }> {
   const now = options.now ?? Date.now
   const nowMs = now()
+
   const runnableMeeting = meeting.state === 'waiting'
     ? resumeMeeting(meeting) as MeetingRecord
     : meeting
@@ -749,6 +1015,7 @@ export async function runMeetingRound(
         && meetingParticipantKey(routeFromWire(row.participant)) === meetingParticipantKey(participant)
     })
   )
+
   let latest: VersionedMeeting = { meeting: runnableMeeting, version }
 
   if (nextParticipant && runnableMeeting.pending === undefined) {
@@ -785,6 +1052,7 @@ export async function runMeetingRound(
     sessions: latest.meeting.runnerSessions ?? {},
     onParticipantStart: async (participant: RouteIdentity) => {
       const marker = latest.meeting.roundRun
+
       const identicalMarker = marker?.round === latest.meeting.currentRound
         && meetingParticipantKey(marker.participant) === meetingParticipantKey(participant)
 

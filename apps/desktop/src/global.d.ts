@@ -1127,6 +1127,13 @@ export interface HermesApiRequest {
   // ArrayBuffer. Token-mode backends only.
   upload?: { filename: string; contentType?: string; bytes: ArrayBuffer }
   timeoutMs?: number
+  // Bounded extra request headers. Main forwards an allowlist (today only
+  // `Idempotency-Key`), so a renderer can make a lifecycle mutation
+  // replay-safe without being able to forge auth or routing headers.
+  headers?: Record<string, string>
+  // `binary` returns raw bytes plus the response media type and headers
+  // instead of parsed JSON — artifact previews and package downloads.
+  responseType?: 'json' | 'binary'
   // Route this REST call to a specific profile's backend. Omit for the primary
   // (window) backend. Read-only cross-profile data is served by the primary, so
   // this is only needed for profile-scoped live/settings calls.
