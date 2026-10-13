@@ -5,6 +5,7 @@ import {
   approveMeetingOutput,
   checksFromWire,
   claimOutputRun,
+  claimReviewRun,
   collectOutputRun,
   completeReviewRun,
   createProductionRun,
@@ -213,9 +214,13 @@ describe('deliverable package DTO normalization', () => {
   it('normalizes recovery state after a restart', () => {
     const recovery = recoveryFromWire({
       output: outputWire,
+      observed_at: 100,
       active_run: { run_id: 'mrun_1', kind: 'revision', state: 'open' },
       active_review: { request_id: 'mrev_9', artifact_version: 2 },
-      active_prompt_claim: { claim_id: 'mclaim_1' },
+      active_prompt_claim: {
+        claim_id: 'mclaim_1', scope: 'mrun_1', session_id: 'session-1',
+        expires_at: 90, renewals: 2
+      },
       receipt: {
         run_id: 'mrun_0',
         output_id: 'mout_1',
@@ -232,6 +237,11 @@ describe('deliverable package DTO normalization', () => {
     expect(recovery.activeRunId).toBe('mrun_1')
     expect(recovery.activeReviewRequestId).toBe('mrev_9')
     expect(recovery.activePromptClaimId).toBe('mclaim_1')
+    expect(recovery.observedAt).toBe(100)
+    expect(recovery.activePromptClaim).toEqual({
+      claimId: 'mclaim_1', scope: 'mrun_1', sessionId: 'session-1',
+      expiresAt: 90, renewals: 2
+    })
     expect(recovery.receipt?.zipSha256).toBe('c'.repeat(64))
     expect(recoveryFromWire({ output: outputWire }).activeRunId).toBeNull()
     expect(recoveryFromWire({ output: outputWire }).receipt).toBeNull()
@@ -279,7 +289,8 @@ describe('deliverable package REST clients', () => {
       .mockResolvedValueOnce({ meeting_version: 4, brief_hash: 'd'.repeat(64), production_stage: 'production_ready' })
       .mockResolvedValueOnce({
         run_id: 'mrun_1', output_id: 'mout_1', kind: 'production',
-        meeting_id: 'meeting_1', meeting_version: 5, parent_artifact_version: null
+        meeting_id: 'meeting_1', meeting_version: 5, parent_artifact_version: null,
+        workspace_identity: { device: '1', inode: '2', output_device: '1', output_inode: '3' }
       })
 
     unbind = bindOperationsApi(rest as never)
@@ -307,7 +318,8 @@ describe('deliverable package REST clients', () => {
       meetingId: 'meeting_1',
       expectedVersion: 4,
       producerSessionId: 'session-1',
-      submissionId: 'submission-1'
+      submissionId: 'submission-1',
+      idempotencyKey: 'production-run-1'
     })
 
     expect(rest).toHaveBeenLastCalledWith('/meetings/meeting_1/production-runs', {
@@ -316,7 +328,8 @@ describe('deliverable package REST clients', () => {
         expected_version: 4,
         producer_session_id: 'session-1',
         submission_id: 'submission-1'
-      }
+      },
+      headers: { 'Idempotency-Key': 'production-run-1' }
     })
     expect(run).toEqual({
       runId: 'mrun_1',
@@ -325,7 +338,8 @@ describe('deliverable package REST clients', () => {
       meetingId: 'meeting_1',
       meetingVersion: 5,
       parentArtifactVersion: null,
-      cwd: ''
+      cwd: '',
+      workspaceIdentity: { device: '1', inode: '2', outputDevice: '1', outputInode: '3' }
     })
   })
 
@@ -334,12 +348,14 @@ describe('deliverable package REST clients', () => {
       .mockResolvedValueOnce({
         run_id: 'mrun_1', output_id: 'mout_1', kind: 'production', meeting_id: 'meeting_1',
         meeting_version: 5, parent_artifact_version: null,
-        cwd: '/server/owned/workspaces/mrun_1'
+        cwd: '/server/owned/workspaces/mrun_1',
+        workspace_identity: { device: '1', inode: '2', output_device: '1', output_inode: '3' }
       })
       .mockResolvedValueOnce({
         run_id: 'mrun_2', output_id: 'mout_1', kind: 'revision', meeting_id: 'meeting_1',
         meeting_version: 9, parent_artifact_version: 1,
-        cwd: '/server/owned/workspaces/mrun_2'
+        cwd: '/server/owned/workspaces/mrun_2',
+        workspace_identity: { device: '1', inode: '4', output_device: '1', output_inode: '5' }
       })
 
     unbind = bindOperationsApi(rest as never)
@@ -348,13 +364,15 @@ describe('deliverable package REST clients', () => {
       meetingId: 'meeting_1',
       expectedVersion: 4,
       producerSessionId: 'provisional-1',
-      submissionId: 'submission-1'
+      submissionId: 'submission-1',
+      idempotencyKey: 'production-run-1'
     })
 
     const revision = await createRevisionRun({
       outputId: 'mout_1',
       expectedOutputVersion: 7,
-      producerSessionId: 'provisional-revision-1'
+      producerSessionId: 'provisional-revision-1',
+      idempotencyKey: 'revision-run-1'
     })
 
     // The dispatcher needs the cwd to open the producer session; it is the one
@@ -368,11 +386,15 @@ describe('deliverable package REST clients', () => {
     const rest = vi.fn()
       .mockResolvedValueOnce({
         run_id: 'mrun_2', output_id: 'mout_1', kind: 'revision',
-        meeting_id: 'meeting_1', meeting_version: 9, parent_artifact_version: 1
+        meeting_id: 'meeting_1', meeting_version: 9, parent_artifact_version: 1,
+        workspace_identity: { device: '1', inode: '4', output_device: '1', output_inode: '5' }
       })
       .mockResolvedValueOnce({
         run_id: 'mrun_2', output_id: 'mout_1', kind: 'revision',
-        workspace: { cwd: '/server/owned/path' }, collection_claim: 'claim-token',
+        workspace: {
+          cwd: '/server/owned/path',
+          identity: { device: '1', inode: '4', output_device: '1', output_inode: '5' }
+        }, collection_claim: 'claim-token',
         brief: 'Produce the guide.', brief_hash: 'd'.repeat(64),
         acceptance_statement: 'Reviewed.', parent_artifact_version: 1
       })
@@ -389,12 +411,14 @@ describe('deliverable package REST clients', () => {
     const revision = await createRevisionRun({
       outputId: 'mout_1',
       expectedOutputVersion: 6,
-      producerSessionId: 'session-2'
+      producerSessionId: 'session-2',
+      idempotencyKey: 'revision-run-2'
     })
 
     expect(rest).toHaveBeenCalledWith('/meeting-outputs/mout_1/revision-runs', {
       method: 'POST',
-      body: { expected_output_version: 6, producer_session_id: 'session-2' }
+      body: { expected_output_version: 6, producer_session_id: 'session-2' },
+      headers: { 'Idempotency-Key': 'revision-run-2' }
     })
     expect(revision.parentArtifactVersion).toBe(1)
 
@@ -404,10 +428,14 @@ describe('deliverable package REST clients', () => {
 
     expect(rest).toHaveBeenLastCalledWith('/meeting-output-revision-runs/mrun_2/claim', {
       method: 'POST',
-      body: { request_id: 'dispatch-1', session_id: 'session-2' }
+      body: { request_id: 'dispatch-1', session_id: 'session-2' },
+      headers: { 'Idempotency-Key': 'claim-mrun_2-g0-session-2' }
     })
     expect(claim.cwd).toBe('/server/owned/path')
     expect(claim.collectionClaim).toBe('claim-token')
+    expect(claim.workspaceIdentity).toEqual({
+      device: '1', inode: '4', outputDevice: '1', outputInode: '5'
+    })
 
     const collected = await collectOutputRun({
       runId: 'mrun_2', collectionClaim: 'claim-token', kind: 'revision', idempotencyKey: 'collect-1'
@@ -440,12 +468,13 @@ describe('deliverable package REST clients', () => {
     unbind = bindOperationsApi(rest as never)
 
     const review = await createReviewRun({
-      outputId: 'mout_1', expectedOutputVersion: 6, reviewer
+      outputId: 'mout_1', expectedOutputVersion: 6, reviewer, idempotencyKey: 'review-run-1'
     })
 
     expect(rest).toHaveBeenCalledWith('/meeting-outputs/mout_1/review-runs', {
       method: 'POST',
-      body: { expected_output_version: 6, reviewer: { connection: 'local', profile: 'reviewer' } }
+      body: { expected_output_version: 6, reviewer: { connection: 'local', profile: 'reviewer' } },
+      headers: { 'Idempotency-Key': 'review-run-1' }
     })
     expect(review.checks.ok).toBe(true)
     expect(review.manifest[0].path).toBe('index.txt')
@@ -453,14 +482,16 @@ describe('deliverable package REST clients', () => {
     await completeReviewRun({
       requestId: 'mrev_1',
       verdict: 'changes_requested',
-      findings: [{ severity: 'high', code: 'missing_step', detail: 'Add step three.', path: 'index.txt' }]
+      findings: [{ severity: 'high', code: 'missing_step', detail: 'Add step three.', path: 'index.txt' }],
+      idempotencyKey: 'verdict-mrev_1'
     })
     expect(rest).toHaveBeenLastCalledWith('/meeting-output-review-runs/mrev_1/complete', {
       method: 'POST',
       body: {
         verdict: 'changes_requested',
         findings: [{ severity: 'high', code: 'missing_step', detail: 'Add step three.', path: 'index.txt' }]
-      }
+      },
+      headers: { 'Idempotency-Key': 'verdict-mrev_1' }
     })
   })
 
@@ -578,5 +609,57 @@ describe('deliverable package REST clients', () => {
     const payload = new TextEncoder().encode('deliverable bytes')
 
     await expect(sha256Hex(payload.buffer as ArrayBuffer)).resolves.toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('sends a stable idempotency key on both dispatch claims', async () => {
+    // The claim consumes a dispatch lease, so a retry that the server cannot
+    // recognize cannot read back the cwd or the collection claim it granted.
+    // The key is derived from the run/review and the session being bound, so
+    // the identical retry replays and a different session still conflicts.
+    const rest = vi.fn()
+      .mockResolvedValueOnce({
+        run_id: 'mrun_1', output_id: 'mout_1', kind: 'production',
+        workspace: { cwd: '/server/owned/path' }, collection_claim: 'claim-token',
+        brief: 'Produce the guide.', brief_hash: 'd'.repeat(64),
+        acceptance_statement: 'Reviewed.', parent_artifact_version: null,
+        session_id: 'session-1', claim: { renewals: 0 }
+      })
+      .mockResolvedValueOnce({
+        request_id: 'mrev_1', artifact_version: 2,
+        reviewer: { connection: 'local', profile: 'reviewer' }
+      })
+
+    unbind = bindOperationsApi(rest as never)
+
+    await claimOutputRun({ runId: 'mrun_1', requestId: 'dispatch-1', sessionId: 'session-1' })
+    expect(rest).toHaveBeenLastCalledWith('/meeting-output-runs/mrun_1/claim', {
+      method: 'POST',
+      body: { request_id: 'dispatch-1', session_id: 'session-1' },
+      headers: { 'Idempotency-Key': 'claim-mrun_1-g0-session-1' }
+    })
+
+    await claimReviewRun({
+      requestId: 'mrev_1', dispatchId: 'review-dispatch-1', sessionId: 'session-reviewer-1',
+      claimGeneration: 2
+    })
+    expect(rest).toHaveBeenLastCalledWith('/meeting-output-review-runs/mrev_1/claim', {
+      method: 'POST',
+      body: { request_id: 'review-dispatch-1', session_id: 'session-reviewer-1' },
+      headers: { 'Idempotency-Key': 'review-claim-mrev_1-g2-session-reviewer-1' }
+    })
+  })
+
+  it('refuses to send a lifecycle mutation with a blank idempotency key', async () => {
+    const rest = vi.fn()
+
+    unbind = bindOperationsApi(rest as never)
+
+    await expect(freezeProductionBrief({
+      meetingId: 'meeting_1',
+      expectedVersion: 3,
+      brief: 'Produce the guide.',
+      idempotencyKey: '  '
+    })).rejects.toThrow('idempotency key')
+    expect(rest).not.toHaveBeenCalled()
   })
 })

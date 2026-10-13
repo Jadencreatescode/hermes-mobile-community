@@ -134,6 +134,10 @@ const output: MeetingOutput = Object.freeze({
  *  ordered call log so the ordering guarantees are checkable. */
 function harness(options: {
   activeRunId?: string | null
+  activePromptClaim?: boolean
+  promptClaimExpiresAt?: number
+  promptClaimRenewals?: number
+  recoveryObservedAt?: number
   claimActive?: boolean
   claimRenewals?: number
   dispatchInHistory?: string
@@ -160,8 +164,16 @@ function harness(options: {
     if (path.endsWith('/recovery')) {
       return {
         output: outputWire,
+        observed_at: options.recoveryObservedAt ?? 100,
         active_run: options.activeRunId ? { run_id: options.activeRunId, kind: 'production' } : null,
         active_review: null,
+        active_prompt_claim: options.activePromptClaim ? {
+          claim_id: 'mclaim_recovery',
+          scope: options.activeRunId ?? runId,
+          session_id: 'stored-session-1',
+          expires_at: options.promptClaimExpiresAt ?? 200,
+          renewals: options.promptClaimRenewals ?? 0
+        } : null,
         receipt: null
       }
     }
@@ -518,6 +530,28 @@ describe('the production dispatch', () => {
     expect(h.calls).toContain('rest /meeting-outputs/mout_1/recovery')
     expect(h.rest.mock.calls.some(([path]) => String(path).endsWith('/production-runs'))).toBe(false)
     expect(result.status).toBe('done')
+  })
+
+  it('uses the next durable claim generation after an expired recovery claim', async () => {
+    const h = harness({
+      activeRunId: 'mrun_1',
+      activePromptClaim: true,
+      promptClaimExpiresAt: 90,
+      promptClaimRenewals: 0,
+      recoveryObservedAt: 100
+    })
+
+    unbind = bindOperationsApi(h.rest as never)
+
+    await runProductionDispatch(base(h, {
+      meeting: productionMeeting({ runner_sessions: { 'local::producer': 'stored-session-1' } }),
+      output
+    }))
+
+    const claim = h.rest.mock.calls.find(([path]) => String(path).endsWith('/claim'))
+    expect(claim?.[1]).toMatchObject({
+      headers: { 'Idempotency-Key': 'claim-mrun_1-g1-stored-session-1' }
+    })
   })
 
   it('reports an active dispatch without sending a second prompt', async () => {

@@ -12,15 +12,19 @@ generation, and no private topology.
 import asyncio
 import hashlib
 import importlib.util
+import itertools
 import json
+import os
+import sqlite3
 import sys
+import time
 import zipfile
 from io import BytesIO
 from pathlib import Path
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 ROOT = Path(__file__).resolve().parents[2]
 DASHBOARD = ROOT / "plugins" / "operations" / "dashboard"
@@ -55,23 +59,33 @@ def load_api():
 
 
 class Client:
-    """A tiny synchronous driver over the real authenticated ASGI app."""
+    """A tiny synchronous driver over the real authenticated ASGI app.
+
+    Every output-lifecycle mutation REQUIRES an ``Idempotency-Key``, so a
+    distinct one is supplied unless the caller pins its own (replay and
+    conflict tests do) or asks for none with ``idempotency=False``.
+    """
 
     def __init__(self, app: FastAPI):
         self.app = app
+        self._serial = itertools.count(1)
 
-    def request(self, method: str, path: str, payload=None, headers=None):
+    def request(self, method: str, path: str, payload=None, headers=None, *, idempotency=True):
+        sent = dict(headers or {})
+        if idempotency and method.upper() == "POST" and "Idempotency-Key" not in sent:
+            sent["Idempotency-Key"] = f"e2e-auto-key-{next(self._serial)}"
+
         async def run():
             transport = httpx.ASGITransport(app=self.app)
             async with httpx.AsyncClient(
                 transport=transport, base_url="http://operations.test"
             ) as client:
-                return await client.request(method, path, json=payload, headers=headers or {})
+                return await client.request(method, path, json=payload, headers=sent)
 
         return asyncio.run(run())
 
-    def json(self, method: str, path: str, payload=None, headers=None, expect=200):
-        response = self.request(method, path, payload, headers)
+    def json(self, method: str, path: str, payload=None, headers=None, expect=200, **kwargs):
+        response = self.request(method, path, payload, headers, **kwargs)
         assert response.status_code == expect, (path, response.status_code, response.text)
         return response.json()
 
@@ -1231,3 +1245,418 @@ def test_ordinary_conclusion_meetings_keep_working_end_to_end(operations):
     assert "production_stage" not in completed["meeting"]
     assert "artifact_binding" not in completed["meeting"]
     assert client.json("GET", "/meetings/meeting_e2e_discussion/outputs")["outputs"] == []
+
+
+# ---------------------------------------------------------------------------
+# idempotency: every lifecycle mutation, including the dispatch claims
+# ---------------------------------------------------------------------------
+
+
+def opened_run(operations, *, suffix="1", submission="submission-idem"):
+    """Freeze a brief and open a producer run, returning the run response."""
+    client = operations["client"]
+    created = client.json(
+        "PUT", f"/meetings/{MEETING_ID}",
+        {"record": production_meeting(), "expected_version": 0},
+    )
+    frozen = client.json(
+        "POST", f"/meetings/{MEETING_ID}/production-brief",
+        {"expected_version": created["version"], "brief": BRIEF, "evidence_refs": []},
+    )
+    return client.json(
+        "POST", f"/meetings/{MEETING_ID}/production-runs",
+        {
+            "expected_version": frozen["meeting_version"],
+            "producer_session_id": f"provisional-production-{suffix}",
+            "submission_id": f"{submission}-{suffix}",
+        },
+    )
+
+
+def test_every_lifecycle_mutation_refuses_a_request_without_an_idempotency_key(operations):
+    """A retry the server cannot recognize is refused, never applied blindly.
+
+    Without a key there is no way to tell a retry from a second intent, so a
+    dropped response could mint a second run, artifact version, verdict, or
+    approval. The refusal is a 400 before any authorization-bearing work.
+    """
+    client = operations["client"]
+    created = client.json(
+        "PUT", f"/meetings/{MEETING_ID}",
+        {"record": production_meeting(), "expected_version": 0},
+    )
+
+    mutations = [
+        (f"/meetings/{MEETING_ID}/production-brief",
+         {"expected_version": created["version"], "brief": BRIEF, "evidence_refs": []}),
+        (f"/meetings/{MEETING_ID}/production-runs",
+         {"expected_version": created["version"], "producer_session_id": "s",
+          "submission_id": "submission-nokey"}),
+        ("/meeting-output-runs/mrun_1/claim", {"request_id": "r", "session_id": "s"}),
+        ("/meeting-output-runs/mrun_1/collect", {"collection_claim": "x" * 32}),
+        ("/meeting-outputs/mout_1/review-runs",
+         {"expected_output_version": 1, "reviewer": REVIEWER}),
+        ("/meeting-output-review-runs/mrev_1/claim", {"request_id": "r", "session_id": "s"}),
+        ("/meeting-output-review-runs/mrev_1/complete", {"verdict": "verified", "findings": []}),
+        ("/meeting-outputs/mout_1/revision-runs",
+         {"expected_output_version": 1, "producer_session_id": "s"}),
+        ("/meeting-output-revision-runs/mrun_1/claim", {"request_id": "r", "session_id": "s"}),
+        ("/meeting-output-revision-runs/mrun_1/collect", {"collection_claim": "x" * 32}),
+        ("/meeting-outputs/mout_1/approve", {
+            "meeting_id": MEETING_ID, "expected_meeting_version": 1, "expected_output_version": 1,
+            "artifact_version": 1, "game_sha256": "a" * 64, "manifest_sha256": "b" * 64,
+            "zip_sha256": "c" * 64,
+        }),
+    ]
+
+    for path, payload in mutations:
+        refused = client.request("POST", path, payload, idempotency=False)
+        assert refused.status_code == 400, (path, refused.status_code, refused.text)
+        assert refused.json()["detail"] == {"error": "operations_idempotency_key_required"}
+
+    # A blank or oversized key is refused too, and nothing happened.
+    for key, code in (
+        ("   ", "operations_idempotency_key_required"),
+        ("k" * 1_000, "operations_idempotency_key_invalid"),
+    ):
+        refused = client.request(
+            "POST", f"/meetings/{MEETING_ID}/production-brief",
+            {"expected_version": created["version"], "brief": BRIEF, "evidence_refs": []},
+            {"Idempotency-Key": key},
+        )
+        assert refused.status_code == 400
+        assert refused.json()["detail"] == {"error": code}
+
+    assert client.json("GET", f"/meetings/{MEETING_ID}/outputs")["outputs"] == []
+    assert client.json("GET", f"/meetings/{MEETING_ID}")["meeting"]["production_stage"] == "briefing"
+
+
+def test_a_producer_claim_retry_replays_its_dispatch_response(operations):
+    """An exact claim retry replays the original dispatch, lease and all.
+
+    The claim is what hands out the assigned cwd and the single-use collection
+    claim. A dropped response previously left the dispatcher with an active
+    lease it could not re-read, so the run could never be collected.
+    """
+    client = operations["client"]
+    run = opened_run(operations, submission="submission-claim-replay")
+    body = {"request_id": "dispatch-1", "session_id": "session-producer-actual"}
+    key = {"Idempotency-Key": f"claim-{run['run_id']}-session-producer-actual"}
+
+    claimed = client.json("POST", f"/meeting-output-runs/{run['run_id']}/claim", body, key)
+    assert claimed["workspace"]["cwd"]
+    assert claimed["collection_claim"]
+
+    # The exact retry replays byte-for-byte while the lease is still active.
+    replay = client.json("POST", f"/meeting-output-runs/{run['run_id']}/claim", body, key)
+    assert replay == claimed
+
+    # A different key against the same live binding is a new dispatch attempt.
+    active = client.request("POST", f"/meeting-output-runs/{run['run_id']}/claim", body, None)
+    assert active.status_code == 409
+    assert active.json()["detail"] == {"error": "operations_claim_active"}
+
+    # The same key with a CHANGED binding conflicts and leaks nothing.
+    changed = client.request(
+        "POST", f"/meeting-output-runs/{run['run_id']}/claim",
+        {"request_id": "dispatch-2", "session_id": "session-producer-actual"}, key,
+    )
+    assert changed.status_code == 409
+    assert changed.json()["detail"] == {"error": "operations_idempotency_conflict"}
+    assert "cwd" not in changed.text
+    assert "collection_claim" not in changed.text
+    assert str(operations["home"]) not in changed.text
+
+    # The replay survives the process that produced it, and the claim it
+    # returns is the one that actually collects the run.
+    restarted = FastAPI()
+    restarted.state.auth_required = False
+    restarted.include_router(operations["api"].router)
+    after = Client(restarted)
+    assert after.json("POST", f"/meeting-output-runs/{run['run_id']}/claim", body, key) == claimed
+
+    write_producer_tree(
+        claimed["workspace"]["cwd"], {"index.txt": PRIMARY_BODY}, primary="index.txt"
+    )
+    collected = after.json(
+        "POST", f"/meeting-output-runs/{run['run_id']}/collect",
+        {"collection_claim": claimed["collection_claim"]},
+    )
+    assert collected["receipt"]["artifact_version"] == 1
+
+
+def test_a_claim_key_never_replays_onto_another_run(operations):
+    """Same key, same body, DIFFERENT run: a conflict, never a foreign cwd."""
+    client = operations["client"]
+    first = opened_run(operations, suffix="1", submission="submission-claim-one")
+    second_created = client.json(
+        "PUT", f"/meetings/{SECOND_MEETING_ID}",
+        {"record": production_meeting(id=SECOND_MEETING_ID), "expected_version": 0},
+    )
+    second_frozen = client.json(
+        "POST", f"/meetings/{SECOND_MEETING_ID}/production-brief",
+        {"expected_version": second_created["version"], "brief": BRIEF, "evidence_refs": []},
+    )
+    second = client.json(
+        "POST", f"/meetings/{SECOND_MEETING_ID}/production-runs",
+        {
+            "expected_version": second_frozen["meeting_version"],
+            "producer_session_id": "provisional-production-2",
+            "submission_id": "submission-claim-two",
+        },
+    )
+
+    body = {"request_id": "dispatch-shared", "session_id": "session-shared"}
+    key = {"Idempotency-Key": "shared-claim-key"}
+    claimed = client.json("POST", f"/meeting-output-runs/{first['run_id']}/claim", body, key)
+
+    foreign = client.request(
+        "POST", f"/meeting-output-runs/{second['run_id']}/claim", body, key
+    )
+    assert foreign.status_code == 409
+    assert foreign.json()["detail"] == {"error": "operations_idempotency_conflict"}
+    assert claimed["workspace"]["cwd"] not in foreign.text
+
+    # The second run was never dispatched by the foreign key.
+    assert client.json("GET", f"/meeting-outputs/{second['output_id']}/recovery")[
+        "active_prompt_claim"
+    ] is None
+
+    # The key still replays for the run that earned it.
+    assert client.json("POST", f"/meeting-output-runs/{first['run_id']}/claim", body, key) == claimed
+
+
+def test_a_review_claim_retry_replays_its_dispatch_response(operations):
+    """The reviewer dispatch replays too, so a dropped response is recoverable."""
+    client = operations["client"]
+    started = start_production(operations)
+    output_id = started["run"]["output_id"]
+    output = client.json("GET", f"/meeting-outputs/{output_id}")["output"]
+    review = client.json(
+        "POST", f"/meeting-outputs/{output_id}/review-runs",
+        {"expected_output_version": output["version"], "reviewer": REVIEWER},
+    )
+    body = {"request_id": "review-dispatch-1", "session_id": "session-reviewer-1"}
+    key = {"Idempotency-Key": f"review-claim-{review['request_id']}-session-reviewer-1"}
+
+    claimed = client.json(
+        "POST", f"/meeting-output-review-runs/{review['request_id']}/claim", body, key
+    )
+    assert claimed["artifact_version"] == 1
+    assert "collection_claim" not in claimed
+    assert "workspace" not in claimed
+
+    assert client.json(
+        "POST", f"/meeting-output-review-runs/{review['request_id']}/claim", body, key
+    ) == claimed
+
+    # A changed reviewer session under the same key conflicts.
+    changed = client.request(
+        "POST", f"/meeting-output-review-runs/{review['request_id']}/claim",
+        {"request_id": "review-dispatch-1", "session_id": "session-reviewer-2"}, key,
+    )
+    assert changed.status_code == 409
+    assert changed.json()["detail"] == {"error": "operations_idempotency_conflict"}
+
+    # The replayed claim is still the one that authorizes the verdict.
+    completed = client.json(
+        "POST", f"/meeting-output-review-runs/{review['request_id']}/complete",
+        {"verdict": "verified", "findings": []},
+    )
+    assert completed["review"]["verdict"] == "verified"
+
+
+def test_a_collection_key_is_bound_to_the_presented_collection_claim(operations):
+    """A collect retry must present the same claim, and the key never stores it."""
+    client = operations["client"]
+    run = opened_run(operations, submission="submission-collect-hash")
+    claimed = client.json(
+        "POST", f"/meeting-output-runs/{run['run_id']}/claim",
+        {"request_id": "dispatch-1", "session_id": "session-producer-actual"},
+    )
+    write_producer_tree(
+        claimed["workspace"]["cwd"], {"index.txt": PRIMARY_BODY}, primary="index.txt"
+    )
+    key = {"Idempotency-Key": f"collect-{run['run_id']}"}
+
+    collected = client.json(
+        "POST", f"/meeting-output-runs/{run['run_id']}/collect",
+        {"collection_claim": claimed["collection_claim"]}, key,
+    )
+    assert collected["receipt"]["artifact_version"] == 1
+
+    # The exact retry replays; a DIFFERENT claim under the same key conflicts
+    # rather than replaying a receipt it never presented a claim for.
+    assert client.json(
+        "POST", f"/meeting-output-runs/{run['run_id']}/collect",
+        {"collection_claim": claimed["collection_claim"]}, key,
+    ) == collected
+    forged = client.request(
+        "POST", f"/meeting-output-runs/{run['run_id']}/collect",
+        {"collection_claim": "x" * 32}, key,
+    )
+    assert forged.status_code == 409
+    assert forged.json()["detail"] == {"error": "operations_idempotency_conflict"}
+
+    # The stored collection receipt never persists the raw claim token.
+    database = operations["home"] / "operations" / "meetings.db"
+    with sqlite3.connect(database) as connection:
+        rows = connection.execute(
+            "SELECT request_hash, response_json FROM meeting_output_idempotency"
+            " WHERE action = 'run.collect'"
+        ).fetchall()
+    assert rows
+    for request_hash, response_json in rows:
+        assert claimed["collection_claim"] not in request_hash
+        assert claimed["collection_claim"] not in response_json
+
+
+def test_a_bounded_startup_sweep_reclaims_an_abandoned_workspace(operations):
+    """One bounded sweep per process reclaims aged, unreferenced workspaces."""
+    client = operations["client"]
+    workspaces = operations["home"] / "operations" / "artifacts" / "workspaces"
+    workspaces.mkdir(parents=True)
+    aged = time.time() - 30 * 24 * 60 * 60
+    abandoned = workspaces / "mrun_abandoned_startup"
+    abandoned.mkdir()
+    os.utime(abandoned, (aged, aged))
+
+    # The first output-lifecycle call in this process runs the sweep.
+    assert client.json("GET", f"/meetings/{MEETING_ID}/outputs")["outputs"] == []
+    assert not abandoned.exists()
+
+    # It is bounded to once per process: a workspace abandoned afterwards is
+    # not reclaimed by the next request.
+    later = workspaces / "mrun_abandoned_later"
+    later.mkdir()
+    os.utime(later, (aged, aged))
+    assert client.json("GET", f"/meetings/{MEETING_ID}/outputs")["outputs"] == []
+    assert later.is_dir()
+
+
+def test_an_expired_claim_uses_a_new_replayable_generation(operations, monkeypatch):
+    api = operations["api"]
+    client = operations["client"]
+    now = [10_000]
+    monkeypatch.setattr(api, "_clock", lambda: now[0])
+    run = opened_run(operations, submission="submission-claim-generation")
+    body = {"request_id": "dispatch-generation", "session_id": "session-generation"}
+
+    first = client.json(
+        "POST",
+        f"/meeting-output-runs/{run['run_id']}/claim",
+        body,
+        {"Idempotency-Key": f"claim-{run['run_id']}-session-generation-g0"},
+    )
+    assert first["claim"]["renewals"] == 0
+
+    now[0] += api.output_store_module.PROMPT_CLAIM_TTL_SECONDS + 1
+    expired_replay = client.request(
+        "POST",
+        f"/meeting-output-runs/{run['run_id']}/claim",
+        body,
+        {"Idempotency-Key": f"claim-{run['run_id']}-session-generation-g0"},
+    )
+    assert expired_replay.status_code == 409
+    assert expired_replay.json()["detail"] == {"error": "operations_claim_expired"}
+
+    generation_one = {"Idempotency-Key": f"claim-{run['run_id']}-session-generation-g1"}
+    renewed = client.json(
+        "POST", f"/meeting-output-runs/{run['run_id']}/claim", body, generation_one
+    )
+    replay = client.json(
+        "POST", f"/meeting-output-runs/{run['run_id']}/claim", body, generation_one
+    )
+
+    assert renewed["claim"]["renewals"] == 1
+    assert replay == renewed
+    recovery = client.json("GET", f"/meeting-outputs/{run['output_id']}/recovery")
+    assert recovery["observed_at"] == now[0]
+    assert recovery["active_prompt_claim"]["renewals"] == 1
+
+
+def test_the_artifact_root_identity_is_pinned_for_the_api_process(operations, monkeypatch):
+    api = operations["api"]
+    first = api._output_store()
+    root = api._artifact_root()
+    alias_parent = root.parent / "path-alias"
+    alias_parent.mkdir()
+    monkeypatch.setattr(api, "_artifact_root", lambda: alias_parent / ".." / root.name)
+    database = api._meeting_db_path()
+    monkeypatch.setattr(api, "_meeting_db_path", lambda: alias_parent / ".." / database.name)
+    assert api._output_store() is first
+
+    held = root.with_name("artifacts-original")
+    root.rename(held)
+    root.mkdir(mode=0o700)
+
+    with pytest.raises(HTTPException) as caught:
+        api._output_store()
+
+    assert caught.value.status_code == 500
+    assert caught.value.detail == {"error": "operations_artifact_store_unavailable"}
+    assert first.artifacts.root_identity != (
+        root.stat().st_dev,
+        root.stat().st_ino,
+    )
+
+
+def test_the_production_lifecycle_still_works_when_keys_are_supplied(operations):
+    """The full route, every mutation keyed, ends in an approved artifact."""
+    client = operations["client"]
+    started = start_production(operations)
+    output_id = started["run"]["output_id"]
+    review = open_review(operations, output_id)
+    client.json(
+        "POST", f"/meeting-output-review-runs/{review['request_id']}/complete",
+        {"verdict": "verified", "findings": []},
+        {"Idempotency-Key": f"verdict-{review['request_id']}"},
+    )
+    detail = client.json("GET", f"/meeting-outputs/{output_id}")
+    version = detail["versions"][0]
+    approved = client.json(
+        "POST", f"/meeting-outputs/{output_id}/approve",
+        {
+            "meeting_id": MEETING_ID,
+            "expected_meeting_version": client.json("GET", f"/meetings/{MEETING_ID}")["version"],
+            "expected_output_version": detail["output"]["version"],
+            "artifact_version": version["artifact_version"],
+            "game_sha256": version["game_sha256"],
+            "manifest_sha256": version["manifest_sha256"],
+            "zip_sha256": version["zip_sha256"],
+        },
+        {"Idempotency-Key": f"approve-{output_id}-1"},
+    )
+    assert approved["output"]["state"] == "approved"
+    assert approved["output"]["approved_artifact_version"] == 1
+
+
+def test_a_swapped_artifact_root_hands_out_no_cwd_and_leaks_no_path(operations):
+    """The dispatcher door closes when the root is not the one Operations built."""
+    client = operations["client"]
+    run = opened_run(operations, submission="submission-root-swap")
+    root = operations["home"] / "operations" / "artifacts"
+    decoy = operations["home"] / "decoy"
+    decoy.mkdir()
+
+    def remove_tree(path: Path) -> None:
+        for child in sorted(path.iterdir()):
+            if child.is_dir() and not child.is_symlink():
+                remove_tree(child)
+            else:
+                child.unlink()
+        path.rmdir()
+
+    remove_tree(root)
+    root.symlink_to(decoy, target_is_directory=True)
+
+    refused = client.request(
+        "POST", f"/meeting-output-runs/{run['run_id']}/claim",
+        {"request_id": "dispatch-1", "session_id": "session-producer-actual"},
+    )
+    assert refused.status_code == 500
+    assert refused.json()["detail"] == {"error": "operations_artifact_store_unavailable"}
+    assert str(operations["home"]) not in refused.text
+    assert "cwd" not in refused.text
+    assert "collection_claim" not in refused.text
+    assert sorted(entry.name for entry in decoy.iterdir()) == []

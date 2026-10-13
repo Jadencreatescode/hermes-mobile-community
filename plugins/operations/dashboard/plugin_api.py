@@ -102,8 +102,20 @@ output_store_module = _load_dashboard_module(
     "meeting_output_store.py", "hermes_operations_meeting_output_store"
 )
 MeetingOutputStore = output_store_module.MeetingOutputStore
+workspace_module = output_store_module.workspace_module
 
 router = APIRouter()
+
+#: One bounded workspace sweep per process. Abandoned workspaces are reclaimed
+#: on the first output-lifecycle call rather than by an unbounded walk on every
+#: request or by a background thread this router does not own.
+_workspace_sweep_lock = threading.Lock()
+_workspace_sweep_done = False
+# Pin each artifact root for the lifetime of this API process. Reconstructing
+# ArtifactStore on every request would let a real directory swapped into the
+# same pathname become the new trusted root on the next request.
+_output_store_cache_lock = threading.Lock()
+_output_store_cache: dict[tuple[str, str], MeetingOutputStore] = {}
 
 
 def _clock() -> float:
@@ -130,9 +142,49 @@ def _artifact_root() -> Path:
     return Path(get_hermes_home()) / "operations" / "artifacts"
 
 
+def _sweep_workspaces_once(store: MeetingOutputStore) -> None:
+    """Reclaim abandoned workspaces once per process, bounded, never fatal.
+
+    A crashed or rolled-back run leaves a workspace no durable row references.
+    The sweep keeps every open run's workspace, honours the grace cutoff so an
+    in-flight mint is never taken, and removes at most a bounded number of
+    entries, so it cannot stall the first request. A sweep failure is never
+    allowed to fail the request that happened to trigger it.
+    """
+    global _workspace_sweep_done
+
+    with _workspace_sweep_lock:
+        if _workspace_sweep_done:
+            return
+        _workspace_sweep_done = True
+    try:
+        store.sweep_workspaces()
+    except Exception:
+        pass
+
+
 def _output_store() -> MeetingOutputStore:
-    """The output lifecycle shares the one public meeting database."""
-    return MeetingOutputStore(_meeting_db_path(), _artifact_root(), clock=_clock)
+    """The output lifecycle shares the one public meeting database.
+
+    Opening the store verifies and pins the artifact root, so a root that is
+    not the directory Operations built fails here -- with a stable public code
+    and no host path -- before any route can expose a cwd or a claim.
+    """
+    database = Path(os.path.normpath(os.path.abspath(os.fspath(_meeting_db_path()))))
+    artifacts = Path(os.path.normpath(os.path.abspath(os.fspath(_artifact_root()))))
+    key = (os.fspath(database), os.fspath(artifacts))
+    try:
+        with _output_store_cache_lock:
+            store = _output_store_cache.get(key)
+            if store is None:
+                store = MeetingOutputStore(database, artifacts, clock=_clock)
+                _output_store_cache[key] = store
+            else:
+                store.artifacts.verify_root()
+    except Exception as exc:
+        raise _output_http_error(exc) from exc
+    _sweep_workspaces_once(store)
+    return store
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +249,7 @@ def _output_http_error(exc: Exception) -> HTTPException:
         (MeetingVersionConflict, 409, "operations_meeting_version_conflict"),
         (module.IdempotencyConflict, 409, "operations_idempotency_conflict"),
         (module.ClaimActive, 409, "operations_claim_active"),
+        (module.ClaimExpired, 409, "operations_claim_expired"),
         (module.ClaimBindingMismatch, 409, "operations_claim_binding_mismatch"),
         (module.ClaimExhausted, 409, "operations_claim_exhausted"),
         (module.ReviewActive, 409, "operations_review_active"),
@@ -204,6 +257,10 @@ def _output_http_error(exc: Exception) -> HTTPException:
         (InvalidMeetingTransition, 409, "operations_invalid_transition"),
         (ServerOwnedField, 409, "operations_server_owned_field"),
         (ImmutableMeetingHistory, 409, "operations_immutable_history"),
+        # Last, because the claim-specific failure above is a subclass: an
+        # artifact root that is no longer the directory Operations built is a
+        # server-state fault, not a bad request, and no cwd comes out of it.
+        (module.WorkspaceError, 500, "operations_artifact_store_unavailable"),
     ]
     for kind, status, code in mapping:
         if isinstance(exc, kind):
@@ -218,9 +275,16 @@ def _output_http_error(exc: Exception) -> HTTPException:
 
 
 def _idempotency_key(request: Request) -> str:
+    """Every output-lifecycle mutation carries one. No key, no mutation.
+
+    Without a key a dropped response is indistinguishable from a second
+    intent, so a retry could mint a second run, artifact version, dispatch
+    claim, verdict, or approval. The refusal is a 400 taken before any
+    lifecycle work.
+    """
     value = (request.headers.get("Idempotency-Key") or "").strip()
     if not value:
-        return ""
+        raise HTTPException(status_code=400, detail=_code("operations_idempotency_key_required"))
     if len(value) > output_store_module.MAX_IDEMPOTENCY_KEY_CHARS or "\x00" in value:
         raise HTTPException(status_code=400, detail=_code("operations_idempotency_key_invalid"))
     return value
@@ -234,6 +298,7 @@ def _idempotent(
     run,
     *,
     resource: str,
+    replay_guard=None,
 ) -> Any:
     """Replay an identical lifecycle request; conflict on a changed payload.
 
@@ -247,14 +312,29 @@ def _idempotent(
     its durable work on it: the replay check, the mutation, and the stored
     response commit together or not at all.
     """
+    key = _idempotency_key(request)
     request_hash = output_store_module.canonical_request_hash([action, resource, payload])
     try:
         return store.run_idempotent(
             action=action,
-            key=_idempotency_key(request),
+            key=key,
             request_hash=request_hash,
             mutate=run,
+            replay_guard=replay_guard,
         )
+    except Exception as exc:
+        raise _output_http_error(exc) from exc
+
+
+def _collection_claim_digest(claim: str) -> str:
+    """Hash a presented collection claim for the request hash.
+
+    The raw claim is single use and must not be stored a second time, so the
+    canonical request carries only this hash. It still separates one claim from
+    another, which is the conflict semantics the collect route needs.
+    """
+    try:
+        return workspace_module.hash_claim_token(claim)
     except Exception as exc:
         raise _output_http_error(exc) from exc
 
@@ -1723,6 +1803,7 @@ def create_production_run(request: Request, meeting_id: str, body: ProductionRun
             "meeting_version": created["meeting_version"],
             "parent_artifact_version": created["parent_artifact_version"],
             "cwd": created["cwd"],
+            "workspace_identity": created["workspace_identity"],
         }
 
     return _idempotent(
@@ -1756,6 +1837,7 @@ def create_revision_run(request: Request, output_id: str, body: RevisionRunReque
             "meeting_version": created["meeting_version"],
             "parent_artifact_version": created["parent_artifact_version"],
             "cwd": created["cwd"],
+            "workspace_identity": created["workspace_identity"],
         }
 
     return _idempotent(
@@ -1763,22 +1845,69 @@ def create_revision_run(request: Request, output_id: str, body: RevisionRunReque
     )
 
 
+def _claim_replay_is_live(store: MeetingOutputStore, db, response: object) -> bool:
+    """An idempotent claim replay is authority only while its lease is live."""
+    if not isinstance(response, dict) or not isinstance(response.get("claim"), dict):
+        return False
+    claim = response["claim"]
+    claim_id = str(claim.get("claim_id") or "")
+    if not claim_id:
+        return False
+    row = db.execute(
+        "SELECT expires_at, renewals, consumed FROM meeting_output_prompt_claims"
+        " WHERE claim_id = ?",
+        (claim_id,),
+    ).fetchone()
+    return bool(
+        row is not None
+        and not int(row["consumed"])
+        and int(row["expires_at"]) > store._now()
+        and int(row["renewals"]) == int(claim.get("renewals", -1))
+    )
+
+
 def _claim_run(request: Request, run_id: str, body: RunClaimRequest, *, kind: str | None):
-    """Claim a producer dispatch and hand the dispatcher its assigned cwd."""
+    """Claim a producer dispatch and hand the dispatcher its assigned cwd.
+
+    The claim is the ONLY door to the assigned cwd and the single-use
+    collection claim, and taking it consumes a lease. A dropped response
+    therefore used to leave the dispatcher holding an active lease it could
+    never read back, so the run could not be collected at all. The key makes
+    the exact retry replay that one dispatch response -- cwd and collection
+    claim included -- while a changed binding under the same key conflicts.
+
+    The replay record for this action carries those dispatcher-only fields, so
+    it is exactly as sensitive as ``meeting_output_run_secrets`` and lives in
+    the same private database behind the same authenticated door.
+    """
     _authorize_mutation(request)
     store = _output_store()
-    try:
-        # One transaction binds the actual producer session, takes the dispatch
-        # claim, and reads the dispatcher-only cwd + collection claim. Nothing
-        # is handed out unless the whole binding committed.
-        return store.claim_dispatch(
-            run_id,
-            kind=kind,
-            request_id=body.request_id,
-            session_id=body.session_id,
-        )
-    except Exception as exc:
-        raise _output_http_error(exc) from exc
+
+    def run(db):
+        try:
+            # One transaction binds the actual producer session, takes the
+            # dispatch claim, and reads the dispatcher-only cwd + collection
+            # claim -- on the idempotency transaction's own connection, so the
+            # receipt commits with the binding or not at all.
+            return store.claim_dispatch(
+                run_id,
+                kind=kind,
+                request_id=body.request_id,
+                session_id=body.session_id,
+                connection=db,
+            )
+        except Exception as exc:
+            raise _output_http_error(exc) from exc
+
+    return _idempotent(
+        store,
+        request,
+        "run.claim",
+        {**body.model_dump(), "kind": kind},
+        run,
+        resource=run_id,
+        replay_guard=lambda db, response: _claim_replay_is_live(store, db, response),
+    )
 
 
 @router.post("/meeting-output-runs/{run_id}/claim")
@@ -1808,8 +1937,22 @@ def _collect_run(request: Request, run_id: str, body: RunCollectRequest, *, kind
             raise _output_http_error(exc) from exc
         return {"receipt": receipt, "output": output, "eligibility": _output_eligibility(output)}
 
+    # The presented collection claim is part of the request, so it is part of
+    # the hash: otherwise one key would replay a receipt for a claim this
+    # request never presented. Only its hash goes in, so the raw single-use
+    # token is neither persisted in the replay record nor derivable from it,
+    # while a different claim under the same key still conflicts.
     return _idempotent(
-        store, request, "run.collect", {"run_id": run_id}, run, resource=run_id
+        store,
+        request,
+        "run.collect",
+        {
+            "run_id": run_id,
+            "kind": kind,
+            "collection_claim_sha256": _collection_claim_digest(body.collection_claim),
+        },
+        run,
+        resource=run_id,
     )
 
 
@@ -1850,17 +1993,30 @@ def claim_review_run(request: Request, request_id: str, body: RunClaimRequest):
     """Claim a reviewer dispatch. Reviewers never receive a writable path."""
     _authorize_mutation(request)
     store = _output_store()
-    try:
-        # One transaction reads the review, its output version, and the meeting
-        # version and binds all three into the claim, so a verdict can never be
-        # authorized against versions that had already moved.
-        return store.claim_review_dispatch(
-            request_id,
-            dispatch_request_id=body.request_id,
-            session_id=body.session_id,
-        )
-    except Exception as exc:
-        raise _output_http_error(exc) from exc
+
+    def run(db):
+        try:
+            # One transaction reads the review, its output version, and the
+            # meeting version and binds all three into the claim, so a verdict
+            # can never be authorized against versions that had already moved.
+            return store.claim_review_dispatch(
+                request_id,
+                dispatch_request_id=body.request_id,
+                session_id=body.session_id,
+                connection=db,
+            )
+        except Exception as exc:
+            raise _output_http_error(exc) from exc
+
+    return _idempotent(
+        store,
+        request,
+        "review.claim",
+        body.model_dump(),
+        run,
+        resource=request_id,
+        replay_guard=lambda db, response: _claim_replay_is_live(store, db, response),
+    )
 
 
 @router.post("/meeting-output-review-runs/{request_id}/complete")

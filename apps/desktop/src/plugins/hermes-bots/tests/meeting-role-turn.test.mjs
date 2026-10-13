@@ -59,6 +59,8 @@ test('a producer turn creates its session with the minted cwd and file authority
   const result = await runRoleTurn({
     role: 'producer',
     cwd: CWD,
+    cwdIdentity: { device: '10', inode: '20', outputDevice: '10', outputInode: '21' },
+    dispatchId: 'mrun-1',
     participant: producer,
     prompt: PROMPT,
     request,
@@ -76,6 +78,11 @@ test('a producer turn creates its session with the minted cwd and file authority
   assert.equal(created.params.profile, 'producer')
   assert.equal(created.params.hidden, true)
   assert.equal(created.params.source, 'meeting')
+  assert.deepEqual(created.params.cwd_identity, {
+    device: '10', inode: '20', output_device: '10', output_inode: '21'
+  })
+  const submitted = calls.find(call => call.method === 'prompt.submit')
+  assert.equal(submitted.params.idempotency_key, 'mrun-1')
 })
 
 test('the session binding is checkpointed BEFORE the prompt is submitted', async () => {

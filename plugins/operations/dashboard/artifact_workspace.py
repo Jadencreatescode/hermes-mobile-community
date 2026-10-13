@@ -13,7 +13,10 @@ lowercase SHA-256 of the archive. Writes are staged in a mode-0600 temporary
 file inside the artifact root, stream-hashed, fsynced, atomically renamed into
 ``sha256/<prefix>/<digest>``, and the parent directory is fsynced before any
 metadata row references them. A crash may therefore leave an unreferenced blob,
-but never a row pointing at missing bytes.
+but never a row pointing at missing bytes. An entry that already carries a
+blob's name proves nothing: its bytes are re-hashed through its own descriptor
+before they are trusted, and an entry that fails that check is replaced (or the
+write fails) before any metadata can reference it.
 """
 
 from __future__ import annotations
@@ -27,9 +30,15 @@ import re
 import secrets
 import stat
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
+
+try:  # pragma: no cover - POSIX advisory locking
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX hosts
+    fcntl = None
 
 
 def _load_sibling(name: str, module_name: str):
@@ -55,9 +64,23 @@ OUTPUT_DIRECTORY = "output"
 WORKSPACES_DIRECTORY = "workspaces"
 BLOBS_DIRECTORY = "sha256"
 STAGING_DIRECTORY = "staging"
+SWEEP_LOCK_NAME = ".sweep.lock"
 MANIFEST_MEMBER = package_module.MANIFEST_MEMBER
 MAX_WORKSPACE_ID_CHARS = 64
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+#: A stored blob is never larger than one whole package.
+MAX_BLOB_BYTES = package_module.MAX_PACKAGE_TOTAL_BYTES
+
+#: How long a workspace that NO durable run references is left alone. A mint
+#: creates the directory inside the lifecycle transaction, so between the mint
+#: and the commit the workspace exists on disk while its run row is invisible
+#: to every other connection. The cutoff is the window that race lives in.
+WORKSPACE_SWEEP_GRACE_SECONDS = 60 * 60
+
+#: Removals per sweep. A sweep runs on a request path, so it is bounded.
+MAX_SWEEP_REMOVALS = 64
 
 
 class WorkspaceError(ValueError):
@@ -77,6 +100,10 @@ class MintedWorkspace:
     relative_root: str
     claim_token: str
     claim_token_hash: str
+    workspace_device: int
+    workspace_inode: int
+    output_device: int
+    output_inode: int
 
 
 @dataclass(frozen=True)
@@ -113,40 +140,141 @@ class ArtifactStore:
     """Content-addressed package blob storage under the Operations root."""
 
     def __init__(self, root: Path | str):
-        self.root = Path(root)
-        if self.root.is_symlink():
-            # Refuse before creating anything: a linked root would place every
-            # blob and workspace somewhere the server never chose.
-            raise WorkspaceError("the artifact root must be a real directory, not a link")
-        self.root.mkdir(parents=True, exist_ok=True)
+        # Absolute but NOT resolved: the configured pathname is what the server
+        # was told to use, and resolving it here would silently accept the very
+        # links the walk below exists to refuse.
+        self.root = Path(os.path.normpath(Path(root).absolute()))
+        descriptor = self._establish_root(self.root)
         try:
-            self.root.chmod(0o700)
-        except OSError:  # pragma: no cover - platform dependent
-            pass
+            opened = os.fstat(descriptor)
+            #: The root's identity, pinned once. Every later open of the root by
+            #: pathname must land on this exact directory or no operation runs.
+            self.root_identity = (opened.st_dev, opened.st_ino)
+            try:
+                os.fchmod(descriptor, 0o700)
+            except OSError:  # pragma: no cover - platform dependent
+                pass
+            for name in (BLOBS_DIRECTORY, STAGING_DIRECTORY, WORKSPACES_DIRECTORY):
+                os.close(self._open_child(descriptor, name, create=True))
+        finally:
+            os.close(descriptor)
         self.blobs = self.root / BLOBS_DIRECTORY
         self.staging = self.root / STAGING_DIRECTORY
-        with self._root_descriptor() as root_fd:
-            for name in (BLOBS_DIRECTORY, STAGING_DIRECTORY, WORKSPACES_DIRECTORY):
-                os.close(self._open_child(root_fd, name, create=True))
+
+    # -- root creation and identity ----------------------------------------
+
+    @staticmethod
+    def _establish_root(root: Path) -> int:
+        """Open the configured artifact root, creating it by descriptor walk.
+
+        The deepest component that ALREADY exists is server configuration --
+        Operations is told where to keep its artifacts the same way it is told
+        where to keep its database -- so it is the walk's trusted starting
+        descriptor, and it must be a real directory rather than a link or a
+        file. Every component below it is created with ``mkdirat`` and opened
+        with ``openat`` + ``O_NOFOLLOW`` relative to its parent descriptor, and
+        each one's ``lstat`` identity is compared against the ``fstat`` of the
+        descriptor actually opened.
+
+        A ``mkdir(parents=True)`` would instead have followed a pre-planted
+        link and built the whole artifact tree -- every blob, every workspace,
+        every assigned cwd -- inside the link's target.
+
+        Refusals name no path: an error body must never leak a host path.
+        """
+        # Start at the filesystem anchor, not at the deepest existing parent.
+        # Opening an apparently real child pathname directly would still follow
+        # a symlink in one of its already-existing ancestors.
+        parts = root.parts
+        if len(parts) < 2 or not root.anchor:
+            raise WorkspaceError("the artifact root path is invalid")
+        try:
+            descriptor = os.open(root.anchor, os.O_RDONLY | os.O_DIRECTORY | _O_NOFOLLOW)
+        except OSError as exc:
+            raise WorkspaceError("the artifact root is unavailable") from exc
+        try:
+            components = parts[1:]
+            for index, name in enumerate(components):
+                child = ArtifactStore._open_root_component(
+                    descriptor,
+                    name,
+                    owner_only=index == len(components) - 1,
+                )
+                os.close(descriptor)
+                descriptor = child
+        except BaseException:
+            os.close(descriptor)
+            raise
+        return descriptor
+
+    @staticmethod
+    def _open_root_component(parent_fd: int, name: str, *, owner_only: bool = False) -> int:
+        """Create/open one root component without following any ancestor link."""
+        if name in ("", ".", ".."):  # pragma: no cover - normpath removes these
+            raise WorkspaceError("the artifact root path is invalid")
+        created = False
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+            created = True
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise WorkspaceError("the artifact root could not be created") from exc
+        try:
+            info = os.lstat(name, dir_fd=parent_fd)
+        except OSError as exc:
+            raise WorkspaceError("the artifact root is unavailable") from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise WorkspaceError("the artifact root must be a real directory, not a link")
+        if not stat.S_ISDIR(info.st_mode):
+            raise WorkspaceError("the artifact root must be a real directory, not a file")
+        try:
+            handle = os.open(
+                name, os.O_RDONLY | os.O_DIRECTORY | _O_NOFOLLOW, dir_fd=parent_fd
+            )
+        except OSError as exc:
+            raise WorkspaceError("the artifact root could not be opened safely") from exc
+        opened = os.fstat(handle)
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            os.close(handle)
+            raise WorkspaceError("the artifact root changed while it was being opened")
+        if created or owner_only:
+            try:
+                os.fchmod(handle, 0o700)
+            except OSError:  # pragma: no cover - platform dependent
+                pass
+        return handle
+
+    def verify_root(self) -> None:
+        """Refuse before exposing an assigned cwd if the root is not ours."""
+        with self._root_descriptor():
+            pass
 
     # -- descriptor-relative plumbing --------------------------------------
 
     @contextlib.contextmanager
     def _root_descriptor(self):
-        """A trusted descriptor for the configured artifact root.
+        """A verified descriptor for the configured artifact root.
 
-        Every child below it is then opened relative to a descriptor with
-        ``O_NOFOLLOW``, so a swapped or symlinked ``sha256``/``staging``/
-        ``workspaces`` name can never move a write, a read, a mint, or a sweep
-        outside the root.
+        The root is reopened by pathname with ``O_NOFOLLOW`` and accepted only
+        when its device and inode still match the identity pinned at
+        construction, so a root swapped between the check and the open -- for a
+        link OR for a different real directory at the same name -- is refused
+        before any operation. Every child below it is then opened relative to a
+        descriptor with ``O_NOFOLLOW``, so a swapped or symlinked
+        ``sha256``/``staging``/``workspaces`` name can never move a write, a
+        read, a mint, or a sweep outside the root.
         """
-        if self.root.is_symlink():
-            raise WorkspaceError("the artifact root must be a real directory, not a link")
         try:
-            descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+            descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | _O_NOFOLLOW)
         except OSError as exc:
             raise WorkspaceError("the artifact root is unavailable") from exc
         try:
+            opened = os.fstat(descriptor)
+            if (opened.st_dev, opened.st_ino) != self.root_identity:
+                raise WorkspaceError(
+                    "the artifact root is not the directory Operations opened"
+                )
             # One tripwire for every artifact operation: if ANY server-owned
             # child of the root has been replaced by a link or a file, the root
             # is not the tree the server built, so no operation proceeds --
@@ -220,42 +348,147 @@ class ArtifactStore:
         """The server's own name for a blob. IO goes through descriptors."""
         return self.blobs / self._validate_digest(digest)[:2] / digest
 
+    @staticmethod
+    def _verified_blob(prefix_fd: int, digest: str) -> bool:
+        """Does the entry already named ``digest`` really hold those bytes?
+
+        The NAME proves nothing: anyone who can write into the shard can
+        pre-plant a link, a directory, a hard link to a file they keep, or
+        truncated bytes under a digest the server is about to store, and a
+        bare existence check would then record metadata for bytes the server
+        never wrote. So the entry is opened through its own descriptor with
+        ``O_NOFOLLOW``, required by ``fstat`` to be a single-link bounded
+        regular file, stream-hashed, and accepted only on an exact digest
+        match.
+        """
+        try:
+            info = os.lstat(digest, dir_fd=prefix_fd)
+        except OSError:
+            return False
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            return False
+        try:
+            handle = os.open(digest, os.O_RDONLY | _O_NOFOLLOW, dir_fd=prefix_fd)
+        except OSError:
+            return False
+        with os.fdopen(handle, "rb", closefd=True) as stream:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+                return False
+            if opened.st_size > MAX_BLOB_BYTES:
+                return False
+            hasher = hashlib.sha256()
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+        return secrets.compare_digest(hasher.hexdigest(), digest)
+
+    @staticmethod
+    def _discard_blob_entry(prefix_fd: int, digest: str) -> None:
+        """Clear an entry that failed verification, or refuse the write.
+
+        A blob is content addressed, so replacing bytes that do not hash to
+        their own name loses nothing -- no row can legitimately reference them.
+        What is NOT safe is unlinking a tree the server never wrote, so a
+        directory is reclaimed only when it is empty and anything else fails
+        the write outright, before any metadata can reference the slot.
+        """
+        try:
+            info = os.lstat(digest, dir_fd=prefix_fd)
+        except OSError:
+            return
+        try:
+            if stat.S_ISDIR(info.st_mode):
+                os.rmdir(digest, dir_fd=prefix_fd)
+            else:
+                os.unlink(digest, dir_fd=prefix_fd)
+        except OSError as exc:
+            raise WorkspaceError(
+                "the stored package slot could not be replaced safely"
+            ) from exc
+
     def put_blob(self, payload: bytes) -> str:
         """Durably store bytes and return their digest."""
         digest = hashlib.sha256(payload).hexdigest()
         with self._child_descriptor(BLOBS_DIRECTORY) as blobs_fd:
             prefix_fd = self._open_child(blobs_fd, digest[:2], create=True)
             try:
-                try:
-                    os.lstat(digest, dir_fd=prefix_fd)
-
+                if self._verified_blob(prefix_fd, digest):
                     return digest
-                except OSError:
-                    pass
+                # Whatever is sitting in the slot is not these bytes. It goes
+                # before anything is staged, so a slot that cannot be cleared
+                # fails the write instead of leaving a half-trusted entry.
+                self._discard_blob_entry(prefix_fd, digest)
                 with self._child_descriptor(STAGING_DIRECTORY) as staging_fd:
                     temporary = f"blob-{secrets.token_hex(16)}.part"
-                    descriptor = os.open(
-                        temporary,
-                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                        0o600,
-                        dir_fd=staging_fd,
-                    )
+                    published = False
                     try:
-                        hasher = hashlib.sha256()
-                        view = memoryview(payload)
-                        while view:
-                            chunk = view[:1024 * 1024]
-                            os.write(descriptor, chunk)
-                            hasher.update(chunk)
-                            view = view[len(chunk):]
-                        if hasher.hexdigest() != digest:  # pragma: no cover - defensive
-                            raise WorkspaceError("package digest changed while writing")
-                        os.fsync(descriptor)
-                    finally:
-                        os.close(descriptor)
-                    os.rename(
-                        temporary, digest, src_dir_fd=staging_fd, dst_dir_fd=prefix_fd
-                    )
+                        descriptor = os.open(
+                            temporary,
+                            os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                            0o600,
+                            dir_fd=staging_fd,
+                        )
+                        try:
+                            view = memoryview(payload)
+                            while view:
+                                written = os.write(descriptor, view[:1024 * 1024])
+                                if written <= 0:
+                                    raise WorkspaceError("the package blob write made no progress")
+                                view = view[written:]
+                            os.fsync(descriptor)
+                            staged = os.fstat(descriptor)
+                            if staged.st_size != len(payload):
+                                raise WorkspaceError("the staged package size is invalid")
+                            os.lseek(descriptor, 0, os.SEEK_SET)
+                            hasher = hashlib.sha256()
+                            while True:
+                                chunk = os.read(descriptor, 1024 * 1024)
+                                if not chunk:
+                                    break
+                                hasher.update(chunk)
+                            if hasher.hexdigest() != digest:
+                                raise WorkspaceError("the staged package digest is invalid")
+                            # Keep the verified inode open through publication.
+                            # The staging name is not trusted after verification.
+                            os.rename(
+                                temporary, digest, src_dir_fd=staging_fd, dst_dir_fd=prefix_fd
+                            )
+                            published = True
+                            published_fd = os.open(
+                                digest, os.O_RDONLY | _O_NOFOLLOW, dir_fd=prefix_fd
+                            )
+                            try:
+                                committed = os.fstat(published_fd)
+                                if (committed.st_dev, committed.st_ino) != (
+                                    staged.st_dev, staged.st_ino
+                                ):
+                                    raise WorkspaceError("the package blob changed during publication")
+                                if committed.st_size != len(payload):
+                                    raise WorkspaceError("the published package size is invalid")
+                                os.lseek(published_fd, 0, os.SEEK_SET)
+                                committed_hash = hashlib.sha256()
+                                while True:
+                                    chunk = os.read(published_fd, 1024 * 1024)
+                                    if not chunk:
+                                        break
+                                    committed_hash.update(chunk)
+                                if committed_hash.hexdigest() != digest:
+                                    raise WorkspaceError("the published package digest is invalid")
+                            finally:
+                                os.close(published_fd)
+                        finally:
+                            os.close(descriptor)
+                    except BaseException:
+                        try:
+                            os.unlink(temporary, dir_fd=staging_fd)
+                        except FileNotFoundError:
+                            pass
+                        if published:
+                            self._discard_blob_entry(prefix_fd, digest)
+                        raise
                 os.fsync(prefix_fd)
             finally:
                 os.close(prefix_fd)
@@ -305,23 +538,62 @@ class ArtifactStore:
         """The server's own name for the workspaces root. No IO happens here."""
         return self.root / WORKSPACES_DIRECTORY
 
+    @contextlib.contextmanager
+    def _sweep_lock(self, root_fd: int):
+        """Serialize minting against sweeping over the shared artifact root.
+
+        The lock lives in the root itself, so every process that shares the
+        root shares it. It guarantees a sweep never walks a workspace that is
+        half-created and a mint never lands inside a tree a sweep is deleting.
+
+        It is NOT what protects an unpublished run: a mint releases the lock
+        when its directory exists, long before its run row commits. That window
+        is closed by the grace cutoff and the pre-deletion recheck instead.
+        """
+        if fcntl is None:  # pragma: no cover - non-POSIX hosts
+            yield
+            return
+        try:
+            handle = os.open(
+                SWEEP_LOCK_NAME,
+                os.O_RDWR | os.O_CREAT | _O_NOFOLLOW,
+                0o600,
+                dir_fd=root_fd,
+            )
+        except OSError as exc:
+            raise WorkspaceError("the artifact root lock is unavailable") from exc
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(handle)
+
     def mint_workspace(self, run_id: str) -> MintedWorkspace:
         """Create the server-chosen cwd for one production or revision run."""
         run_id = _validate_run_id(run_id)
         relative = f"{WORKSPACES_DIRECTORY}/{run_id}"
         cwd = self.workspaces / run_id
-        with self._child_descriptor(WORKSPACES_DIRECTORY, create=True) as workspaces_fd:
+        with self._root_descriptor() as root_fd, self._sweep_lock(root_fd):
+            workspaces_fd = self._open_child(root_fd, WORKSPACES_DIRECTORY, create=True)
             try:
-                os.mkdir(run_id, 0o700, dir_fd=workspaces_fd)
-            except FileExistsError as exc:
-                raise WorkspaceError("the workspace for this run already exists") from exc
-            except OSError as exc:
-                raise WorkspaceError("the run workspace could not be created") from exc
-            run_fd = self._open_child(workspaces_fd, run_id)
-            try:
-                os.close(self._open_child(run_fd, OUTPUT_DIRECTORY, create=True))
+                try:
+                    os.mkdir(run_id, 0o700, dir_fd=workspaces_fd)
+                except FileExistsError as exc:
+                    raise WorkspaceError("the workspace for this run already exists") from exc
+                except OSError as exc:
+                    raise WorkspaceError("the run workspace could not be created") from exc
+                run_fd = self._open_child(workspaces_fd, run_id)
+                try:
+                    run_identity = os.fstat(run_fd)
+                    output_fd = self._open_child(run_fd, OUTPUT_DIRECTORY, create=True)
+                    try:
+                        output_identity = os.fstat(output_fd)
+                    finally:
+                        os.close(output_fd)
+                finally:
+                    os.close(run_fd)
             finally:
-                os.close(run_fd)
+                os.close(workspaces_fd)
         token = mint_claim_token()
         return MintedWorkspace(
             run_id=run_id,
@@ -329,7 +601,39 @@ class ArtifactStore:
             relative_root=relative,
             claim_token=token,
             claim_token_hash=hash_claim_token(token),
+            workspace_device=run_identity.st_dev,
+            workspace_inode=run_identity.st_ino,
+            output_device=output_identity.st_dev,
+            output_inode=output_identity.st_ino,
         )
+
+    def verified_workspace_path(
+        self,
+        run_id: str,
+        *,
+        workspace_identity: tuple[int, int],
+        output_identity: tuple[int, int],
+    ) -> Path:
+        """Validate the exact minted run and output directories before exposing cwd."""
+        run_id = _validate_run_id(run_id)
+        with self._child_descriptor(WORKSPACES_DIRECTORY) as workspaces_fd:
+            run_fd = self._open_child(workspaces_fd, run_id)
+            try:
+                opened_run = os.fstat(run_fd)
+                if (opened_run.st_dev, opened_run.st_ino) != workspace_identity:
+                    raise WorkspaceError("the run workspace is not the directory Operations minted")
+                output_fd = self._open_child(run_fd, OUTPUT_DIRECTORY)
+                try:
+                    opened_output = os.fstat(output_fd)
+                    if (opened_output.st_dev, opened_output.st_ino) != output_identity:
+                        raise WorkspaceError(
+                            "the run output directory is not the directory Operations minted"
+                        )
+                finally:
+                    os.close(output_fd)
+            finally:
+                os.close(run_fd)
+        return self.workspace_path(run_id)
 
     def workspace_path(self, run_id: str) -> Path:
         return self.workspaces / _validate_run_id(run_id)
@@ -396,7 +700,13 @@ class ArtifactStore:
             raise PackageLimitExceeded("the workspace manifest exceeds the manifest byte limit")
         return raw
 
-    def collect_workspace(self, run_id: str) -> CollectedPackage:
+    def collect_workspace(
+        self,
+        run_id: str,
+        *,
+        workspace_identity: tuple[int, int],
+        output_identity: tuple[int, int],
+    ) -> CollectedPackage:
         """Verify a workspace tree and build its immutable package bytes."""
         run_id = _validate_run_id(run_id)
         root = self.workspace_path(run_id)
@@ -410,8 +720,14 @@ class ArtifactStore:
             root_fd = self._open_contained_directory(workspaces_fd, run_id)
 
         try:
+            root_info = os.fstat(root_fd)
+            if (root_info.st_dev, root_info.st_ino) != workspace_identity:
+                raise WorkspaceError("the run workspace identity changed")
             output_fd = self._open_contained_directory(root_fd, OUTPUT_DIRECTORY)
             try:
+                output_info = os.fstat(output_fd)
+                if (output_info.st_dev, output_info.st_ino) != output_identity:
+                    raise WorkspaceError("the run output identity changed")
                 raw = self._read_manifest_bytes(output_fd)
                 try:
                     declared = json.loads(raw.decode("utf-8"))
@@ -439,29 +755,97 @@ class ArtifactStore:
             zip_bytes=built.zip_bytes,
         )
 
-    def sweep_uncollected_workspaces(self, keep_run_ids: Mapping[str, Any] | set[str]) -> list[str]:
+    @staticmethod
+    def _sweepable(
+        parent_fd: int,
+        name: str,
+        keep: set[str],
+        known: set[str] | None,
+        cutoff: float,
+    ) -> bool:
+        """May this workspace entry be removed right now?"""
+        if name in keep:
+            # A durable open run still needs it, at any age.
+            return False
+        try:
+            info = os.lstat(name, dir_fd=parent_fd)
+        except OSError:  # pragma: no cover - raced removal
+            return False
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            return False
+        if known is not None and name in known:
+            # A durable row exists and it is not open, so the run is collected
+            # or failed. Its immutable bytes live in the content-addressed
+            # store, never in the workspace, so this is reclaimable now.
+            return True
+        # Nothing durable references it. From here an abandoned workspace and a
+        # mint whose transaction has not committed yet look identical, so only
+        # age separates them.
+        return info.st_mtime <= cutoff
+
+    def sweep_uncollected_workspaces(
+        self,
+        keep_run_ids: Mapping[str, Any] | set[str] = (),
+        *,
+        durable_state: Callable[[], tuple[Any, Any]] | None = None,
+        grace_seconds: float = WORKSPACE_SWEEP_GRACE_SECONDS,
+        now: float | None = None,
+        limit: int = MAX_SWEEP_REMOVALS,
+    ) -> list[str]:
         """Remove workspaces no durable run still references.
 
         Immutable artifact versions live in the blob store, never in a
         workspace, so sweeping a workspace can never remove approved evidence.
+        What a sweep CAN race is a mint: the directory exists before the run
+        row commits. Three things close that race:
+
+        * the shared root lock, so a mint and a sweep never interleave;
+        * an explicit grace cutoff, so a workspace that no durable row
+          references is only reclaimed once it is older than the window a
+          lifecycle transaction can be open for;
+        * a re-read of durable state and of the entry's own age immediately
+          before each removal, so a run published since the listing keeps its
+          workspace.
+
+        ``durable_state`` returns ``(keep, known)``: the run ids that must be
+        preserved and the run ids that have ANY durable row. Without it the
+        caller only supplies ``keep`` and every other entry is treated as
+        unreferenced, which means the grace cutoff governs all of them.
+
         Removal is descriptor-relative: a swapped ``workspaces`` name is
         refused, and a symlinked entry inside it is skipped rather than
-        followed, so a sweep can never unlink anything outside the root.
+        followed, so a sweep can never unlink anything outside the root. It is
+        bounded to ``limit`` removals per call and returns exactly what it
+        removed, so a caller is never told more was reclaimed than was.
         """
+        moment = time.time() if now is None else float(now)
+        cutoff = moment - max(0.0, float(grace_seconds))
+
+        def state() -> tuple[set[str], set[str] | None]:
+            if durable_state is None:
+                return set(keep_run_ids), None
+            keep, known = durable_state()
+            return set(keep), None if known is None else set(known)
+
         removed: list[str] = []
-        keep = set(keep_run_ids)
-        with self._child_descriptor(WORKSPACES_DIRECTORY) as workspaces_fd:
-            for name in sorted(os.listdir(workspaces_fd)):
-                if name in keep:
-                    continue
-                try:
-                    info = os.lstat(name, dir_fd=workspaces_fd)
-                except OSError:  # pragma: no cover - raced removal
-                    continue
-                if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-                    continue
-                _remove_tree_at(workspaces_fd, name)
-                removed.append(name)
+        keep, known = state()
+        with self._root_descriptor() as root_fd, self._sweep_lock(root_fd):
+            workspaces_fd = self._open_child(root_fd, WORKSPACES_DIRECTORY, create=True)
+            try:
+                for name in sorted(os.listdir(workspaces_fd)):
+                    if len(removed) >= limit:
+                        break
+                    if not self._sweepable(workspaces_fd, name, keep, known, cutoff):
+                        continue
+                    # Re-read durable truth and re-check the age against the
+                    # entry itself immediately before unlinking anything.
+                    keep, known = state()
+                    if not self._sweepable(workspaces_fd, name, keep, known, cutoff):
+                        continue
+                    _remove_tree_at(workspaces_fd, name)
+                    removed.append(name)
+            finally:
+                os.close(workspaces_fd)
         return removed
 
 

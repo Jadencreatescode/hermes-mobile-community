@@ -193,7 +193,10 @@ export function DeliverablePackageOutput({
       meetingId: output.meetingId,
       expectedMeetingVersion: meetingVersion,
       expectedOutputVersion: fresh.output.version,
-      version: target
+      version: target,
+      // Bound to the exact artifact version and the versions this approval was
+      // built against, so a double click replays and a stale panel conflicts.
+      idempotencyKey: `approve-${output.outputId}-${fresh.output.version}-${target.artifactVersion}`
     })
 
     return `Artifact version ${approved.output.approvedArtifactVersion} approved by ${

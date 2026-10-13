@@ -4,6 +4,8 @@ Handler bodies are byte-identical to their pre-split server.py form; they
 are rebound onto server.py's globals at install time — see method_ctx.py.
 """
 
+import hashlib
+
 from .method_ctx import HandlerRegistry
 
 import types
@@ -272,6 +274,15 @@ def _(rid, params: dict) -> dict:
     sid = params.get("session_id", "")
     raw_text = params.get("text", "")
     text = sanitize_user_prompt_text(raw_text) if isinstance(raw_text, str) else raw_text
+    raw_idempotency_key = params.get("idempotency_key")
+    if raw_idempotency_key is not None and not isinstance(raw_idempotency_key, str):
+        return _err(rid, 4004, "idempotency_key must be a string")
+    idempotency_key = str(raw_idempotency_key or "").strip()
+    if len(idempotency_key) > 180:
+        return _err(rid, 4004, "idempotency_key is too long")
+    idempotency_digest = (
+        hashlib.sha256(str(text).encode("utf-8")).hexdigest() if idempotency_key else ""
+    )
     # Off-screen sends (widget intents): type the persisted user row so no
     # client renders it as a bubble. Whitelisted to "hidden" — display_kind
     # is a DB-only sidecar and this RPC must not mint arbitrary kinds.
@@ -346,6 +357,12 @@ def _(rid, params: dict) -> dict:
     while True:
         busy_transport = None
         with session["history_lock"]:
+            if idempotency_key:
+                existing = session.get("_prompt_idempotency", {}).get(idempotency_key)
+                if existing is not None:
+                    if existing != idempotency_digest:
+                        return _err(rid, 4092, "idempotency_key was reused with different text")
+                    return _ok(rid, {"status": "streaming", "idempotent_replay": True})
             if session.get("running"):
                 # Don't reject a mid-turn prompt — queue it (and, by default,
                 # interrupt the live turn) so it runs as the next turn. The
@@ -369,6 +386,12 @@ def _(rid, params: dict) -> dict:
     # rowId rebinding (see comment at the assignment site).
     survivor_user_row_ids = None
     with session["history_lock"]:
+        if idempotency_key:
+            existing = session.get("_prompt_idempotency", {}).get(idempotency_key)
+            if existing is not None:
+                if existing != idempotency_digest:
+                    return _err(rid, 4092, "idempotency_key was reused with different text")
+                return _ok(rid, {"status": "streaming", "idempotent_replay": True})
         # A watch session's run lives in the PARENT turn, so its own running
         # flag is False — without this, typing mid-run builds a second agent
         # racing the in-flight child on the same stored session (interleaved
@@ -718,6 +741,8 @@ def _(rid, params: dict) -> dict:
                     ]
             session["history"] = truncated
             session["history_version"] = int(session.get("history_version", 0)) + 1
+        if idempotency_key:
+            session.setdefault("_prompt_idempotency", {})[idempotency_key] = idempotency_digest
         session["running"] = True
         session["_turn_cancel_requested"] = False
         session["last_active"] = time.time()
@@ -756,6 +781,8 @@ def _(rid, params: dict) -> dict:
         with session["history_lock"]:
             session["running"] = False
             session["last_active"] = time.time()
+            if idempotency_key:
+                session.get("_prompt_idempotency", {}).pop(idempotency_key, None)
             _clear_inflight_turn(session)
         if is_disk_full_error(exc):
             return _err(
@@ -793,6 +820,14 @@ def _(rid, params: dict) -> dict:
             with session["history_lock"]:
                 session["running"] = False
                 session["last_active"] = time.time()
+                if idempotency_key:
+                    session.get("_prompt_idempotency", {}).pop(idempotency_key, None)
+                _clear_inflight_turn(session)
+                session["agent_error"] = None
+                session["agent_build_started"] = False
+                ready = session.get("agent_ready")
+                if ready is not None:
+                    ready.clear()
             _emit("session.info", sid, _session_info(session.get("agent"), session))
             return
         with session["history_lock"]:

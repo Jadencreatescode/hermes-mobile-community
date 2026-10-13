@@ -31,7 +31,11 @@ def _(rid, params: dict) -> dict:
         explicit_cwd = bool(raw_cwd) and os.path.isdir(os.path.abspath(os.path.expanduser(raw_cwd)))
     except Exception:
         explicit_cwd = False
-    resolved_cwd = _completion_cwd(params)
+    try:
+        pinned_cwd = _pinned_workspace_cwd(params)
+    except (OSError, ValueError) as exc:
+        return _err(rid, 4034, f"workspace authority refused: {exc}")
+    resolved_cwd = pinned_cwd["capability"] if pinned_cwd else _completion_cwd(params)
     source = _resolve_session_source(str(params.get("source") or "").strip() or None)
     agent_restrictions = _session_agent_restrictions(params)
     _enable_gateway_prompts()
@@ -76,7 +80,7 @@ def _(rid, params: dict) -> dict:
     lease = None  # claimed lazily on the first turn (_ensure_active_session_slot)
 
     with _sessions_lock:
-        _sessions[sid] = {
+        _sessions[sid] = _attach_pinned_cwd({
             "agent": None,
             "agent_error": None,
             "agent_ready": ready,
@@ -110,7 +114,7 @@ def _(rid, params: dict) -> dict:
             "tool_progress_mode": _load_tool_progress_mode(),
             "tool_started_at": {},
             "transport": current_transport() or _stdio_transport,
-        }
+        }, pinned_cwd)
         _register_session_cwd(_sessions[sid])
 
     # NOTE: we intentionally do NOT persist a DB row here. Every TUI/desktop
@@ -466,6 +470,15 @@ def _(rid, params: dict) -> dict:
         profile_resume_cwd = str(found.get("cwd") or "").strip() or _profile_configured_cwd(
             profile_home
         )
+        requested_identity = None
+        if isinstance(params.get("cwd_identity"), dict):
+            try:
+                requested_identity = (
+                    int(params["cwd_identity"]["device"]),
+                    int(params["cwd_identity"]["inode"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                return _err(rid, 4034, "workspace authority refused: cwd_identity is invalid")
 
         def _reuse_live_payload(sid: str, session: dict) -> dict:
             payload = _live_session_payload(
@@ -492,6 +505,13 @@ def _(rid, params: dict) -> dict:
             return payload
 
         def _live_restriction_error(live: tuple[str, dict] | None) -> dict | None:
+            if live is not None and requested_identity is not None:
+                if live[1].get("_cwd_identity") != requested_identity:
+                    return _err(
+                        rid,
+                        4034,
+                        "workspace authority refused: live cwd is not pinned",
+                    )
             if live is not None and not _session_satisfies_agent_restrictions(
                 live[1], agent_restrictions
             ):
@@ -508,7 +528,24 @@ def _(rid, params: dict) -> dict:
             if live is not None:
                 if restriction_error := _live_restriction_error(live):
                     return restriction_error
+                if requested_identity is not None and live[1].get("_cwd_identity") != requested_identity:
+                    return _err(rid, 4034, "workspace authority refused: live cwd is not pinned")
                 return _ok(rid, _reuse_live_payload(*live))
+
+        try:
+            pinned_resume_cwd = _pinned_workspace_cwd(params)
+        except (OSError, ValueError) as exc:
+            return _err(rid, 4034, f"workspace authority refused: {exc}")
+        if pinned_resume_cwd:
+            profile_resume_cwd = pinned_resume_cwd["capability"]
+
+        def _release_pinned_resume() -> None:
+            nonlocal pinned_resume_cwd
+            if pinned_resume_cwd:
+                _dispose_unregistered_session(
+                    {"_cwd_fd": pinned_resume_cwd["descriptor"]}
+                )
+                pinned_resume_cwd = None
 
         # Lazy/watch resume: register the live session WITHOUT building an agent.
         # Used by the desktop's subagent windows — the child runs inside the
@@ -533,6 +570,7 @@ def _(rid, params: dict) -> dict:
                     target, repair_alternation=True, include_row_ids=True
                 )
             except Exception as e:
+                _release_pinned_resume()
                 if lease is not None:
                     lease.release()
                 return _err(rid, 5000, f"resume failed: {e}")
@@ -549,6 +587,7 @@ def _(rid, params: dict) -> dict:
                 lazy=True,
                 agent_restrictions=agent_restrictions,
             )
+            record = _attach_pinned_cwd(record, pinned_resume_cwd)
             if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
                 if restriction_error := _live_restriction_error(live):
                     return restriction_error
@@ -620,6 +659,7 @@ def _(rid, params: dict) -> dict:
                 resume_runtime_overrides=overrides or None,
                 agent_restrictions=agent_restrictions,
             )
+            record = _attach_pinned_cwd(record, pinned_resume_cwd)
             record["resume_history_ready"] = threading.Event()
             record["resume_hydrating"] = True
             record["resume_message_count"] = int(found.get("message_count") or 0)
@@ -691,6 +731,7 @@ def _(rid, params: dict) -> dict:
                 else:
                     raw_history, display_history = db.get_resume_conversations(target)
             except Exception as e:
+                _release_pinned_resume()
                 if lease is not None:
                     lease.release()
                 return _err(rid, 5000, f"resume failed: {e}")
@@ -719,6 +760,7 @@ def _(rid, params: dict) -> dict:
                 resume_runtime_overrides=overrides or None,
                 agent_restrictions=agent_restrictions,
             )
+            record = _attach_pinned_cwd(record, pinned_resume_cwd)
             if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
                 if restriction_error := _live_restriction_error(live):
                     return restriction_error
@@ -811,6 +853,7 @@ def _(rid, params: dict) -> dict:
             finally:
                 _clear_session_context(tokens)
         except Exception as e:
+            _release_pinned_resume()
             if lease is not None:
                 lease.release()
             return _err(rid, 5000, f"resume failed: {e}")
@@ -833,6 +876,7 @@ def _(rid, params: dict) -> dict:
                     pass
                 if lease is not None:
                     lease.release()
+                _release_pinned_resume()
                 if restriction_error := _live_restriction_error(live):
                     return restriction_error
                 other_sid, other_session = live
@@ -868,6 +912,13 @@ def _(rid, params: dict) -> dict:
                         session_db=db,
                         source=source,
                     )
+                    if pinned_resume_cwd:
+                        registered = _sessions.get(sid)
+                        if registered is None:
+                            raise RuntimeError("resumed session disappeared before cwd transfer")
+                        _attach_pinned_cwd(registered, pinned_resume_cwd)
+                        _register_session_cwd(_sessions[sid])
+                        pinned_resume_cwd = None
                     # Ownership TRANSFER — the registered session's agent now
                     # holds this handle for its whole life, and _init_session
                     # never closes a caller-supplied session_db (its
@@ -926,9 +977,12 @@ def _(rid, params: dict) -> dict:
                 # ("'NoneType' object has no attribute 'execute'", permanently).
                 # owns_db still True means ownership never transferred, so the
                 # registration is ours to undo.
-                if owns_db:
-                    with _sessions_lock:
-                        _sessions.pop(sid, None)
+                with _sessions_lock:
+                    discarded = _sessions.pop(sid, None)
+                if discarded is not None:
+                    _dispose_unregistered_session(discarded, lease)
+                    lease = None
+                _release_pinned_resume()
                 if lease is not None:
                     lease.release()
                 return _err(rid, 5000, f"resume failed: {e}")

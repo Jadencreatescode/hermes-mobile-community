@@ -147,6 +147,14 @@ export interface OutputRun {
    *  create-run response the dispatcher uses to open the producer session.
    *  It is never part of an output DTO and is never rendered. */
   readonly cwd: string
+  readonly workspaceIdentity: WorkspaceIdentity
+}
+
+export interface WorkspaceIdentity {
+  readonly device: string
+  readonly inode: string
+  readonly outputDevice: string
+  readonly outputInode: string
 }
 
 export interface CollectionReceipt {
@@ -166,6 +174,14 @@ export interface OutputRecovery {
   readonly activeRunId: string | null
   readonly activeReviewRequestId: string | null
   readonly activePromptClaimId: string | null
+  readonly observedAt: number
+  readonly activePromptClaim: Readonly<{
+    claimId: string
+    scope: string
+    sessionId: string
+    expiresAt: number
+    renewals: number
+  }> | null
   readonly receipt: CollectionReceipt | null
 }
 
@@ -368,6 +384,7 @@ export function outputDetailFromWire(value: unknown): MeetingOutputDetail {
 
 export function runFromWire(value: unknown): OutputRun {
   const source = row(value)
+  const identity = row(source.workspace_identity ?? source.workspaceIdentity)
 
   return Object.freeze({
     runId: text(source.run_id ?? source.runId),
@@ -376,7 +393,13 @@ export function runFromWire(value: unknown): OutputRun {
     meetingId: text(source.meeting_id ?? source.meetingId),
     meetingVersion: count(source.meeting_version ?? source.meetingVersion),
     parentArtifactVersion: nullableCount(source.parent_artifact_version ?? source.parentArtifactVersion),
-    cwd: text(source.cwd)
+    cwd: text(source.cwd),
+    workspaceIdentity: Object.freeze({
+      device: text(identity.device),
+      inode: text(identity.inode),
+      outputDevice: text(identity.output_device ?? identity.outputDevice),
+      outputInode: text(identity.output_inode ?? identity.outputInode)
+    })
   })
 }
 
@@ -402,12 +425,21 @@ export function recoveryFromWire(value: unknown): OutputRecovery {
   const activeReview = row(source.active_review ?? source.activeReview)
   const activeClaim = row(source.active_prompt_claim ?? source.activePromptClaim)
   const receipt = source.receipt
+  const claimId = text(activeClaim.claim_id ?? activeClaim.claimId)
 
   return Object.freeze({
     output: outputFromWire(source.output),
     activeRunId: text(activeRun.run_id ?? activeRun.runId) || null,
     activeReviewRequestId: text(activeReview.request_id ?? activeReview.requestId) || null,
-    activePromptClaimId: text(activeClaim.claim_id ?? activeClaim.claimId) || null,
+    activePromptClaimId: claimId || null,
+    observedAt: count(source.observed_at ?? source.observedAt),
+    activePromptClaim: claimId ? Object.freeze({
+      claimId,
+      scope: text(activeClaim.scope),
+      sessionId: text(activeClaim.session_id ?? activeClaim.sessionId),
+      expiresAt: count(activeClaim.expires_at ?? activeClaim.expiresAt),
+      renewals: count(activeClaim.renewals)
+    }) : null,
     receipt: receipt ? receiptFromWire(receipt) : null
   })
 }
@@ -442,8 +474,28 @@ function artifactVersion(value: number): number {
   return value
 }
 
-function idempotent(key?: string): { headers?: Record<string, string> } {
-  return key ? { headers: { 'Idempotency-Key': key } } : {}
+/** Every lifecycle mutation carries a stable key: the server refuses an
+ *  unkeyed one, because a dropped response is then indistinguishable from a
+ *  second intent. The key is derived from the resource and the versions the
+ *  request was built against, so a retry of the SAME intent replays and a
+ *  changed intent conflicts instead of applying twice. */
+function idempotent(key: string): { headers: Record<string, string> } {
+  const value = key.trim()
+
+  if (!value) {
+    throw new Error('This request needs an idempotency key.')
+  }
+
+  return { headers: { 'Idempotency-Key': value } }
+}
+
+/** A dispatch-claim key: stable for one (resource, session) binding, and
+ *  bounded so a long session reference cannot push the key past the server's
+ *  limit and turn a legitimate claim into a 400. Truncation is safe because
+ *  the full binding is also part of the server's request hash, so two keys
+ *  that collide conflict (409) instead of replaying each other's response. */
+function claimKey(prefix: string, resource: string, sessionId: string, generation: number): string {
+  return `${prefix}-${resource}-g${generation}-${sessionId}`.slice(0, 180)
 }
 
 export function outputSummaryFromWire(value: unknown): MeetingOutputSummary {
@@ -486,7 +538,7 @@ export async function freezeProductionBrief(input: {
   expectedVersion: number
   brief: string
   evidenceRefs?: readonly string[]
-  idempotencyKey?: string
+  idempotencyKey: string
 }): Promise<{ meetingVersion: number; briefHash: string; productionStage: string }> {
   const response = row(await operationsApi()<unknown>(
     `/meetings/${outputId(input.meetingId)}/production-brief`,
@@ -513,7 +565,7 @@ export async function createProductionRun(input: {
   expectedVersion: number
   producerSessionId: string
   submissionId: string
-  idempotencyKey?: string
+  idempotencyKey: string
 }): Promise<OutputRun> {
   return runFromWire(await operationsApi()<unknown>(
     `/meetings/${outputId(input.meetingId)}/production-runs`,
@@ -533,7 +585,7 @@ export async function createRevisionRun(input: {
   outputId: string
   expectedOutputVersion: number
   producerSessionId: string
-  idempotencyKey?: string
+  idempotencyKey: string
 }): Promise<OutputRun> {
   return runFromWire(await operationsApi()<unknown>(
     `/meeting-outputs/${outputId(input.outputId)}/revision-runs`,
@@ -549,12 +601,19 @@ export async function createRevisionRun(input: {
 }
 
 /** The dispatcher door. The returned cwd and collection claim are run-scoped
- *  secrets: never persist them, never render them, never log them. */
+ *  secrets: never persist them, never render them, never log them.
+ *
+ *  Claiming consumes a dispatch lease, so the key matters more here than
+ *  anywhere else: without it a dropped response left an active lease whose cwd
+ *  and collection claim could never be read back, and the run could not be
+ *  collected at all. The key is bound to the run AND the session being bound,
+ *  so the exact retry replays while a different session is still refused. */
 export async function claimOutputRun(input: {
   runId: string
   requestId: string
   sessionId: string
   kind?: 'production' | 'revision'
+  claimGeneration?: number
 }): Promise<{
   runId: string
   outputId: string
@@ -569,26 +628,37 @@ export async function claimOutputRun(input: {
   sessionId: string
   /** Renewals > 0 means this run was claimed before: do NOT prompt again. */
   claimRenewals: number
+  workspaceIdentity: WorkspaceIdentity
 }> {
   const base = input.kind === 'revision' ? '/meeting-output-revision-runs' : '/meeting-output-runs'
 
   const response = row(await operationsApi()<unknown>(`${base}/${outputId(input.runId)}/claim`, {
     method: 'POST',
-    body: { request_id: input.requestId, session_id: input.sessionId }
+    body: { request_id: input.requestId, session_id: input.sessionId },
+    ...idempotent(claimKey('claim', input.runId, input.sessionId, input.claimGeneration ?? 0))
   }))
+
+  const workspace = row(response.workspace)
+  const identity = row(workspace.identity)
 
   return {
     runId: text(response.run_id),
     outputId: text(response.output_id),
     kind: text(response.kind),
-    cwd: text(row(response.workspace).cwd),
+    cwd: text(workspace.cwd),
     collectionClaim: text(response.collection_claim),
     brief: text(response.brief),
     briefHash: text(response.brief_hash),
     acceptanceStatement: text(response.acceptance_statement),
     parentArtifactVersion: nullableCount(response.parent_artifact_version),
     sessionId: text(response.session_id),
-    claimRenewals: count(row(response.claim).renewals)
+    claimRenewals: count(row(response.claim).renewals),
+    workspaceIdentity: Object.freeze({
+      device: text(identity.device),
+      inode: text(identity.inode),
+      outputDevice: text(identity.output_device ?? identity.outputDevice),
+      outputInode: text(identity.output_inode ?? identity.outputInode)
+    })
   }
 }
 
@@ -599,10 +669,17 @@ export async function claimReviewRun(input: {
   requestId: string
   dispatchId: string
   sessionId: string
+  claimGeneration?: number
 }): Promise<{ requestId: string; artifactVersion: number; reviewer: RouteIdentity }> {
   const response = row(await operationsApi()<unknown>(
     `/meeting-output-review-runs/${outputId(input.requestId)}/claim`,
-    { method: 'POST', body: { request_id: input.dispatchId, session_id: input.sessionId } }
+    {
+      method: 'POST',
+      body: { request_id: input.dispatchId, session_id: input.sessionId },
+      ...idempotent(claimKey(
+        'review-claim', input.requestId, input.sessionId, input.claimGeneration ?? 0
+      ))
+    }
   ))
 
   return {
@@ -616,7 +693,7 @@ export async function collectOutputRun(input: {
   runId: string
   collectionClaim: string
   kind?: 'production' | 'revision'
-  idempotencyKey?: string
+  idempotencyKey: string
 }): Promise<{ receipt: CollectionReceipt; output: MeetingOutput; eligibility: OutputEligibility }> {
   const base = input.kind === 'revision' ? '/meeting-output-revision-runs' : '/meeting-output-runs'
 
@@ -637,7 +714,7 @@ export async function createReviewRun(input: {
   outputId: string
   expectedOutputVersion: number
   reviewer: RouteIdentity
-  idempotencyKey?: string
+  idempotencyKey: string
 }): Promise<{
   requestId: string
   artifactVersion: number
@@ -668,7 +745,7 @@ export async function completeReviewRun(input: {
   requestId: string
   verdict: 'verified' | 'changes_requested'
   findings?: readonly ReviewFinding[]
-  idempotencyKey?: string
+  idempotencyKey: string
 }): Promise<{ review: ReviewRun; output: MeetingOutput; eligibility: OutputEligibility }> {
   const response = row(await operationsApi()<unknown>(
     `/meeting-output-review-runs/${outputId(input.requestId)}/complete`,
@@ -702,7 +779,7 @@ export async function approveMeetingOutput(input: {
   expectedMeetingVersion: number
   expectedOutputVersion: number
   version: OutputVersion
-  idempotencyKey?: string
+  idempotencyKey: string
 }): Promise<{ output: MeetingOutput; eligibility: OutputEligibility; artifactBinding: Record<string, unknown> }> {
   const response = row(await operationsApi()<unknown>(
     `/meeting-outputs/${outputId(input.outputId)}/approve`,

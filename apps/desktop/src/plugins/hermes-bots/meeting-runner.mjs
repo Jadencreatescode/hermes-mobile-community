@@ -169,6 +169,8 @@ export async function runRoleTurn(options = {}) {
   const {
     role,
     cwd = '',
+    cwdIdentity = null,
+    dispatchId = '',
     participant,
     prompt,
     sessions = {},
@@ -203,11 +205,21 @@ export async function runRoleTurn(options = {}) {
   const known = next[key]
   let runtime = null
   let stored = known || null
+  const cwdAuthority = cwdIdentity
+    ? {
+        cwd_identity: {
+          device: String(cwdIdentity.device || ''),
+          inode: String(cwdIdentity.inode || ''),
+          output_device: String(cwdIdentity.outputDevice || ''),
+          output_inode: String(cwdIdentity.outputInode || '')
+        }
+      }
+    : {}
 
   if (known) {
     try {
       const resumed = await request(participant, 'session.resume', roleSessionParams(
-        role, participant, cwd, { session_id: known, omit_messages: true }
+        role, participant, cwd, { ...cwdAuthority, session_id: known, omit_messages: true }
       ))
 
       if (resumed?.session_id) {runtime = resumed.session_id}
@@ -218,7 +230,7 @@ export async function runRoleTurn(options = {}) {
 
   if (!runtime) {
     const created = await request(participant, 'session.create', roleSessionParams(
-      role, participant, cwd, { title: `Meeting role: ${role}`, hidden: true }
+      role, participant, cwd, { ...cwdAuthority, title: `Meeting role: ${role}`, hidden: true }
     ))
 
     runtime = created?.session_id || null
@@ -237,6 +249,7 @@ export async function runRoleTurn(options = {}) {
   }
 
   const resumeParams = () => roleSessionParams(role, participant, cwd, {
+    ...cwdAuthority,
     session_id: stored || runtime
   })
   let before = 0
@@ -287,6 +300,7 @@ export async function runRoleTurn(options = {}) {
     await request(participant, 'prompt.submit', {
       session_id: runtime,
       text,
+      ...(dispatchId ? { idempotency_key: String(dispatchId) } : {}),
       ...(policy.cwd ? { cwd: policy.cwd } : {})
     })
     alreadyDispatched = true

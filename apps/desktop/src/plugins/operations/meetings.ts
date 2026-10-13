@@ -913,6 +913,13 @@ export async function runMeetingRoleTurn(
     role: 'producer' | 'reviewer'
     prompt: string
     cwd?: string
+    cwdIdentity?: {
+      device: string
+      inode: string
+      outputDevice: string
+      outputInode: string
+    }
+    dispatchId?: string
     dispatched?: boolean
     agents?: OperationsAgentModel[]
     maxPolls?: number
@@ -936,6 +943,8 @@ export async function runMeetingRoleTurn(
   const result = await runRoleTurn({
     role: input.role,
     ...(input.cwd ? { cwd: input.cwd } : {}),
+    ...(input.cwdIdentity ? { cwdIdentity: input.cwdIdentity } : {}),
+    ...(input.dispatchId ? { dispatchId: input.dispatchId } : {}),
     participant: { ...participant },
     prompt: input.prompt,
     sessions: { ...(meeting.runnerSessions ?? {}) },

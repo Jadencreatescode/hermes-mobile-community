@@ -36,7 +36,8 @@ import {
   type MeetingOutput,
   type MeetingOutputDetail,
   previewOutputFile,
-  type ReviewFinding
+  type ReviewFinding,
+  type WorkspaceIdentity
 } from './deliverable-package'
 import {
   isLocalDispatchRoute,
@@ -84,6 +85,7 @@ export const PRODUCER_LOCAL_ONLY_MESSAGE =
   + 'is written into a real Operations workspace directory here.'
 
 const CLAIM_ACTIVE = /operations_claim_active/
+const CLAIM_EXPIRED = /operations_claim_expired/
 
 const ACTIVE_DISPATCH_MESSAGE =
   'A dispatch for this run is already in flight, so nothing was sent again. '
@@ -310,6 +312,10 @@ function isClaimActive(error: unknown): boolean {
   return CLAIM_ACTIVE.test(error instanceof Error ? error.message : String(error))
 }
 
+function isClaimExpired(error: unknown): boolean {
+  return CLAIM_EXPIRED.test(error instanceof Error ? error.message : String(error))
+}
+
 export interface ProductionDispatchInput {
   readonly host: DispatchHost
   readonly meeting: MeetingRecord
@@ -347,12 +353,21 @@ export async function runProductionDispatch(
   let outputId = input.output?.outputId ?? ''
   let cwd = ''
   let parentArtifactVersion: number | null = null
+  let workspaceIdentity: WorkspaceIdentity | undefined
+  let claimGeneration = 0
 
   if (outputId) {
     const recovery = await getOutputRecovery(outputId)
 
     if (recovery.activeRunId) {
       runId = recovery.activeRunId
+      const activeClaim = recovery.activePromptClaim
+
+      if (activeClaim?.scope === runId) {
+        claimGeneration = activeClaim.renewals
+          + (activeClaim.expiresAt <= recovery.observedAt ? 1 : 0)
+      }
+
       stage('Recovering the open producer run.')
     }
   }
@@ -379,6 +394,7 @@ export async function runProductionDispatch(
     outputId = created.outputId
     cwd = created.cwd
     parentArtifactVersion = created.parentArtifactVersion
+    workspaceIdentity = created.workspaceIdentity
   }
 
   // 2. The producer session is created in the ASSIGNED cwd, and the run is
@@ -389,12 +405,30 @@ export async function runProductionDispatch(
   const known = input.meeting.runnerSessions?.[sessionKey]?.trim() || ''
   let claim: Awaited<ReturnType<typeof claimOutputRun>> | undefined
 
-  const claimRun = async (sessionId: string) => claimOutputRun({
-    runId,
-    requestId: `dispatch-${runId}`,
-    sessionId,
-    ...(input.kind === 'revision' ? { kind: 'revision' as const } : {})
-  })
+  const claimRun = async (sessionId: string) => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await claimOutputRun({
+          runId,
+          requestId: `dispatch-${runId}`,
+          sessionId,
+          claimGeneration,
+          ...(input.kind === 'revision' ? { kind: 'revision' as const } : {})
+        })
+      } catch (cause) {
+        if (!isClaimExpired(cause) || attempt === 2) {throw cause}
+
+        const refreshed = await getOutputRecovery(outputId)
+        const active = refreshed.activePromptClaim
+
+        if (!active || active.scope !== runId) {throw cause}
+        claimGeneration = active.renewals
+          + (active.expiresAt <= refreshed.observedAt ? 1 : 0)
+      }
+    }
+
+    throw new Error('The producer claim could not be refreshed.')
+  }
 
   try {
     if (!cwd) {
@@ -408,6 +442,7 @@ export async function runProductionDispatch(
       stage('Recovering the assigned workspace.')
       claim = await claimRun(known)
       cwd = claim.cwd
+      workspaceIdentity = claim.workspaceIdentity
     }
 
     if (!cwd) {
@@ -444,8 +479,9 @@ export async function runProductionDispatch(
       {
         role: 'producer',
         cwd,
+        cwdIdentity: workspaceIdentity,
+        dispatchId: runId,
         prompt,
-        dispatched: (claim?.claimRenewals ?? 0) > 0,
         onSessionBound: async storedSessionId => {
           if (!claim) {
             claim = await claimRun(storedSessionId || known)
@@ -641,6 +677,41 @@ export async function runReviewDispatch(input: ReviewDispatchInput): Promise<Dis
     manifestPaths = opened.manifest.map(file => file.path)
   }
 
+  const recovery = await getOutputRecovery(outputId)
+
+  const activeReviewClaim = recovery.activePromptClaim?.scope === requestId
+    ? recovery.activePromptClaim
+    : null
+
+  const claimGeneration = activeReviewClaim
+    ? activeReviewClaim.renewals + (activeReviewClaim.expiresAt <= recovery.observedAt ? 1 : 0)
+    : 0
+
+  const claimReview = async (sessionId: string) => {
+    let generation = claimGeneration
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await claimReviewRun({
+          requestId,
+          dispatchId: `review-dispatch-${requestId}`,
+          sessionId,
+          claimGeneration: generation
+        })
+      } catch (cause) {
+        if (!isClaimExpired(cause) || attempt === 2) {throw cause}
+
+        const refreshed = await getOutputRecovery(outputId)
+        const active = refreshed.activePromptClaim
+
+        if (!active || active.scope !== requestId) {throw cause}
+        generation = active.renewals + (active.expiresAt <= refreshed.observedAt ? 1 : 0)
+      }
+    }
+
+    throw new Error('The reviewer claim could not be refreshed.')
+  }
+
   // Read only authenticated, digest-checked text previews. They are bounded
   // again here so the role prompt stays within its hard 8 KiB envelope.
   const target = fresh.versions.find(version => version.artifactVersion === artifactVersion)
@@ -680,6 +751,7 @@ export async function runReviewDispatch(input: ReviewDispatchInput): Promise<Dis
       input.connectionModes,
       {
         role: 'reviewer',
+        dispatchId: requestId,
         prompt: reviewerPrompt({
           acceptanceStatement: fresh.output.summary,
           briefHash: fresh.output.briefHash,
@@ -696,11 +768,7 @@ export async function runReviewDispatch(input: ReviewDispatchInput): Promise<Dis
             throw new Error('The reviewer session could not be durably bound.')
           }
 
-          await claimReviewRun({
-            requestId,
-            dispatchId: `review-dispatch-${requestId}`,
-            sessionId: storedSessionId
-          })
+          await claimReview(storedSessionId)
         },
         ...(input.agents ? { agents: input.agents } : {}),
         ...(input.maxPolls === undefined ? {} : { maxPolls: input.maxPolls }),

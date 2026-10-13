@@ -115,6 +115,10 @@ class ClaimActive(ValueError):
     """An unexpired prompt claim already owns this dispatch scope."""
 
 
+class ClaimExpired(ValueError):
+    """A replayed dispatch response no longer carries a live lease."""
+
+
 class ClaimBindingMismatch(ValueError):
     """A claim renewal did not present the identical durable binding."""
 
@@ -242,6 +246,10 @@ CREATE TABLE IF NOT EXISTS meeting_output_runs (
     kind TEXT NOT NULL,
     state TEXT NOT NULL,
     workspace_root TEXT NOT NULL,
+    workspace_device INTEGER NOT NULL,
+    workspace_inode INTEGER NOT NULL,
+    output_device INTEGER NOT NULL,
+    output_inode INTEGER NOT NULL,
     claim_token_hash TEXT NOT NULL,
     claim_consumed INTEGER NOT NULL DEFAULT 0,
     parent_artifact_version INTEGER,
@@ -455,6 +463,18 @@ class MeetingOutputStore:
         own = self._connect()
         try:
             own.executescript(_SCHEMA)
+            columns = {
+                row["name"] for row in own.execute("PRAGMA table_info(meeting_output_runs)")
+            }
+            for name in (
+                "workspace_device", "workspace_inode", "output_device", "output_inode"
+            ):
+                if name not in columns:
+                    # Pre-release databases may contain open runs created before
+                    # exact directory identity was persisted. Keep those values
+                    # NULL so cwd recovery fails closed rather than blessing
+                    # whatever directory happens to occupy the pathname now.
+                    own.execute(f"ALTER TABLE meeting_output_runs ADD COLUMN {name} INTEGER")
             own.commit()
         finally:
             own.close()
@@ -699,9 +719,12 @@ class MeetingOutputStore:
             )
             connection.execute(
                 "INSERT INTO meeting_output_runs (run_id, output_id, meeting_id, kind, state,"
-                " workspace_root, claim_token_hash, parent_artifact_version, created_at, updated_at)"
-                " VALUES (?, ?, ?, 'production', 'open', ?, ?, NULL, ?, ?)",
+                " workspace_root, workspace_device, workspace_inode, output_device, output_inode,"
+                " claim_token_hash, parent_artifact_version, created_at, updated_at)"
+                " VALUES (?, ?, ?, 'production', 'open', ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
                 (run_id, output_id, meeting_id, minted.relative_root,
+                 minted.workspace_device, minted.workspace_inode,
+                 minted.output_device, minted.output_inode,
                  minted.claim_token_hash, now, now),
             )
             connection.execute(
@@ -738,7 +761,17 @@ class MeetingOutputStore:
             "meeting_version": meeting_version,
             "parent_artifact_version": None,
             # cwd and claim_token go ONLY to the authenticated dispatcher.
-            "cwd": str(minted.cwd),
+            "cwd": str(self.artifacts.verified_workspace_path(
+                run_id,
+                workspace_identity=(minted.workspace_device, minted.workspace_inode),
+                output_identity=(minted.output_device, minted.output_inode),
+            )),
+            "workspace_identity": {
+                "device": str(minted.workspace_device),
+                "inode": str(minted.workspace_inode),
+                "output_device": str(minted.output_device),
+                "output_inode": str(minted.output_inode),
+            },
             "claim_token": minted.claim_token,
         }
 
@@ -796,9 +829,12 @@ class MeetingOutputStore:
             minted = self.artifacts.mint_workspace(run_id)
             connection.execute(
                 "INSERT INTO meeting_output_runs (run_id, output_id, meeting_id, kind, state,"
-                " workspace_root, claim_token_hash, parent_artifact_version, created_at, updated_at)"
-                " VALUES (?, ?, ?, 'revision', 'open', ?, ?, ?, ?, ?)",
+                " workspace_root, workspace_device, workspace_inode, output_device, output_inode,"
+                " claim_token_hash, parent_artifact_version, created_at, updated_at)"
+                " VALUES (?, ?, ?, 'revision', 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (run_id, output_id, output["meeting_id"], minted.relative_root,
+                 minted.workspace_device, minted.workspace_inode,
+                 minted.output_device, minted.output_inode,
                  minted.claim_token_hash, parent, now, now),
             )
             connection.execute(
@@ -833,7 +869,17 @@ class MeetingOutputStore:
             "meeting_id": output["meeting_id"],
             "meeting_version": meeting_version,
             "parent_artifact_version": parent,
-            "cwd": str(minted.cwd),
+            "cwd": str(self.artifacts.verified_workspace_path(
+                run_id,
+                workspace_identity=(minted.workspace_device, minted.workspace_inode),
+                output_identity=(minted.output_device, minted.output_inode),
+            )),
+            "workspace_identity": {
+                "device": str(minted.workspace_device),
+                "inode": str(minted.workspace_inode),
+                "output_device": str(minted.output_device),
+                "output_inode": str(minted.output_inode),
+            },
             "claim_token": minted.claim_token,
         }
 
@@ -866,7 +912,11 @@ class MeetingOutputStore:
                 raise InvalidOutputTransition("this run is not collectable")
 
             try:
-                collected = self.artifacts.collect_workspace(run_id)
+                collected = self.artifacts.collect_workspace(
+                    run_id,
+                    workspace_identity=(int(run["workspace_device"]), int(run["workspace_inode"])),
+                    output_identity=(int(run["output_device"]), int(run["output_inode"])),
+                )
             except (PackageInvalid, WorkspaceError) as exc:
                 raise CollectionFailed(str(exc)) from exc
 
@@ -1474,6 +1524,7 @@ class MeetingOutputStore:
         key: str,
         request_hash: str,
         mutate: Callable[[sqlite3.Connection], Any],
+        replay_guard: Callable[[sqlite3.Connection, Any], bool] | None = None,
     ) -> Any:
         """Reserve, mutate, and store the response in ONE transaction.
 
@@ -1490,13 +1541,10 @@ class MeetingOutputStore:
         * the same key with a different request hash is a conflict, and that
           conflict writes nothing.
 
-        An absent key still runs the mutation inside one transaction; it simply
-        stores no replay record.
+        A key is REQUIRED. Without one there is no way to tell a retry from a
+        second intent, so an unkeyed lifecycle mutation is refused rather than
+        applied twice; the route layer turns that into a 400.
         """
-        if not key:
-            with self._transaction() as connection:
-                return mutate(connection)
-
         bounded = _bounded(key, "idempotency_key", MAX_IDEMPOTENCY_KEY_CHARS)
         with self._transaction() as connection:
             row = connection.execute(
@@ -1508,7 +1556,10 @@ class MeetingOutputStore:
                     raise IdempotencyConflict(
                         "this idempotency key was used with a different payload"
                     )
-                return json.loads(row["response_json"])
+                response = json.loads(row["response_json"])
+                if replay_guard is not None and not replay_guard(connection, response):
+                    raise ClaimExpired("the replayed dispatch claim has expired")
+                return response
 
             response = mutate(connection)
             connection.execute(
@@ -1530,16 +1581,23 @@ class MeetingOutputStore:
         kind: str | None,
         request_id: str,
         session_id: str,
+        connection: sqlite3.Connection | None = None,
     ) -> dict[str, Any]:
         """Bind the session, take the claim, and hand out the workspace atomically.
 
-        The claim endpoint carries no idempotency key, so this single
-        transaction IS its atomicity: a second dispatcher cannot observe a
-        bound session without the claim that goes with it, and no caller can
-        receive the assigned cwd or the single-use collection claim unless both
-        the binding and the claim committed for it.
+        One transaction IS this route's atomicity: a second dispatcher cannot
+        observe a bound session without the claim that goes with it, and no
+        caller can receive the assigned cwd or the single-use collection claim
+        unless both the binding and the claim committed for it.
+
+        The caller passes the idempotency transaction's connection, so the
+        replay reservation, the binding, the claim, and the stored dispatcher
+        response commit together or not at all. An exact retry therefore
+        replays this same response -- cwd and collection claim included --
+        instead of hitting the lease it took itself, while a changed binding
+        under the same key conflicts.
         """
-        with self._transaction() as connection:
+        with self._transaction(connection) as connection:
             run = connection.execute(
                 "SELECT * FROM meeting_output_runs WHERE run_id = ?", (run_id,)
             ).fetchone()
@@ -1572,7 +1630,15 @@ class MeetingOutputStore:
                 # Dispatcher-only fields: the assigned cwd and the single-use
                 # collection claim. Neither is persisted into a meeting record
                 # nor rendered in the normal UI.
-                "workspace": {"cwd": self.workspace_cwd(run_id, connection=connection)},
+                "workspace": {
+                    "cwd": self.workspace_cwd(run_id, connection=connection),
+                    "identity": {
+                        "device": str(run["workspace_device"]),
+                        "inode": str(run["workspace_inode"]),
+                        "output_device": str(run["output_device"]),
+                        "output_inode": str(run["output_inode"]),
+                    },
+                },
                 "collection_claim": self.collection_claim(run_id, connection=connection),
                 "brief": output["brief"],
                 "brief_hash": output["brief_hash"],
@@ -1589,18 +1655,19 @@ class MeetingOutputStore:
         *,
         dispatch_request_id: str,
         session_id: str,
+        connection: sqlite3.Connection | None = None,
     ) -> dict[str, Any]:
         """Take a reviewer dispatch claim atomically with the versions it saw.
 
-        Like the producer claim route, this endpoint carries no idempotency
-        key, so one transaction IS its atomicity: the review run, its output
-        version, and the meeting version are read and bound into the claim
-        together. A claim can therefore never be bound to a version that had
-        already moved -- which would otherwise authorize a verdict against an
-        artifact the reviewer never saw. The reviewer gets a read-only
-        summary: no workspace path and no collection claim exist here.
+        Like the producer claim route, one transaction IS its atomicity: the
+        review run, its output version, and the meeting version are read and
+        bound into the claim together, on the caller's idempotency transaction.
+        A claim can therefore never be bound to a version that had already
+        moved -- which would otherwise authorize a verdict against an artifact
+        the reviewer never saw. The reviewer gets a read-only summary: no
+        workspace path and no collection claim exist here.
         """
-        with self._transaction() as connection:
+        with self._transaction(connection) as connection:
             review = connection.execute(
                 "SELECT * FROM meeting_output_review_runs WHERE request_id = ?", (request_id,)
             ).fetchone()
@@ -1712,16 +1779,22 @@ class MeetingOutputStore:
                 (output_id,),
             ).fetchone()
             claim = None
-            if active is not None:
+            claim_scope = (
+                active["run_id"] if active is not None
+                else review["request_id"] if review is not None
+                else None
+            )
+            if claim_scope is not None:
                 claim = connection.execute(
                     "SELECT * FROM meeting_output_prompt_claims WHERE scope = ? AND consumed = 0"
                     " ORDER BY created_at DESC LIMIT 1",
-                    (active["run_id"],),
+                    (claim_scope,),
                 ).fetchone()
         receipt = None
         if latest is not None and latest["state"] == "collected" and latest["receipt_json"]:
             receipt = json.loads(latest["receipt_json"])
         return {
+            "observed_at": int(self._now()),
             "output": output,
             "active_run": None if active is None else {
                 "run_id": active["run_id"],
@@ -1874,19 +1947,61 @@ class MeetingOutputStore:
         return {"run_id": run_id, "session_id": presented, "bound": True}
 
     def workspace_cwd(self, run_id: str, *, connection: sqlite3.Connection | None = None) -> str:
-        """Assigned cwd for one run. For the authenticated dispatcher only."""
+        """Assigned cwd for one run. For the authenticated dispatcher only.
+
+        The root's pinned identity is rechecked first: a cwd is never handed to
+        a producer under a pathname that no longer names the directory
+        Operations built.
+        """
         with self._reader(connection) as connection:
             row = connection.execute(
-                "SELECT workspace_root FROM meeting_output_runs WHERE run_id = ?", (run_id,)
+                "SELECT * FROM meeting_output_runs WHERE run_id = ?", (run_id,)
             ).fetchone()
         if row is None:
             raise OutputNotFound(run_id)
-        return str(self.artifacts.root / row["workspace_root"])
+        if any(
+            row[name] is None
+            for name in ("workspace_device", "workspace_inode", "output_device", "output_inode")
+        ):
+            raise WorkspaceError("the run workspace identity is unavailable")
+        return str(self.artifacts.verified_workspace_path(
+            run_id,
+            workspace_identity=(int(row["workspace_device"]), int(row["workspace_inode"])),
+            output_identity=(int(row["output_device"]), int(row["output_inode"])),
+        ))
 
-    def sweep_workspaces(self, *, connection: sqlite3.Connection | None = None) -> list[str]:
-        """Remove workspaces no open run still needs. Blobs are untouched."""
-        with self._reader(connection) as connection:
-            rows = connection.execute(
-                "SELECT run_id FROM meeting_output_runs WHERE state = 'open'"
-            ).fetchall()
-        return self.artifacts.sweep_uncollected_workspaces({row["run_id"] for row in rows})
+    def sweep_workspaces(
+        self,
+        *,
+        grace_seconds: float | None = None,
+        now: float | None = None,
+        limit: int | None = None,
+    ) -> list[str]:
+        """Reclaim workspaces no durable run still needs. Blobs are untouched.
+
+        Durable state is re-read from a fresh connection immediately before
+        each removal, so an open run -- including one that committed after the
+        listing -- keeps its workspace. A workspace that no row references at
+        all is reclaimed only once it is older than the grace cutoff, because
+        a workspace minted inside a still-open lifecycle transaction is
+        indistinguishable from an abandoned one.
+        """
+
+        def durable_state() -> tuple[set[str], set[str]]:
+            with self._reader() as connection:
+                rows = connection.execute(
+                    "SELECT run_id, state FROM meeting_output_runs"
+                ).fetchall()
+            return (
+                {row["run_id"] for row in rows if row["state"] == "open"},
+                {row["run_id"] for row in rows},
+            )
+
+        bounds: dict[str, Any] = {}
+        if grace_seconds is not None:
+            bounds["grace_seconds"] = grace_seconds
+        if limit is not None:
+            bounds["limit"] = limit
+        return self.artifacts.sweep_uncollected_workspaces(
+            durable_state=durable_state, now=now, **bounds
+        )

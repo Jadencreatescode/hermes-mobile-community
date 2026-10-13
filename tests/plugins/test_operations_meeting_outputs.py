@@ -10,6 +10,7 @@ import sqlite3
 import stat
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1386,8 +1387,454 @@ def test_a_review_claim_binds_its_versions_in_one_transaction(lifecycle):
             session_id="session-reviewer-1",
         )
 
-    # One transaction: the whole claim is taken on a caller-owned connection.
+    # One transaction: the whole claim is taken on a caller-owned connection,
+    # which is also how the route commits its idempotency receipt with it.
     assert "connection" in inspect.signature(store.acquire_prompt_claim).parameters
     assert set(inspect.signature(store.claim_review_dispatch).parameters) == {
-        "request_id", "dispatch_request_id", "session_id"
+        "request_id", "dispatch_request_id", "session_id", "connection"
     }
+    assert set(inspect.signature(store.claim_dispatch).parameters) == {
+        "run_id", "kind", "request_id", "session_id", "connection"
+    }
+
+
+# ---------------------------------------------------------------------------
+# artifact root creation, identity pinning, and blob entry verification
+# ---------------------------------------------------------------------------
+
+
+def test_a_symlinked_ancestor_cannot_place_the_artifact_root(tmp_path):
+    """The root is created by descriptor walk, so a linked ancestor is refused.
+
+    The link is planted BEFORE construction, which is the only window a
+    ``mkdir(parents=True)`` would have followed: every missing component of the
+    configured root would have been created inside the link's target.
+    """
+    workspace = load_workspace()
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    linked = tmp_path / "parent"
+    linked.symlink_to(decoy, target_is_directory=True)
+
+    with pytest.raises(workspace.WorkspaceError) as caught:
+        workspace.ArtifactStore(linked / "nested" / "artifacts")
+
+    # A refusal never carries the host path it refused.
+    assert str(tmp_path) not in str(caught.value)
+    assert sorted(entry.name for entry in decoy.iterdir()) == []
+
+
+def test_a_symlinked_existing_ancestor_is_refused_even_when_the_root_exists(tmp_path):
+    """Every existing path component is opened no-follow from the filesystem anchor."""
+    workspace = load_workspace()
+    decoy = tmp_path / "decoy"
+    existing_root = decoy / "nested" / "artifacts"
+    existing_root.mkdir(parents=True)
+    linked = tmp_path / "parent"
+    linked.symlink_to(decoy, target_is_directory=True)
+
+    with pytest.raises(workspace.WorkspaceError) as caught:
+        workspace.ArtifactStore(linked / "nested" / "artifacts")
+
+    assert str(tmp_path) not in str(caught.value)
+    assert sorted(entry.name for entry in existing_root.iterdir()) == []
+
+
+def test_blob_staging_retries_short_writes_and_verifies_the_result(tmp_path, monkeypatch):
+    workspace = load_workspace()
+    store = workspace.ArtifactStore(tmp_path / "artifacts")
+    payload = b"short writes must not truncate immutable bytes\n" * 400
+    real_write = workspace.os.write
+
+    def short_write(descriptor, data):
+        return real_write(descriptor, data[: max(1, len(data) // 2)])
+
+    monkeypatch.setattr(workspace.os, "write", short_write)
+    stored = store.put_blob(payload)
+
+    assert stored == digest(payload)
+    assert store.get_blob(stored) == payload
+
+
+def test_blob_publication_refuses_a_swapped_staging_name(tmp_path, monkeypatch):
+    workspace = load_workspace()
+    store = workspace.ArtifactStore(tmp_path / "artifacts")
+    payload = b"verified immutable package bytes"
+    real_rename = workspace.os.rename
+
+    def swap_then_rename(source, destination, *, src_dir_fd=None, dst_dir_fd=None):
+        workspace.os.unlink(source, dir_fd=src_dir_fd)
+        replacement = workspace.os.open(
+            source,
+            workspace.os.O_WRONLY | workspace.os.O_CREAT | workspace.os.O_EXCL,
+            0o600,
+            dir_fd=src_dir_fd,
+        )
+        try:
+            workspace.os.write(replacement, b"substituted package bytes")
+        finally:
+            workspace.os.close(replacement)
+        return real_rename(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(workspace.os, "rename", swap_then_rename)
+
+    with pytest.raises(workspace.WorkspaceError, match="changed during publication"):
+        store.put_blob(payload)
+    with pytest.raises(workspace.WorkspaceError):
+        store.get_blob(digest(payload))
+
+
+def test_a_replaced_run_workspace_is_refused_before_its_cwd_is_exposed(lifecycle, tmp_path):
+    store = lifecycle["store"]
+    run = begin_production(lifecycle)
+    run_path = Path(run["cwd"])
+    decoy = tmp_path / "decoy-run"
+    (decoy / "output").mkdir(parents=True)
+    _remove_tree(run_path)
+    run_path.symlink_to(decoy, target_is_directory=True)
+
+    with pytest.raises(lifecycle["api"].WorkspaceError):
+        store.workspace_cwd(run["run_id"])
+
+
+def test_collection_refuses_a_replacement_real_workspace(lifecycle):
+    api = lifecycle["api"]
+    store = lifecycle["store"]
+    run = begin_production(lifecycle)
+    write_package_tree(run["cwd"], files={"index.txt": b"producer bytes\n"})
+    original = Path(run["cwd"])
+    held = original.with_name(f"{original.name}-held")
+    original.rename(held)
+    write_package_tree(original, files={"index.txt": b"substituted bytes\n"})
+
+    with pytest.raises(api.CollectionFailed, match="workspace identity changed"):
+        store.collect_run(run["run_id"], claim_token=run["claim_token"])
+
+
+def test_a_file_in_place_of_an_artifact_root_component_is_refused(tmp_path):
+    """A component of the configured root must be a directory, never a file."""
+    workspace = load_workspace()
+    blocker = tmp_path / "parent"
+    blocker.write_bytes(b"not a directory\n")
+
+    with pytest.raises(workspace.WorkspaceError) as caught:
+        workspace.ArtifactStore(blocker / "artifacts")
+
+    assert str(tmp_path) not in str(caught.value)
+    assert blocker.read_bytes() == b"not a directory\n"
+
+
+def test_the_artifact_root_is_created_by_descriptor_walk_and_owner_only(tmp_path):
+    """Every component Operations creates below the trusted ancestor is ours."""
+    workspace = load_workspace()
+    root = tmp_path / "deep" / "nested" / "artifacts"
+    store = workspace.ArtifactStore(root)
+
+    assert root.is_dir()
+    assert not root.is_symlink()
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+    assert stat.S_IMODE((tmp_path / "deep").stat().st_mode) == 0o700
+    assert store.put_blob(b"walked blob\n") == digest(b"walked blob\n")
+
+
+def test_a_root_swapped_after_construction_is_refused_before_any_operation(tmp_path):
+    """The root's device and inode are pinned, so a swap cannot redirect IO.
+
+    This is the check/open race: the configured pathname still resolves, but it
+    no longer names the directory Operations verified and built.
+    """
+    workspace = load_workspace()
+    root = tmp_path / "artifacts"
+    store = workspace.ArtifactStore(root)
+    stored = store.put_blob(b"first blob\n")
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+
+    # 1. The root pathname becomes a link to an attacker-owned directory.
+    _remove_tree(root)
+    root.symlink_to(decoy, target_is_directory=True)
+
+    for operation in (
+        lambda: store.put_blob(b"second blob\n"),
+        lambda: store.mint_workspace("mrun_after_swap"),
+        lambda: store.sweep_uncollected_workspaces(set()),
+        lambda: store.get_blob(stored),
+    ):
+        with pytest.raises(workspace.WorkspaceError) as caught:
+            operation()
+        assert str(tmp_path) not in str(caught.value)
+    assert sorted(entry.name for entry in decoy.iterdir()) == []
+
+    # 2. A REAL replacement directory at the same pathname is refused too: the
+    #    pinned inode, not the name, is what identifies the root.
+    root.unlink()
+    root.mkdir()
+    with pytest.raises(workspace.WorkspaceError):
+        store.put_blob(b"third blob\n")
+    assert sorted(entry.name for entry in root.iterdir()) == []
+
+
+def test_a_swapped_root_refuses_to_hand_out_an_assigned_cwd(lifecycle, tmp_path):
+    """No assigned cwd and no dispatch claim come out of an unverified root."""
+    store = lifecycle["store"]
+    run = begin_production(lifecycle)
+    assert store.workspace_cwd(run["run_id"]) == run["cwd"]
+
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    _remove_tree(Path(lifecycle["artifact_root"]))
+    Path(lifecycle["artifact_root"]).symlink_to(decoy, target_is_directory=True)
+
+    with pytest.raises(lifecycle["api"].WorkspaceError) as caught:
+        store.workspace_cwd(run["run_id"])
+    assert str(tmp_path) not in str(caught.value)
+
+    with pytest.raises(lifecycle["api"].WorkspaceError):
+        store.claim_dispatch(
+            run["run_id"], kind=None, request_id="dispatch-1", session_id="session-producer-1"
+        )
+    assert sorted(entry.name for entry in decoy.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "plant",
+    ["wrong_bytes", "truncated", "symlink", "hard_link", "unreadable_mode"],
+)
+def test_an_invalid_preexisting_blob_entry_is_replaced_with_verified_bytes(tmp_path, plant):
+    """A name under sha256/ proves nothing: the stored bytes are re-hashed.
+
+    Trusting the NAME let anyone pre-plant a path and have the server record
+    metadata for bytes it never wrote.
+    """
+    workspace = load_workspace()
+    store = workspace.ArtifactStore(tmp_path / "artifacts")
+    payload = b"the real deterministic package bytes\n"
+    expected = digest(payload)
+    path = store.blob_path(expected)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"attacker owned\n")
+
+    if plant == "wrong_bytes":
+        path.write_bytes(b"not the package at all\n")
+    elif plant == "truncated":
+        path.write_bytes(payload[:7])
+    elif plant == "symlink":
+        path.symlink_to(outside)
+    elif plant == "hard_link":
+        os.link(outside, path)
+    else:
+        path.write_bytes(payload)
+        path.chmod(0o000)
+
+    assert store.put_blob(payload) == expected
+    assert store.get_blob(expected) == payload
+    assert store.has_blob(expected) is True
+
+    # The replacement is a fresh single-link regular file, and nothing was
+    # written through the link or into the attacker's file.
+    info = os.lstat(path)
+    assert stat.S_ISREG(info.st_mode)
+    assert info.st_nlink == 1
+    assert outside.read_bytes() == b"attacker owned\n"
+
+
+def test_a_directory_in_a_blob_slot_fails_instead_of_being_silently_accepted(tmp_path):
+    """An entry that cannot be safely replaced fails loudly, writing nothing."""
+    workspace = load_workspace()
+    store = workspace.ArtifactStore(tmp_path / "artifacts")
+    payload = b"package bytes needing a slot\n"
+    path = store.blob_path(digest(payload))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.mkdir()
+    (path / "occupied.txt").write_bytes(b"not package bytes\n")
+
+    with pytest.raises(workspace.WorkspaceError) as caught:
+        store.put_blob(payload)
+
+    assert str(tmp_path) not in str(caught.value)
+    assert (path / "occupied.txt").read_bytes() == b"not package bytes\n"
+    assert store.has_blob(digest(payload)) is False
+    # Nothing was left behind in staging either.
+    assert sorted(entry.name for entry in (Path(store.root) / "staging").iterdir()) == []
+
+
+def test_a_hostile_blob_slot_fails_collection_before_any_metadata(lifecycle):
+    """Collection commits no artifact version when the bytes cannot be stored."""
+    workspace = load_workspace()
+    store = lifecycle["store"]
+    artifacts = workspace.ArtifactStore(lifecycle["artifact_root"])
+    run = begin_production(lifecycle)
+    write_package_tree(run["cwd"])
+
+    # Learn the deterministic package digest, then make its slot unusable.
+    built = artifacts.collect_workspace(
+        run["run_id"],
+        workspace_identity=(
+            int(run["workspace_identity"]["device"]),
+            int(run["workspace_identity"]["inode"]),
+        ),
+        output_identity=(
+            int(run["workspace_identity"]["output_device"]),
+            int(run["workspace_identity"]["output_inode"]),
+        ),
+    )
+    path = artifacts.blob_path(built.zip_sha256)
+    path.unlink()
+    path.mkdir()
+    (path / "decoy.txt").write_bytes(b"decoy\n")
+
+    with pytest.raises(lifecycle["api"].CollectionFailed):
+        store.collect_run(run["run_id"], claim_token=run["claim_token"])
+
+    # No artifact version, no blob row, and the run is still collectable.
+    assert store.list_versions(run["output_id"]) == []
+    assert store.get_output(run["output_id"])["current_artifact_version"] == 0
+    assert store.get_run(run["run_id"])["state"] == "open"
+    with sqlite3.connect(lifecycle["db_path"]) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM meeting_output_blobs").fetchone()[0] == 0
+
+    # Once the slot is usable again, collection stores the verified bytes.
+    _remove_tree(path)
+    receipt = store.collect_run(run["run_id"], claim_token=run["claim_token"])
+    assert receipt["zip_sha256"] == built.zip_sha256
+    assert digest(store.package_bytes(run["output_id"], 1)) == built.zip_sha256
+
+
+# ---------------------------------------------------------------------------
+# workspace sweep: grace, publication race, and durable recheck
+# ---------------------------------------------------------------------------
+
+
+def test_a_minted_workspace_is_never_swept_before_its_run_is_published(lifecycle):
+    """A sweep racing an in-flight mint must not take the assigned cwd.
+
+    The workspace exists on disk as soon as it is minted, but the run row is
+    invisible to any other connection until the lifecycle transaction commits.
+    A sweep that only consulted committed state would delete the cwd the
+    dispatcher is about to hand to a producer.
+    """
+    store = lifecycle["store"]
+    minted = threading.Event()
+    release = threading.Event()
+    captured: dict[str, object] = {}
+    failures: list[BaseException] = []
+
+    def mutate(connection):
+        created = store.begin_production_run(
+            meeting_id=MEETING_ID,
+            expected_meeting_version=lifecycle["meeting_version"],
+            producer_session_id="session-producer-1",
+            submission_id="submission-race-1",
+            connection=connection,
+        )
+        captured.update(created)
+        minted.set()
+        # The row is still uncommitted here: this is the whole window.
+        assert release.wait(10)
+        return created
+
+    def publish():
+        try:
+            store.run_idempotent(
+                action="production.run",
+                key="race-key",
+                request_hash="race-hash",
+                mutate=mutate,
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            failures.append(exc)
+            minted.set()
+
+    thread = threading.Thread(target=publish)
+    thread.start()
+    try:
+        assert minted.wait(10)
+        assert not failures, failures
+        swept = store.sweep_workspaces()
+    finally:
+        release.set()
+        thread.join(10)
+
+    assert not failures, failures
+    assert captured["run_id"] not in swept
+    assert Path(str(captured["cwd"])).is_dir()
+    # The published run keeps its workspace on the next sweep too.
+    assert captured["run_id"] not in store.sweep_workspaces()
+    assert Path(str(captured["cwd"])).is_dir()
+
+
+def test_an_abandoned_workspace_is_reclaimed_only_after_the_grace_cutoff(lifecycle):
+    """An unreferenced workspace is young-until-proven-old, then reclaimed."""
+    workspace = load_workspace()
+    store = lifecycle["store"]
+    artifacts = workspace.ArtifactStore(lifecycle["artifact_root"])
+    abandoned = artifacts.mint_workspace("mrun_abandoned")
+
+    # No durable run references it, but it is inside the grace cutoff.
+    assert store.sweep_workspaces() == []
+    assert abandoned.cwd.is_dir()
+
+    aged = time.time() - (workspace.WORKSPACE_SWEEP_GRACE_SECONDS + 60)
+    os.utime(abandoned.cwd, (aged, aged))
+
+    assert store.sweep_workspaces() == ["mrun_abandoned"]
+    assert not abandoned.cwd.exists()
+
+
+def test_an_open_run_keeps_its_workspace_however_old_it_gets(lifecycle):
+    """Age is never a reason to take a workspace a durable open run needs."""
+    store = lifecycle["store"]
+    run = begin_production(lifecycle)
+    aged = time.time() - (load_workspace().WORKSPACE_SWEEP_GRACE_SECONDS + 86_400)
+    os.utime(run["cwd"], (aged, aged))
+
+    assert store.sweep_workspaces() == []
+    assert Path(run["cwd"]).is_dir()
+    assert (Path(run["cwd"]) / "output").is_dir()
+
+
+def test_the_sweep_rechecks_durable_state_immediately_before_deleting(lifecycle):
+    """A run published after the listing keeps its workspace."""
+    workspace = load_workspace()
+    artifacts = workspace.ArtifactStore(lifecycle["artifact_root"])
+    minted = artifacts.mint_workspace("mrun_published_late")
+    aged = time.time() - (workspace.WORKSPACE_SWEEP_GRACE_SECONDS + 60)
+    os.utime(minted.cwd, (aged, aged))
+    answers = {"count": 0}
+
+    def durable_state():
+        answers["count"] += 1
+        if answers["count"] == 1:
+            # The listing snapshot: nothing durable references the workspace.
+            return set(), set()
+        # By the recheck the run has committed as an open run.
+        return {"mrun_published_late"}, {"mrun_published_late"}
+
+    removed = artifacts.sweep_uncollected_workspaces(durable_state=durable_state)
+
+    assert removed == []
+    assert minted.cwd.is_dir()
+    assert answers["count"] >= 2
+
+
+def test_the_sweep_is_bounded_and_reports_only_what_it_removed(lifecycle):
+    """A sweep removes at most its bound, so a huge root cannot stall a start."""
+    workspace = load_workspace()
+    artifacts = workspace.ArtifactStore(lifecycle["artifact_root"])
+    aged = time.time() - (workspace.WORKSPACE_SWEEP_GRACE_SECONDS + 60)
+    for index in range(workspace.MAX_SWEEP_REMOVALS + 3):
+        minted = artifacts.mint_workspace(f"mrun_abandoned_{index:03d}")
+        os.utime(minted.cwd, (aged, aged))
+
+    first = artifacts.sweep_uncollected_workspaces(set())
+    assert len(first) == workspace.MAX_SWEEP_REMOVALS
+    second = artifacts.sweep_uncollected_workspaces(set())
+    assert len(second) == 3
+    assert set(first) & set(second) == set()
+    assert artifacts.sweep_uncollected_workspaces(set()) == []
