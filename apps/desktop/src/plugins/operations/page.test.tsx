@@ -197,6 +197,22 @@ describe('OperationsPage', () => {
     expect(screen.getByRole('button', { name: 'Set the table' })).toBeTruthy()
   })
 
+  it('opens the neutral meeting type chooser directly from the Control Room', async () => {
+    loadConnectedAgents.mockResolvedValue([])
+    loadOperationsSnapshot.mockResolvedValue(snapshot)
+    loadOperationsRoutines.mockResolvedValue(routines)
+
+    render(<OperationsPage />)
+    await screen.findByText('Release Bot')
+    fireEvent.click(screen.getByRole('button', { name: 'Make a Meeting' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Make a Meeting' })
+
+    expect(dialog.querySelector('[aria-pressed="true"]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Production' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Conclusion' })).toBeTruthy()
+  })
+
   it('keeps the last verified snapshot visible when a later refresh fails', async () => {
     loadConnectedAgents.mockResolvedValue([])
     loadOperationsSnapshot.mockResolvedValueOnce(snapshot).mockRejectedValueOnce(new Error('refresh failed'))

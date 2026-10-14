@@ -38,6 +38,7 @@ export function OperationsPage({
   const [a2aError, setA2aError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [section, setSection] = useState<OperationsSection>('control-room')
+  const [meetingCreateRequested, setMeetingCreateRequested] = useState(false)
   const refreshGeneration = useRef(0)
   const foregroundGeneration = useRef(0)
 
@@ -157,6 +158,10 @@ export function OperationsPage({
               a2aError={a2aError}
               onboardingOpen={onboardingOpen}
               onChanged={() => void refresh(true)}
+              onMakeMeeting={() => {
+                setMeetingCreateRequested(true)
+                setSection('meetings')
+              }}
               onOnboardingOpenChange={onOnboardingOpenChange}
               onOpenAgent={agent => {
                 void openAgentWorkspace(host, agent).catch(cause => host.notifyError(cause, `Could not open ${agent.displayName}`))
@@ -184,7 +189,13 @@ export function OperationsPage({
                 .map(agent => ({ id: agent.profile, label: agent.displayName }))}
             />
           )}
-          {section === 'meetings' && <MeetingsView snapshot={stableSnapshot} />}
+          {section === 'meetings' && (
+            <MeetingsView
+              createRequested={meetingCreateRequested}
+              onCreateRequestHandled={() => setMeetingCreateRequested(false)}
+              snapshot={stableSnapshot}
+            />
+          )}
           {section === 'workspace' && <WorkspaceView agents={stableSnapshot.agents} />}
           {section === 'forge' && <ForgeView />}
         </section>

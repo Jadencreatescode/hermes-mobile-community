@@ -546,6 +546,7 @@ export function ControlRoomView({
   onOnboardingOpenChange,
   onOpenAgent,
   onOpenSection,
+  onMakeMeeting,
   onShowDetails,
   snapshot
 }: {
@@ -556,6 +557,7 @@ export function ControlRoomView({
   onOnboardingOpenChange?: (open: boolean) => void
   onOpenAgent?: (agent: OperationsAgentModel) => void
   onOpenSection?: (section: Exclude<OperationsSection, 'overview' | 'control-room'>) => void
+  onMakeMeeting?: () => void
   onShowDetails?: () => void
   snapshot: OperationsSnapshot
 }) {
@@ -636,6 +638,7 @@ export function ControlRoomView({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button aria-label="Make a Bot" className="min-h-11" onClick={() => setMakeBotOpen(true)} size="sm"><Codicon name="add" /> Make a Bot</Button>
+            {onMakeMeeting ? <Button aria-label="Make a Meeting" className="min-h-11" onClick={onMakeMeeting} size="sm"><Codicon name="organization" /> Make a Meeting</Button> : null}
             <Button aria-label="Connect a Bot" className="min-h-11" onClick={() => setOnboardingOpen(true)} size="sm"><Codicon name="plug" /> Connect a Bot</Button>
             {onShowDetails ? <Button aria-label="View detailed Operations" className="min-h-11" onClick={onShowDetails} size="sm" variant="outline"><Codicon name="list-tree" /> Details</Button> : null}
           </div>

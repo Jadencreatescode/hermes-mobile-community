@@ -623,7 +623,7 @@ describe('Meetings graphical room integration', () => {
     await screen.findByRole('region', { name: 'Bot meeting room' })
     fireEvent.click(screen.getByRole('button', { name: 'New meeting' }))
 
-    const setup = screen.getByRole('dialog', { name: 'Set the meeting table' })
+    const setup = screen.getByRole('dialog', { name: 'Make a Meeting' })
     const options = within(setup).getAllByRole('checkbox')
 
     expect(options.map(option => option.parentElement?.textContent)).toEqual([
@@ -685,7 +685,7 @@ describe('Meetings graphical room integration', () => {
 
     expect(screen.queryByText('Agenda and decision required')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'New meeting' }))
-    expect(screen.getByRole('dialog', { name: 'Set the meeting table' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'Make a Meeting' })).toBeTruthy()
     expect(screen.getByPlaceholderText('Agenda and decision required')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel setup' }))
 
@@ -911,7 +911,8 @@ describe('PB4 – seat/role assignment controls (C3)', () => {
     await screen.findByText('The council chamber is empty')
 
     fireEvent.click(screen.getByRole('button', { name: 'New meeting' }))
-    expect(screen.getByRole('dialog', { name: 'Set the meeting table' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'Make a Meeting' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Production' }))
 
     // Check Chair Bot — role selector should appear
     const allCheckboxes = screen.getAllByRole('checkbox')
@@ -934,6 +935,7 @@ describe('PB4 – seat/role assignment controls (C3)', () => {
     await screen.findByText('The council chamber is empty')
 
     fireEvent.click(screen.getByRole('button', { name: 'New meeting' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Production' }))
     const allCheckboxes = screen.getAllByRole('checkbox')
     fireEvent.click(allCheckboxes[0]) // check Chair Bot
 
@@ -960,6 +962,7 @@ describe('PB4 – seat/role assignment controls (C3)', () => {
     await screen.findByText('The council chamber is empty')
 
     fireEvent.click(screen.getByRole('button', { name: 'New meeting' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Production' }))
     const allCheckboxes = screen.getAllByRole('checkbox')
     fireEvent.click(allCheckboxes[0]) // check
     await waitFor(() => expect(screen.getByRole('combobox', { name: /Role for Chair Bot/i })).toBeTruthy())
@@ -1052,9 +1055,40 @@ describe('production brief collection at creation', () => {
     render(<MeetingsView snapshot={snapshot} />)
     await screen.findByText('The council chamber is empty')
     fireEvent.click(screen.getByRole('button', { name: 'New meeting' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Production' }))
 
     return rest
   }
+
+  it('opens a neutral Production or Conclusion choice when requested from the Control Room', async () => {
+    const onCreateRequestHandled = vi.fn()
+
+    const rest = vi.fn(async (path: string) => {
+      if (path.startsWith('/meetings?')) { return { meetings: [] } }
+      throw new Error(`Unexpected REST call: ${path}`)
+    })
+
+    unbind = bindOperationsApi(rest as never)
+    render(
+      <MeetingsView
+        createRequested
+        onCreateRequestHandled={onCreateRequestHandled}
+        snapshot={snapshot}
+      />
+    )
+
+    const dialog = await screen.findByRole('dialog', { name: 'Make a Meeting' })
+    const production = within(dialog).getByRole('button', { name: 'Production' })
+    const conclusion = within(dialog).getByRole('button', { name: 'Conclusion' })
+
+    expect(production.getAttribute('aria-pressed')).toBe('false')
+    expect(conclusion.getAttribute('aria-pressed')).toBe('false')
+    expect(onCreateRequestHandled).toHaveBeenCalledOnce()
+
+    fireEvent.click(production)
+    expect(production.getAttribute('aria-pressed')).toBe('true')
+    expect(conclusion.getAttribute('aria-pressed')).toBe('false')
+  })
 
   it('hides the production brief until three participants are chosen', async () => {
     await openCreateDialog()

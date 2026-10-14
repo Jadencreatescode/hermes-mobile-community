@@ -52,11 +52,16 @@ function participantDisplayName(
 // participants, and at least one reviewer must differ from the orchestrator
 // and the producer.
 const SEAT_ROLE_OPTIONS = ['contributor', 'thinker', 'specialist', 'reviewer'] as const
+type MeetingKind = 'conclusion' | 'production'
 
 export function MeetingsView({
+  createRequested = false,
+  onCreateRequestHandled,
   onOpenAgent,
   snapshot
 }: {
+  createRequested?: boolean
+  onCreateRequestHandled?: () => void
   onOpenAgent?: (agent: OperationsAgentModel) => void
   snapshot: OperationsSnapshot
 }) {
@@ -80,6 +85,7 @@ export function MeetingsView({
   const [dissent, setDissent] = useState('')
   const [actionTitle, setActionTitle] = useState('')
   const [creating, setCreating] = useState(false)
+  const [meetingKind, setMeetingKind] = useState<MeetingKind | null>('conclusion')
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [conversationsOpen, setConversationsOpen] = useState(false)
   const [conversationParticipant, setConversationParticipant] = useState<MeetingRecord['participants'][number] | null>(null)
@@ -118,6 +124,14 @@ export function MeetingsView({
   const [outputDetail, setOutputDetail] = useState<MeetingOutputDetail | null>(null)
   const [producing, setProducing] = useState(false)
   const [produceNotice, setProduceNotice] = useState('')
+
+  useEffect(() => {
+    if (!createRequested) {return}
+    setError('')
+    setMeetingKind(null)
+    setCreating(true)
+    onCreateRequestHandled?.()
+  }, [createRequested, onCreateRequestHandled])
 
   const selected = meetings.find(item => item.meeting.id === selectedId) ?? null
   const durableRoundInProgress = Boolean(selected && isMeetingRoundRunFresh(selected.meeting))
@@ -248,13 +262,17 @@ export function MeetingsView({
       return
     }
 
-    // The production bundle is all-or-none. Either every production field is
-    // supplied (a production meeting) or none is (a conclusion meeting).
+    if (!meetingKind) {
+      setError('Choose Production or Conclusion for this meeting.')
+
+      return
+    }
+
+    // The operator chooses the meeting contract explicitly. Production fields
+    // are required only for Production and ignored for Conclusion.
     const hasOrchestrator = Boolean(orchestratorKey)
     const hasProducer = Boolean(producerKey)
-
-    const wantsProduction = hasOrchestrator || hasProducer
-      || Boolean(productKind || outputTitle.trim() || acceptanceStatement.trim())
+    const wantsProduction = meetingKind === 'production'
 
     if (wantsProduction) {
       if (!hasOrchestrator || !hasProducer) {
@@ -355,6 +373,7 @@ export function MeetingsView({
       setSelectedParticipants([])
       setSeatRoles({})
       setSeatLabels({})
+      setMeetingKind('conclusion')
       setOrchestratorKey('')
       setProducerKey('')
       setProductKind('')
@@ -626,7 +645,7 @@ export function MeetingsView({
               <span className="sr-only">Meeting details</span>
             </Button>
           ) : null}
-          <Button aria-label="New meeting" className="min-h-11 min-w-11 rounded-full bg-cyan-300 px-0 text-slate-950 hover:bg-cyan-200" onClick={() => setCreating(true)}>
+          <Button aria-label="New meeting" className="min-h-11 min-w-11 rounded-full bg-cyan-300 px-0 text-slate-950 hover:bg-cyan-200" onClick={() => {setError(''); setMeetingKind('conclusion'); setCreating(true)}}>
             <Codicon name="add" />
             <span className="sr-only">New meeting</span>
           </Button>
@@ -745,7 +764,7 @@ export function MeetingsView({
           <div>
             <Codicon className="text-5xl text-cyan-200/70" name="organization" />
             <p className="mt-3 text-sm font-medium text-(--ui-text-primary)">The council chamber is empty</p>
-            <Button className="mt-4 min-h-11 rounded-full" onClick={() => setCreating(true)}><Codicon name="add" /> Set the table</Button>
+            <Button className="mt-4 min-h-11 rounded-full" onClick={() => {setError(''); setMeetingKind('conclusion'); setCreating(true)}}><Codicon name="add" /> Set the table</Button>
           </div>
         </div>
       )}
@@ -843,13 +862,49 @@ export function MeetingsView({
       </Dialog>
 
       {/* ── Create-meeting dialog ── */}
-      <Dialog onOpenChange={setCreating} open={creating}>
+      <Dialog onOpenChange={(open: boolean) => {
+        setCreating(open)
+
+        if (open) {setError('')}
+      }} open={creating}>
         <DialogContent className="max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-xl overflow-y-auto sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100vw-2rem)]">
           <DialogHeader>
-            <DialogTitle>Set the meeting table</DialogTitle>
-            <p className="text-sm text-(--ui-text-secondary)">Choose two to six Bots. The first selected Bot chairs the meeting.</p>
+            <DialogTitle>Make a Meeting</DialogTitle>
+            <p className="text-sm text-(--ui-text-secondary)">Choose whether the Bots should create a concrete output or reach a conclusion.</p>
           </DialogHeader>
           <div className="space-y-3">
+            <fieldset aria-label="Meeting type" className="grid gap-2 sm:grid-cols-2">
+              <legend className="mb-2 text-xs font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">Meeting type</legend>
+              <Button
+                aria-describedby="meeting-type-production-description"
+                aria-labelledby="meeting-type-production-label"
+                aria-pressed={meetingKind === 'production'}
+                className="h-auto min-h-20 flex-col items-start gap-1 whitespace-normal px-3 py-3 text-left"
+                onClick={() => {setError(''); setMeetingKind('production')}}
+                variant={meetingKind === 'production' ? 'secondary' : 'outline'}
+              >
+                <span className="font-semibold" id="meeting-type-production-label">Production</span>
+                <span className="text-xs font-normal text-(--ui-text-secondary)" id="meeting-type-production-description">Create code, an app, a document, or another reviewable output.</span>
+              </Button>
+              <Button
+                aria-describedby="meeting-type-conclusion-description"
+                aria-labelledby="meeting-type-conclusion-label"
+                aria-pressed={meetingKind === 'conclusion'}
+                className="h-auto min-h-20 flex-col items-start gap-1 whitespace-normal px-3 py-3 text-left"
+                onClick={() => {
+                  setError('')
+                  setMeetingKind('conclusion')
+                  setOrchestratorKey('')
+                  setProducerKey('')
+                  setSeatRoles({})
+                  setSeatLabels({})
+                }}
+                variant={meetingKind === 'conclusion' ? 'secondary' : 'outline'}
+              >
+                <span className="font-semibold" id="meeting-type-conclusion-label">Conclusion</span>
+                <span className="text-xs font-normal text-(--ui-text-secondary)" id="meeting-type-conclusion-description">Discuss the question, reach a conclusion, and record decisions or actions.</span>
+              </Button>
+            </fieldset>
             <Input aria-label="Meeting title" className="min-h-11" onChange={event => setTitle(event.currentTarget.value)} placeholder="Meeting title" value={title} />
             <textarea aria-label="Meeting agenda" className="min-h-28 w-full resize-y rounded-lg border border-(--ui-stroke-tertiary) bg-transparent p-3 text-sm" onChange={event => setAgenda(event.currentTarget.value)} placeholder="Agenda and decision required" value={agenda} />
 
@@ -889,7 +944,7 @@ export function MeetingsView({
                         <span>{option.label}</span>
                       </label>
                       {/* C3: role/label controls shown only when participant is selected */}
-                      {checked ? (
+                      {checked && meetingKind === 'production' ? (
                         <div aria-label={`Seat settings for ${option.label}`} className="flex gap-2 pl-7">
                           <select
                             aria-label={`Role for ${option.label}`}
@@ -924,14 +979,12 @@ export function MeetingsView({
               </div>
             </fieldset>
 
-            {/* The production bundle. Leave it blank for an ordinary
-                conclusion meeting; fill it in completely for a production
-                meeting. There is no stage, hash, or approver input: the
-                server owns all of those. */}
-            {selectedParticipants.length >= 3 ? (
+            {/* Production has a complete server-validated bundle. Conclusion
+                never sends production roles or artifact requirements. */}
+            {meetingKind === 'production' && selectedParticipants.length >= 3 ? (
               <fieldset aria-label="Production roles">
                 <legend className="mb-2 text-xs font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">
-                  Production brief <span className="font-normal normal-case text-(--ui-text-tertiary)">(all fields, or none for a discussion meeting)</span>
+                  Production brief
                 </legend>
                 <div className="space-y-2 rounded-xl border border-(--ui-stroke-tertiary) p-3">
                   <div className="flex items-center gap-2">
@@ -1004,8 +1057,12 @@ export function MeetingsView({
               </fieldset>
             ) : null}
 
+            {meetingKind === 'production' && selectedParticipants.length < 3 ? (
+              <p className="rounded-xl border border-(--ui-stroke-tertiary) p-3 text-xs text-(--ui-text-secondary)">Choose at least three Bot seats to assign an orchestrator, producer, and reviewer.</p>
+            ) : null}
+
             <div className="flex justify-end gap-2">
-              <Button aria-label="Cancel setup" className="min-h-11" onClick={() => setCreating(false)} variant="ghost">Cancel</Button>
+              <Button aria-label="Cancel setup" className="min-h-11" onClick={() => {setCreating(false); setError('')}} variant="ghost">Cancel</Button>
               <Button className="min-h-11" disabled={busy} onClick={() => void create()}><Codicon name="organization" /> Create room</Button>
             </div>
           </div>
