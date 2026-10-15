@@ -11,6 +11,7 @@ shows a real midstream turn instead of sitting silent until persistence.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -368,6 +369,12 @@ def test_session_create_consumes_workspace_through_a_pinned_descriptor(
     capability = session["cwd"]
     assert os.stat(capability).st_ino == run_stat.st_ino
 
+    from tools.terminal_tool import resolve_task_overrides
+
+    session_key = session["session_key"]
+    overrides = resolve_task_overrides(session_key)
+    assert overrides["file_scope_root"] == capability
+
     moved = tmp_path / "moved"
     run.rename(moved)
     (run / "output").mkdir(parents=True)
@@ -375,6 +382,103 @@ def test_session_create_consumes_workspace_through_a_pinned_descriptor(
     assert os.stat(capability).st_ino != run.stat().st_ino
 
     server._close_session_by_id(sid)
+    assert resolve_task_overrides(session_key) == {}
+
+
+def test_session_create_fails_closed_when_file_scope_registration_fails(
+    server, monkeypatch, tmp_path
+):
+    run = tmp_path / "run"
+    output = run / "output"
+    output.mkdir(parents=True)
+    run_stat = run.stat()
+    output_stat = output.stat()
+    monkeypatch.setattr(server, "_register_session_cwd", lambda *_: False)
+    monkeypatch.setattr(server, "_schedule_agent_build", lambda *_: None)
+    monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda: None)
+
+    created = server._methods["session.create"](
+        "rid-create",
+        {
+            "cwd": str(run),
+            "cwd_identity": {
+                "device": str(run_stat.st_dev),
+                "inode": str(run_stat.st_ino),
+                "output_device": str(output_stat.st_dev),
+                "output_inode": str(output_stat.st_ino),
+            },
+            "source": "desktop",
+        },
+    )
+
+    assert created["error"]["code"] == 4034
+    assert "filesystem scope" in created["error"]["message"]
+    assert not server._sessions
+    matching_fds = []
+    for entry in Path("/proc/self/fd").iterdir():
+        try:
+            if entry.stat().st_ino == run_stat.st_ino:
+                matching_fds.append(entry)
+        except OSError:
+            continue
+    assert matching_fds == []
+
+
+def test_old_teardown_cannot_clear_replacement_session_scope(
+    server, monkeypatch, tmp_path
+):
+    from tools.terminal_tool import clear_task_env_overrides, resolve_task_overrides
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    first_fd = os.open(first, os.O_RDONLY | os.O_DIRECTORY)
+    second_fd = os.open(second, os.O_RDONLY | os.O_DIRECTORY)
+    first_capability = f"/proc/{os.getpid()}/fd/{first_fd}"
+    second_capability = f"/proc/{os.getpid()}/fd/{second_fd}"
+    old = {
+        "_cwd_fd": first_fd,
+        "cwd": first_capability,
+        "session_key": "shared-session-key",
+    }
+    replacement = {
+        "_cwd_fd": second_fd,
+        "cwd": second_capability,
+        "session_key": "shared-session-key",
+    }
+    monkeypatch.setattr(server, "_finalize_session", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server, "_announce_session_reclaimed", lambda *_args, **_kwargs: None)
+
+    assert server._register_session_cwd(old) is True
+    assert server._register_session_cwd(replacement) is True
+    server._teardown_session(old)
+
+    assert resolve_task_overrides("shared-session-key")["file_scope_root"] == second_capability
+    assert os.fstat(second_fd).st_ino == second.stat().st_ino
+    clear_task_env_overrides("shared-session-key")
+    os.close(second_fd)
+
+
+def test_pinned_resume_registration_failure_discards_record(
+    server, monkeypatch, tmp_path
+):
+    descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    capability = f"/proc/{os.getpid()}/fd/{descriptor}"
+    record = {
+        "_cwd_fd": descriptor,
+        "active_session_lease": None,
+        "cwd": capability,
+        "session_key": "stored-1",
+    }
+    monkeypatch.setattr(server, "_register_session_cwd", lambda *_: False)
+
+    with pytest.raises(RuntimeError, match="filesystem scope"):
+        server._claim_or_reuse_live("resumed", "stored-1", record, None)
+
+    assert "resumed" not in server._sessions
+    with pytest.raises(OSError):
+        os.fstat(descriptor)
 
 
 def test_active_child_runs_registry_tracks_liveness(server, emits):

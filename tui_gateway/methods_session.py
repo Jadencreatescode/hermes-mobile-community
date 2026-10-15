@@ -115,7 +115,13 @@ def _(rid, params: dict) -> dict:
             "tool_started_at": {},
             "transport": current_transport() or _stdio_transport,
         }, pinned_cwd)
-        _register_session_cwd(_sessions[sid])
+        cwd_registered = _register_session_cwd(_sessions[sid])
+
+    if pinned_cwd and not cwd_registered:
+        with _sessions_lock:
+            refused = _sessions.pop(sid, None)
+        _teardown_session(refused, end_reason="workspace_authority_refused")
+        return _err(rid, 4034, "workspace authority refused: filesystem scope unavailable")
 
     # NOTE: we intentionally do NOT persist a DB row here. Every TUI/desktop
     # launch (and every "New agent" / draft) opens a session here just to paint
@@ -588,7 +594,15 @@ def _(rid, params: dict) -> dict:
                 agent_restrictions=agent_restrictions,
             )
             record = _attach_pinned_cwd(record, pinned_resume_cwd)
-            if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
+            if pinned_resume_cwd:
+                # Ownership transferred to record; claim/reuse closes it on every
+                # losing or refused path.
+                pinned_resume_cwd = None
+            try:
+                live = _claim_or_reuse_live(sid, target, record, lease)
+            except WorkspaceScopeRegistrationError as exc:
+                return _err(rid, 4034, str(exc))
+            if live is not None:
                 if restriction_error := _live_restriction_error(live):
                     return restriction_error
                 return _ok(rid, _reuse_live_payload(*live))
@@ -761,7 +775,13 @@ def _(rid, params: dict) -> dict:
                 agent_restrictions=agent_restrictions,
             )
             record = _attach_pinned_cwd(record, pinned_resume_cwd)
-            if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
+            if pinned_resume_cwd:
+                pinned_resume_cwd = None
+            try:
+                live = _claim_or_reuse_live(sid, target, record, lease)
+            except WorkspaceScopeRegistrationError as exc:
+                return _err(rid, 4034, str(exc))
+            if live is not None:
                 if restriction_error := _live_restriction_error(live):
                     return restriction_error
                 return _ok(rid, _reuse_live_payload(*live))
@@ -917,8 +937,11 @@ def _(rid, params: dict) -> dict:
                         if registered is None:
                             raise RuntimeError("resumed session disappeared before cwd transfer")
                         _attach_pinned_cwd(registered, pinned_resume_cwd)
-                        _register_session_cwd(_sessions[sid])
                         pinned_resume_cwd = None
+                        if not _register_session_cwd(_sessions[sid]):
+                            raise WorkspaceScopeRegistrationError(
+                                "workspace authority refused: filesystem scope unavailable"
+                            )
                     # Ownership TRANSFER — the registered session's agent now
                     # holds this handle for its whole life, and _init_session
                     # never closes a caller-supplied session_db (its
@@ -985,6 +1008,8 @@ def _(rid, params: dict) -> dict:
                 _release_pinned_resume()
                 if lease is not None:
                     lease.release()
+                if isinstance(e, WorkspaceScopeRegistrationError):
+                    return _err(rid, 4034, str(e))
                 return _err(rid, 5000, f"resume failed: {e}")
             session = _sessions.get(sid) or {}
     finally:

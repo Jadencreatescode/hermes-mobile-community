@@ -85,7 +85,7 @@ export function MeetingsView({
   const [dissent, setDissent] = useState('')
   const [actionTitle, setActionTitle] = useState('')
   const [creating, setCreating] = useState(false)
-  const [meetingKind, setMeetingKind] = useState<MeetingKind | null>('conclusion')
+  const [meetingKind, setMeetingKind] = useState<MeetingKind | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [conversationsOpen, setConversationsOpen] = useState(false)
   const [conversationParticipant, setConversationParticipant] = useState<MeetingRecord['participants'][number] | null>(null)
@@ -373,7 +373,7 @@ export function MeetingsView({
       setSelectedParticipants([])
       setSeatRoles({})
       setSeatLabels({})
-      setMeetingKind('conclusion')
+      setMeetingKind(null)
       setOrchestratorKey('')
       setProducerKey('')
       setProductKind('')
@@ -645,7 +645,7 @@ export function MeetingsView({
               <span className="sr-only">Meeting details</span>
             </Button>
           ) : null}
-          <Button aria-label="New meeting" className="min-h-11 min-w-11 rounded-full bg-cyan-300 px-0 text-slate-950 hover:bg-cyan-200" onClick={() => {setError(''); setMeetingKind('conclusion'); setCreating(true)}}>
+          <Button aria-label="New meeting" className="min-h-11 min-w-11 rounded-full bg-cyan-300 px-0 text-slate-950 hover:bg-cyan-200" onClick={() => {setError(''); setMeetingKind(null); setCreating(true)}}>
             <Codicon name="add" />
             <span className="sr-only">New meeting</span>
           </Button>
@@ -764,7 +764,7 @@ export function MeetingsView({
           <div>
             <Codicon className="text-5xl text-cyan-200/70" name="organization" />
             <p className="mt-3 text-sm font-medium text-(--ui-text-primary)">The council chamber is empty</p>
-            <Button className="mt-4 min-h-11 rounded-full" onClick={() => {setError(''); setMeetingKind('conclusion'); setCreating(true)}}><Codicon name="add" /> Set the table</Button>
+            <Button className="mt-4 min-h-11 rounded-full" onClick={() => {setError(''); setMeetingKind(null); setCreating(true)}}><Codicon name="add" /> Set the table</Button>
           </div>
         </div>
       )}

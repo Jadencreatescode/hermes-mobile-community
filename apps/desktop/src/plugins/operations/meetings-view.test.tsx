@@ -1060,6 +1060,25 @@ describe('production brief collection at creation', () => {
     return rest
   }
 
+  it('opens a neutral Production or Conclusion choice from every in-page entry', async () => {
+    const rest = vi.fn(async (path: string) => {
+      if (path.startsWith('/meetings?')) { return { meetings: [] } }
+      throw new Error(`Unexpected REST call: ${path}`)
+    })
+
+    unbind = bindOperationsApi(rest as never)
+    render(<MeetingsView snapshot={snapshot} />)
+    await screen.findByText('The council chamber is empty')
+
+    for (const entry of ['New meeting', 'Set the table']) {
+      fireEvent.click(screen.getByRole('button', { name: entry }))
+      const dialog = screen.getByRole('dialog', { name: 'Make a Meeting' })
+      expect(within(dialog).getByRole('button', { name: 'Production' }).getAttribute('aria-pressed')).toBe('false')
+      expect(within(dialog).getByRole('button', { name: 'Conclusion' }).getAttribute('aria-pressed')).toBe('false')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel setup' }))
+    }
+  })
+
   it('opens a neutral Production or Conclusion choice when requested from the Control Room', async () => {
     const onCreateRequestHandled = vi.fn()
 

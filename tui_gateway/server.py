@@ -954,6 +954,16 @@ def _teardown_session(session: dict | None, *, end_reason: str = "tui_close") ->
     except Exception:
         pass
     try:
+        from tools.terminal_tool import clear_task_env_overrides
+
+        if key := session.get("session_key"):
+            expected = {"cwd": session.get("cwd")}
+            if session.get("_cwd_fd") is not None:
+                expected["file_scope_root"] = session.get("cwd")
+            clear_task_env_overrides(key, expected=expected)
+    except Exception:
+        pass
+    try:
         cwd_fd = session.pop("_cwd_fd", None)
         if cwd_fd is not None:
             os.close(int(cwd_fd))
@@ -2978,18 +2988,24 @@ def _session_source(session: dict | None) -> str:
     return _resolve_session_platform()
 
 
-def _register_session_cwd(session: dict | None) -> None:
+def _register_session_cwd(session: dict | None) -> bool:
     if not session:
-        return
+        return False
     try:
         from tools.terminal_tool import register_task_env_overrides
 
         cwd, cwd_source = _terminal_task_cwd_with_source(session)
-        register_task_env_overrides(
-            session["session_key"], {"cwd": cwd, "cwd_source": cwd_source}
-        )
+        overrides = {"cwd": cwd, "cwd_source": cwd_source}
+        if session.get("_cwd_fd") is not None:
+            # A cwd_identity-backed internal session is a filesystem capability,
+            # not merely a preferred working directory. File tools consume this
+            # root to reject absolute paths, parent traversal, and symlink escapes.
+            overrides["file_scope_root"] = cwd
+        register_task_env_overrides(session["session_key"], overrides)
+        return True
     except Exception:
-        pass
+        logger.exception("failed to register session working-directory authority")
+        return False
 
 
 def _ensure_session_db_row(session: dict) -> None:
@@ -8850,12 +8866,17 @@ def _dispose_unregistered_session(record: dict | None, lease=None) -> None:
         owned_lease.release()
 
 
+class WorkspaceScopeRegistrationError(RuntimeError):
+    """A pinned workspace could not install its file-tool authority."""
+
+
 def _claim_or_reuse_live(
     sid: str, session_key: str, record: dict, lease
 ) -> tuple[str, dict] | None:
     """Register ``record`` as the live session for ``session_key`` under the
     resume lock, or — if a concurrent resume already won — release ``lease`` and
     return the winner for the caller to reuse."""
+    refused = None
     with _session_resume_lock:
         live = _find_live_session_by_key(session_key)
         if live is not None:
@@ -8863,7 +8884,14 @@ def _claim_or_reuse_live(
             return live
         with _sessions_lock:
             _sessions[sid] = record
-            _register_session_cwd(_sessions[sid])
+            registered = _register_session_cwd(_sessions[sid])
+            if record.get("_cwd_fd") is not None and not registered:
+                refused = _sessions.pop(sid, None)
+    if refused is not None:
+        _dispose_unregistered_session(refused, lease)
+        raise WorkspaceScopeRegistrationError(
+            "workspace authority refused: filesystem scope unavailable"
+        )
     return None
 
 
@@ -11028,7 +11056,11 @@ def _run_prompt_submit(
                 history = list(session["history"])
                 history_version = int(session.get("history_version", 0))
             cwd = _session_cwd(session)
-            _register_session_cwd(session)
+            cwd_registered = _register_session_cwd(session)
+            if session.get("_cwd_fd") is not None and not cwd_registered:
+                raise WorkspaceScopeRegistrationError(
+                    "workspace authority refused: filesystem scope unavailable"
+                )
             cols = session.get("cols", 80)
             streamer = make_stream_renderer(cols)
             prompt = text
