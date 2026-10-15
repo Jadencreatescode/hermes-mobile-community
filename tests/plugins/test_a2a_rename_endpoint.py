@@ -49,6 +49,7 @@ def api_module(tmp_path, monkeypatch):
 @pytest.fixture
 def app(api_module):
     application = FastAPI()
+    application.state.auth_required = False
     application.include_router(api_module.router)
     return application
 

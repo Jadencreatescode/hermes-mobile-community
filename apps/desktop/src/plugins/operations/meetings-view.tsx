@@ -2,6 +2,21 @@ import { Button, Codicon, Dialog, DialogContent, DialogHeader, DialogTitle, host
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { OperationsAgentModel, OperationsSnapshot } from './data'
+import {
+  freezeProductionBrief,
+  getMeetingOutput,
+  listMeetingOutputs,
+  type MeetingOutputDetail,
+  type MeetingOutputSummary,
+  PRODUCT_KINDS
+} from './deliverable-package'
+import { DeliverablePackageOutput } from './deliverable-package-output'
+import {
+  producerDispatchEligibility,
+  runProductionDeliverable,
+  runReviewDispatch,
+  runRevisionDeliverable
+} from './deliverable-package-output-runner'
 import { MeetingRoom } from './meeting-room'
 import {
   convertMeetingActions,
@@ -9,6 +24,7 @@ import {
   getMeetingParticipantConversation,
   injectMeetingParticipantPrompt,
   isMeetingRoundRunFresh,
+  isProductionMeeting,
   listMeetings,
   type MeetingConversationSnapshot,
   type MeetingRecord,
@@ -32,28 +48,20 @@ function participantDisplayName(
   )?.displayName ?? participant.profile
 }
 
-// C1: true when a meeting has both orchestrator and producer set.
-function isProductionMeeting(meeting: MeetingRecord): boolean {
-  return Boolean(meeting.orchestrator && meeting.producer)
-}
-
-// Role options for seat assignment (C3).
+// Seat roles a production meeting may assign. Seats are a bijection onto the
+// participants, and at least one reviewer must differ from the orchestrator
+// and the producer.
 const SEAT_ROLE_OPTIONS = ['contributor', 'thinker', 'specialist', 'reviewer'] as const
+type MeetingKind = 'conclusion' | 'production'
 
-// Empty artifact binding form state.
-const emptyArtifact = () => ({
-  outputId: '',
-  artifactVersion: '',
-  gameSha256: '',
-  manifestSha256: '',
-  zipSha256: '',
-  approvedBy: '',
-  approvedAt: ''
-})
 export function MeetingsView({
+  createRequested = false,
+  onCreateRequestHandled,
   onOpenAgent,
   snapshot
 }: {
+  createRequested?: boolean
+  onCreateRequestHandled?: () => void
   onOpenAgent?: (agent: OperationsAgentModel) => void
   snapshot: OperationsSnapshot
 }) {
@@ -77,6 +85,7 @@ export function MeetingsView({
   const [dissent, setDissent] = useState('')
   const [actionTitle, setActionTitle] = useState('')
   const [creating, setCreating] = useState(false)
+  const [meetingKind, setMeetingKind] = useState<MeetingKind | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [conversationsOpen, setConversationsOpen] = useState(false)
   const [conversationParticipant, setConversationParticipant] = useState<MeetingRecord['participants'][number] | null>(null)
@@ -87,10 +96,12 @@ export function MeetingsView({
   const [conversationSending, setConversationSending] = useState(false)
   const [conversationSendError, setConversationSendError] = useState('')
   const conversationGeneration = useRef(0)
+
   const [activeParticipant, setActiveParticipant] = useState<{
     meetingId: string
     participant: MeetingRecord['participants'][number]
   } | null>(null)
+
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -102,20 +113,58 @@ export function MeetingsView({
   const [orchestratorKey, setOrchestratorKey] = useState('')
   const [producerKey, setProducerKey] = useState('')
 
-  // C5: artifact-binding form fields for the conclude section (production meetings only).
-  const [artifactForm, setArtifactForm] = useState(emptyArtifact)
+  // Production brief fields collected at creation. There is deliberately no
+  // hash, approver, stage, or binding input anywhere in this view: all four
+  // are server owned.
+  const [productKind, setProductKind] = useState<string>('')
+  const [outputTitle, setOutputTitle] = useState('')
+  const [acceptanceStatement, setAcceptanceStatement] = useState('')
+  const [brief, setBrief] = useState('')
+  const [outputs, setOutputs] = useState<MeetingOutputSummary[]>([])
+  const [outputDetail, setOutputDetail] = useState<MeetingOutputDetail | null>(null)
+  const [producing, setProducing] = useState(false)
+  const [produceNotice, setProduceNotice] = useState('')
+
+  useEffect(() => {
+    if (!createRequested) {return}
+    setError('')
+    setMeetingKind(null)
+    setCreating(true)
+    onCreateRequestHandled?.()
+  }, [createRequested, onCreateRequestHandled])
 
   const selected = meetings.find(item => item.meeting.id === selectedId) ?? null
   const durableRoundInProgress = Boolean(selected && isMeetingRoundRunFresh(selected.meeting))
+
   const localActiveParticipant = activeParticipant && activeParticipant.meetingId === selected?.meeting.id
     ? activeParticipant.participant
     : null
+
   const thinkingParticipant = localActiveParticipant
     ?? (durableRoundInProgress ? selected?.meeting.roundRun?.participant ?? null : null)
+
   const roundInProgress = Boolean(localActiveParticipant || durableRoundInProgress)
+
+  // Produce is offered from the STAGE, not from the output list: the first run
+  // is exactly the case where no output exists yet. An in-flight run keeps the
+  // control mounted so a reload can resume it instead of starting a second one.
+  const productionStage = selected && isProductionMeeting(selected.meeting)
+    ? selected.meeting.productionStage ?? ''
+    : ''
+
+  const produceOffered = productionStage === 'production_ready'
+    || outputs.some(detail => detail.eligibility.produce)
+
   const connectionModes = useMemo(() => Object.fromEntries(
     snapshot.sources.map(source => [source.id, source.kind === 'local' ? 'local' : 'remote'])
   ) as Record<string, 'local' | 'remote'>, [snapshot.sources])
+
+  const producerEligibility = useMemo(
+    () => selected && isProductionMeeting(selected.meeting)
+      ? producerDispatchEligibility(selected.meeting, connectionModes, snapshot.agents)
+      : { eligible: false, reason: '' },
+    [connectionModes, selected, snapshot.agents]
+  )
 
   const refresh = useCallback(async () => {
     try {
@@ -130,12 +179,50 @@ export function MeetingsView({
 
   useEffect(() => void refresh(), [refresh])
 
+  // Output lifecycle state is server truth refreshed through the existing
+  // Operations REST path; it is never a second source of truth in the view.
+  const refreshOutputs = useCallback(async (meetingId: string) => {
+    if (!meetingId) {
+      setOutputs([])
+      setOutputDetail(null)
+
+      return
+    }
+
+    try {
+      const listed = await listMeetingOutputs(meetingId)
+
+      setOutputs(listed)
+      // The list route answers with a SUMMARY: the output row plus the
+      // server's eligibility flags, and nothing else. The panel renders
+      // versions, reviews, and lineage, so the selected output's full detail
+      // is fetched explicitly rather than assumed to be in the list.
+      setOutputDetail(listed.length ? await getMeetingOutput(listed[0].output.outputId) : null)
+    } catch {
+      // A missing or unreadable output list must not blank the room.
+      setOutputs([])
+      setOutputDetail(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!selected || !isProductionMeeting(selected.meeting)) {
+      setOutputs([])
+      setOutputDetail(null)
+
+      return
+    }
+
+    void refreshOutputs(selected.meeting.id)
+  }, [refreshOutputs, selected])
+
   useEffect(() => {
     if (!selected || !conversationParticipant) {return}
 
     const generation = ++conversationGeneration.current
     setConversationSnapshot(null)
     setConversationError('')
+
     const load = () => {
       setConversationLoading(true)
       void getMeetingParticipantConversation(
@@ -175,16 +262,62 @@ export function MeetingsView({
       return
     }
 
-    // C1 validation: orchestrator and producer must be both set or both absent, and distinct.
-    const hasOrchestrator = Boolean(orchestratorKey)
-    const hasProducer = Boolean(producerKey)
-    if (hasOrchestrator !== hasProducer) {
-      setError('Orchestrator and producer must both be set together.')
+    if (!meetingKind) {
+      setError('Choose Production or Conclusion for this meeting.')
+
       return
     }
-    if (hasOrchestrator && hasProducer && orchestratorKey === producerKey) {
-      setError('Orchestrator and producer must be different participants.')
-      return
+
+    // The operator chooses the meeting contract explicitly. Production fields
+    // are required only for Production and ignored for Conclusion.
+    const hasOrchestrator = Boolean(orchestratorKey)
+    const hasProducer = Boolean(producerKey)
+    const wantsProduction = meetingKind === 'production'
+
+    if (wantsProduction) {
+      if (!hasOrchestrator || !hasProducer) {
+        setError('A production meeting needs both an orchestrator and a producer.')
+
+        return
+      }
+
+      if (orchestratorKey === producerKey) {
+        setError('Orchestrator and producer must be different participants.')
+
+        return
+      }
+
+      if (routes.length < 3) {
+        setError('A production meeting needs at least three participants.')
+
+        return
+      }
+
+      if (!productKind || !outputTitle.trim() || !acceptanceStatement.trim()) {
+        setError('A production meeting needs a product kind, an output title, and an acceptance statement.')
+
+        return
+      }
+
+      const seated = routes.filter(route => seatRoles[routeKey(route)])
+
+      if (seated.length !== routes.length) {
+        setError('Give every participant exactly one seat role.')
+
+        return
+      }
+
+      const reviewers = routes.filter(route =>
+        seatRoles[routeKey(route)] === 'reviewer'
+        && routeKey(route) !== orchestratorKey
+        && routeKey(route) !== producerKey
+      )
+
+      if (!reviewers.length) {
+        setError('A production meeting needs a reviewer seat that is neither the orchestrator nor the producer.')
+
+        return
+      }
     }
 
     setBusy(true)
@@ -193,6 +326,7 @@ export function MeetingsView({
       const orchestratorRoute = hasOrchestrator
         ? routes.find(r => routeKey(r) === orchestratorKey)
         : undefined
+
       const producerRoute = hasProducer
         ? routes.find(r => routeKey(r) === producerKey)
         : undefined
@@ -202,6 +336,7 @@ export function MeetingsView({
         .filter(r => seatRoles[routeKey(r)])
         .map(r => {
           const key = routeKey(r)
+
           return {
             bot: r,
             role: seatRoles[key],
@@ -217,8 +352,16 @@ export function MeetingsView({
         participants: routes,
         source: routes[0],
         title: title.trim(),
-        ...(orchestratorRoute && producerRoute ? { orchestrator: orchestratorRoute, producer: producerRoute } : {}),
-        ...(seats.length ? { seats } : {})
+        ...(wantsProduction && orchestratorRoute && producerRoute
+          ? {
+              acceptanceStatement: acceptanceStatement.trim(),
+              orchestrator: orchestratorRoute,
+              outputTitle: outputTitle.trim(),
+              producer: producerRoute,
+              productKind,
+              seats
+            }
+          : {})
       })
 
       const saved = await putMeeting(draft, 0)
@@ -230,8 +373,12 @@ export function MeetingsView({
       setSelectedParticipants([])
       setSeatRoles({})
       setSeatLabels({})
+      setMeetingKind(null)
       setOrchestratorKey('')
       setProducerKey('')
+      setProductKind('')
+      setOutputTitle('')
+      setAcceptanceStatement('')
       setCreating(false)
       setError('')
     } catch (cause) {
@@ -256,28 +403,13 @@ export function MeetingsView({
           actionItems: actionTitle.trim() ? [{ id: `action-${Date.now().toString(36)}`, ownerRoute: selected.meeting.participants[0], title: actionTitle.trim(), acceptanceCriteria: 'Verify the completed result.', priority: 'normal', dueIntent: 'Next operations checkpoint' }] : []
         }
 
-        // C4/C5: production meetings require an artifact binding to conclude.
+        // A production meeting never concludes here. It completes only through
+        // the exact owner approval transaction in the output panel.
         if (isProductionMeeting(selected.meeting)) {
-          const version = parseInt(artifactForm.artifactVersion, 10)
-          const approvedAt = parseFloat(artifactForm.approvedAt)
-          if (!artifactForm.outputId.trim() || isNaN(version) || version < 1 ||
-              !/^[0-9a-f]{64}$/.test(artifactForm.gameSha256) ||
-              !/^[0-9a-f]{64}$/.test(artifactForm.manifestSha256) ||
-              !/^[0-9a-f]{64}$/.test(artifactForm.zipSha256) ||
-              !artifactForm.approvedBy.trim() || isNaN(approvedAt) || approvedAt < 0) {
-            setError('Fill in all artifact-binding fields correctly before concluding a production meeting.')
-            setBusy(false)
-            return
-          }
-          payload.artifactBinding = {
-            outputId: artifactForm.outputId.trim(),
-            artifactVersion: version,
-            gameSha256: artifactForm.gameSha256,
-            manifestSha256: artifactForm.manifestSha256,
-            zipSha256: artifactForm.zipSha256,
-            approvedBy: artifactForm.approvedBy.trim(),
-            approvedAt
-          }
+          setError('A production meeting completes through artifact approval, not the conclude form.')
+          setBusy(false)
+
+          return
         }
       }
 
@@ -288,13 +420,126 @@ export function MeetingsView({
 
       if (kind === 'conclude') {
         setDetailsOpen(false)
-        setArtifactForm(emptyArtifact)
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(false)
     }
+  }
+
+  const freezeBrief = async () => {
+    if (!selected || !isProductionMeeting(selected.meeting)) {return}
+
+    const text = brief.trim()
+
+    if (!text) {
+      setError('Write the production brief the producer will work from.')
+
+      return
+    }
+
+    setBusy(true)
+
+    try {
+      await freezeProductionBrief({
+        brief: text,
+        evidenceRefs: selected.meeting.evidenceRefs.slice(0, 32),
+        expectedVersion: selected.version,
+        meetingId: selected.meeting.id,
+        idempotencyKey: `brief-${selected.meeting.id}-${selected.version}`
+      })
+      setBrief('')
+      setError('')
+      await refresh()
+      await refreshOutputs(selected.meeting.id)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // The production run. Everything load-bearing is server-owned: the
+  // workspace, the collection claim, and the stage. The renderer only
+  // dispatches the producer Bot into the workspace the server minted, then
+  // asks for collection.
+  const produce = async () => {
+    if (!selected || !isProductionMeeting(selected.meeting)) {return}
+
+    const eligibility = producerDispatchEligibility(selected.meeting, connectionModes, snapshot.agents)
+
+    if (!eligibility.eligible) {
+      setError(eligibility.reason)
+
+      return
+    }
+
+    const meetingId = selected.meeting.id
+    setProducing(true)
+    setProduceNotice('')
+    setError('')
+
+    try {
+      const result = await runProductionDeliverable({
+        agents: snapshot.agents,
+        connectionModes,
+        host,
+        meeting: selected.meeting,
+        meetingVersion: selected.version,
+        onStage: setProduceNotice,
+        ...(outputs[0] ? { output: outputs[0].output } : {})
+      })
+
+      setProduceNotice(result.message)
+      await refresh()
+      await refreshOutputs(meetingId)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setProducing(false)
+    }
+  }
+
+  const revise = async (detail: MeetingOutputDetail) => {
+    if (!selected || !isProductionMeeting(selected.meeting)) {
+      throw new Error('This meeting has no deliverable to revise.')
+    }
+
+    const eligibility = producerDispatchEligibility(selected.meeting, connectionModes, snapshot.agents)
+
+    if (!eligibility.eligible) {
+      throw new Error(eligibility.reason)
+    }
+
+    const result = await runRevisionDeliverable({
+      agents: snapshot.agents,
+      connectionModes,
+      findings: detail.output.findings,
+      host,
+      meeting: selected.meeting,
+      meetingVersion: selected.version,
+      outputId: detail.output.outputId
+    })
+
+    return result.message
+  }
+
+  const review = async (detail: MeetingOutputDetail) => {
+    if (!selected || !isProductionMeeting(selected.meeting)) {
+      throw new Error('This meeting has no deliverable to review.')
+    }
+
+    const result = await runReviewDispatch({
+      agents: snapshot.agents,
+      connectionModes,
+      detail,
+      host,
+      meeting: selected.meeting,
+      meetingVersion: selected.version
+    })
+
+    return result.message
   }
 
   const runRound = async () => {
@@ -400,7 +645,7 @@ export function MeetingsView({
               <span className="sr-only">Meeting details</span>
             </Button>
           ) : null}
-          <Button aria-label="New meeting" className="min-h-11 min-w-11 rounded-full bg-cyan-300 px-0 text-slate-950 hover:bg-cyan-200" onClick={() => setCreating(true)}>
+          <Button aria-label="New meeting" className="min-h-11 min-w-11 rounded-full bg-cyan-300 px-0 text-slate-950 hover:bg-cyan-200" onClick={() => {setError(''); setMeetingKind(null); setCreating(true)}}>
             <Codicon name="add" />
             <span className="sr-only">New meeting</span>
           </Button>
@@ -438,6 +683,19 @@ export function MeetingsView({
             onOpenConversation={openConversation}
             onOpenConversations={() => setConversationsOpen(true)}
             onOpenDetails={() => setDetailsOpen(true)}
+            output={outputDetail ? (
+              <DeliverablePackageOutput
+                detail={outputDetail}
+                meeting={selected.meeting}
+                meetingVersion={selected.version}
+                onChanged={async () => {
+                  await refresh()
+                  await refreshOutputs(selected.meeting.id)
+                }}
+                onReview={() => review(outputDetail)}
+                onRevise={() => revise(outputDetail)}
+              />
+            ) : null}
             thinkingParticipant={thinkingParticipant}
           />
           {roundInProgress ? <span className="sr-only" role="status">Meeting round in progress</span> : null}
@@ -454,6 +712,48 @@ export function MeetingsView({
             {['draft', 'running', 'waiting'].includes(selected.meeting.state) ? (
               <Button aria-label="Cancel meeting" className="min-h-11 min-w-11 rounded-full border-white/20 bg-white/5 px-3 text-white hover:bg-white/10" disabled={busy} onClick={() => void transition('cancel')} variant="outline"><Codicon name="close" /><span className="sr-only">Cancel meeting</span></Button>
             ) : null}
+            {isProductionMeeting(selected.meeting)
+              && ['briefing', 'working'].includes(selected.meeting.productionStage ?? '') ? (
+                <>
+                  <input
+                    aria-label="Production brief"
+                    className="min-h-11 min-w-0 max-w-64 flex-1 rounded-full border border-white/20 bg-black/40 px-3 text-xs text-white"
+                    maxLength={8_000}
+                    onChange={event => setBrief(event.currentTarget.value)}
+                    placeholder="Production brief"
+                    value={brief}
+                  />
+                  <Button
+                    aria-label="Freeze the production brief"
+                    className="min-h-11 min-w-11 rounded-full bg-cyan-300 px-3 text-slate-950 hover:bg-cyan-200"
+                    disabled={busy}
+                    onClick={() => void freezeBrief()}
+                  >
+                    <Codicon name="lock" /><span className="hidden sm:inline">Freeze brief</span>
+                  </Button>
+                </>
+              ) : null}
+            {produceOffered ? (
+              producerEligibility.eligible ? (
+                <Button
+                  aria-label="Produce the deliverable"
+                  className="min-h-11 min-w-11 rounded-full bg-cyan-300 px-3 text-slate-950 hover:bg-cyan-200"
+                  disabled={busy || producing}
+                  onClick={() => void produce()}
+                >
+                  <Codicon name="rocket" />
+                  <span className="hidden sm:inline">{producing ? 'Producing…' : 'Produce'}</span>
+                </Button>
+              ) : (
+                <p
+                  className="max-w-80 px-2 text-[0.7rem] leading-4 text-amber-200"
+                  data-testid="producer-ineligible"
+                  role="status"
+                >
+                  {producerEligibility.reason}
+                </p>
+              )
+            ) : null}
             {selected.meeting.state === 'completed' && selected.meeting.actionItems.length ? (
               <Button aria-label="Create Kanban cards" className="min-h-11 min-w-11 rounded-full bg-cyan-300 px-3 text-slate-950 hover:bg-cyan-200" disabled={busy} onClick={() => void convertActions()}><Codicon name="project" /><span className="hidden sm:inline">Create tasks</span></Button>
             ) : null}
@@ -464,7 +764,7 @@ export function MeetingsView({
           <div>
             <Codicon className="text-5xl text-cyan-200/70" name="organization" />
             <p className="mt-3 text-sm font-medium text-(--ui-text-primary)">The council chamber is empty</p>
-            <Button className="mt-4 min-h-11 rounded-full" onClick={() => setCreating(true)}><Codicon name="add" /> Set the table</Button>
+            <Button className="mt-4 min-h-11 rounded-full" onClick={() => {setError(''); setMeetingKind(null); setCreating(true)}}><Codicon name="add" /> Set the table</Button>
           </div>
         </div>
       )}
@@ -562,13 +862,49 @@ export function MeetingsView({
       </Dialog>
 
       {/* ── Create-meeting dialog ── */}
-      <Dialog onOpenChange={setCreating} open={creating}>
+      <Dialog onOpenChange={(open: boolean) => {
+        setCreating(open)
+
+        if (open) {setError('')}
+      }} open={creating}>
         <DialogContent className="max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-xl overflow-y-auto sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100vw-2rem)]">
           <DialogHeader>
-            <DialogTitle>Set the meeting table</DialogTitle>
-            <p className="text-sm text-(--ui-text-secondary)">Choose two to six Bots. The first selected Bot chairs the meeting.</p>
+            <DialogTitle>Make a Meeting</DialogTitle>
+            <p className="text-sm text-(--ui-text-secondary)">Choose whether the Bots should create a concrete output or reach a conclusion.</p>
           </DialogHeader>
           <div className="space-y-3">
+            <fieldset aria-label="Meeting type" className="grid gap-2 sm:grid-cols-2">
+              <legend className="mb-2 text-xs font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">Meeting type</legend>
+              <Button
+                aria-describedby="meeting-type-production-description"
+                aria-labelledby="meeting-type-production-label"
+                aria-pressed={meetingKind === 'production'}
+                className="h-auto min-h-20 flex-col items-start gap-1 whitespace-normal px-3 py-3 text-left"
+                onClick={() => {setError(''); setMeetingKind('production')}}
+                variant={meetingKind === 'production' ? 'secondary' : 'outline'}
+              >
+                <span className="font-semibold" id="meeting-type-production-label">Production</span>
+                <span className="text-xs font-normal text-(--ui-text-secondary)" id="meeting-type-production-description">Create code, an app, a document, or another reviewable output.</span>
+              </Button>
+              <Button
+                aria-describedby="meeting-type-conclusion-description"
+                aria-labelledby="meeting-type-conclusion-label"
+                aria-pressed={meetingKind === 'conclusion'}
+                className="h-auto min-h-20 flex-col items-start gap-1 whitespace-normal px-3 py-3 text-left"
+                onClick={() => {
+                  setError('')
+                  setMeetingKind('conclusion')
+                  setOrchestratorKey('')
+                  setProducerKey('')
+                  setSeatRoles({})
+                  setSeatLabels({})
+                }}
+                variant={meetingKind === 'conclusion' ? 'secondary' : 'outline'}
+              >
+                <span className="font-semibold" id="meeting-type-conclusion-label">Conclusion</span>
+                <span className="text-xs font-normal text-(--ui-text-secondary)" id="meeting-type-conclusion-description">Discuss the question, reach a conclusion, and record decisions or actions.</span>
+              </Button>
+            </fieldset>
             <Input aria-label="Meeting title" className="min-h-11" onChange={event => setTitle(event.currentTarget.value)} placeholder="Meeting title" value={title} />
             <textarea aria-label="Meeting agenda" className="min-h-28 w-full resize-y rounded-lg border border-(--ui-stroke-tertiary) bg-transparent p-3 text-sm" onChange={event => setAgenda(event.currentTarget.value)} placeholder="Agenda and decision required" value={agenda} />
 
@@ -589,10 +925,17 @@ export function MeetingsView({
                             setSelectedParticipants(current =>
                               event.target.checked ? [...current, key] : current.filter(value => value !== key)
                             )
+
                             if (!event.target.checked) {
-                              setSeatRoles(current => { const next = { ...current }; delete next[key]; return next })
-                              setSeatLabels(current => { const next = { ...current }; delete next[key]; return next })
+                              setSeatRoles(current => { const next = { ...current }; delete next[key];
+
+ return next })
+                              setSeatLabels(current => { const next = { ...current }; delete next[key];
+
+ return next })
+
                               if (orchestratorKey === key) { setOrchestratorKey('') }
+
                               if (producerKey === key) { setProducerKey('') }
                             }
                           }}
@@ -601,14 +944,16 @@ export function MeetingsView({
                         <span>{option.label}</span>
                       </label>
                       {/* C3: role/label controls shown only when participant is selected */}
-                      {checked ? (
+                      {checked && meetingKind === 'production' ? (
                         <div aria-label={`Seat settings for ${option.label}`} className="flex gap-2 pl-7">
                           <select
                             aria-label={`Role for ${option.label}`}
                             className="min-h-9 flex-1 rounded-md border border-(--ui-stroke-tertiary) bg-transparent px-2 text-xs"
                             onChange={event => {
                               const role = event.currentTarget.value as typeof SEAT_ROLE_OPTIONS[number]
-                              setSeatRoles(current => role ? { ...current, [key]: role } : (() => { const next = { ...current }; delete next[key]; return next })())
+                              setSeatRoles(current => role ? { ...current, [key]: role } : (() => { const next = { ...current }; delete next[key];
+
+ return next })())
                             }}
                             value={seatRoles[key] ?? ''}
                           >
@@ -634,11 +979,12 @@ export function MeetingsView({
               </div>
             </fieldset>
 
-            {/* C1: orchestrator/producer designation — only shown when 2+ participants selected */}
-            {selectedParticipants.length >= 2 ? (
+            {/* Production has a complete server-validated bundle. Conclusion
+                never sends production roles or artifact requirements. */}
+            {meetingKind === 'production' && selectedParticipants.length >= 3 ? (
               <fieldset aria-label="Production roles">
                 <legend className="mb-2 text-xs font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">
-                  Production roles <span className="font-normal normal-case text-(--ui-text-tertiary)">(optional — both or neither)</span>
+                  Production brief
                 </legend>
                 <div className="space-y-2 rounded-xl border border-(--ui-stroke-tertiary) p-3">
                   <div className="flex items-center gap-2">
@@ -654,6 +1000,7 @@ export function MeetingsView({
                         .filter(option => selectedParticipants.includes(routeKey(option)))
                         .map(option => {
                           const key = routeKey(option)
+
                           return <option key={key} value={key}>{option.label}</option>
                         })}
                     </select>
@@ -671,16 +1018,51 @@ export function MeetingsView({
                         .filter(option => selectedParticipants.includes(routeKey(option)) && routeKey(option) !== orchestratorKey)
                         .map(option => {
                           const key = routeKey(option)
+
                           return <option key={key} value={key}>{option.label}</option>
                         })}
                     </select>
                   </div>
+                  <div className="flex items-center gap-2">
+                    <label className="w-24 shrink-0 text-xs text-(--ui-text-secondary)">Product kind</label>
+                    <select
+                      aria-label="Product kind"
+                      className="min-h-9 flex-1 rounded-md border border-(--ui-stroke-tertiary) bg-transparent px-2 text-xs"
+                      onChange={event => setProductKind(event.currentTarget.value)}
+                      value={productKind}
+                    >
+                      <option value="">— none —</option>
+                      {PRODUCT_KINDS.map(kind => (
+                        <option key={kind} value={kind}>{kind}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <Input
+                    aria-label="Output title"
+                    className="min-h-9 text-xs"
+                    maxLength={200}
+                    onChange={event => setOutputTitle(event.currentTarget.value)}
+                    placeholder="Output title"
+                    value={outputTitle}
+                  />
+                  <textarea
+                    aria-label="Acceptance statement"
+                    className="min-h-20 w-full resize-y rounded-md border border-(--ui-stroke-tertiary) bg-transparent p-2 text-xs"
+                    maxLength={4_000}
+                    onChange={event => setAcceptanceStatement(event.currentTarget.value)}
+                    placeholder="What an independent reviewer must confirm"
+                    value={acceptanceStatement}
+                  />
                 </div>
               </fieldset>
             ) : null}
 
+            {meetingKind === 'production' && selectedParticipants.length < 3 ? (
+              <p className="rounded-xl border border-(--ui-stroke-tertiary) p-3 text-xs text-(--ui-text-secondary)">Choose at least three Bot seats to assign an orchestrator, producer, and reviewer.</p>
+            ) : null}
+
             <div className="flex justify-end gap-2">
-              <Button aria-label="Cancel setup" className="min-h-11" onClick={() => setCreating(false)} variant="ghost">Cancel</Button>
+              <Button aria-label="Cancel setup" className="min-h-11" onClick={() => {setCreating(false); setError('')}} variant="ghost">Cancel</Button>
               <Button className="min-h-11" disabled={busy} onClick={() => void create()}><Codicon name="organization" /> Create room</Button>
             </div>
           </div>
@@ -754,72 +1136,42 @@ export function MeetingsView({
                   }) : <p className="text-sm text-(--ui-text-tertiary)">No one has spoken yet.</p>}
                 </div>
               </section>
-              {['running', 'waiting'].includes(selected.meeting.state) ? (
+              {['running', 'waiting'].includes(selected.meeting.state) && !isProductionMeeting(selected.meeting) ? (
                 <section className="space-y-3 border-t border-(--ui-stroke-tertiary) pt-4">
                   <h3 className="text-xs font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">Close the meeting</h3>
                   <Input aria-label="Meeting decision" className="min-h-11" onChange={event => setDecision(event.currentTarget.value)} placeholder="Decision" value={decision} />
                   <Input aria-label="Meeting dissent" className="min-h-11" onChange={event => setDissent(event.currentTarget.value)} placeholder="Explicit dissent" value={dissent} />
                   <Input aria-label="Meeting action item" className="min-h-11" onChange={event => setActionTitle(event.currentTarget.value)} placeholder="Action item" value={actionTitle} />
-
-                  {/* C4/C5: artifact-binding form shown only for production meetings */}
-                  {isProductionMeeting(selected.meeting) ? (
-                    <fieldset aria-label="Artifact binding" className="space-y-2 rounded-xl border border-(--ui-stroke-tertiary) p-3">
-                      <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">Artifact binding (required)</legend>
-                      <Input
-                        aria-label="Output ID"
-                        className="min-h-9 text-xs"
-                        onChange={event => setArtifactForm(current => ({ ...current, outputId: event.currentTarget.value }))}
-                        placeholder="Output ID"
-                        value={artifactForm.outputId}
-                      />
-                      <Input
-                        aria-label="Artifact version"
-                        className="min-h-9 text-xs"
-                        onChange={event => setArtifactForm(current => ({ ...current, artifactVersion: event.currentTarget.value }))}
-                        placeholder="Artifact version (positive integer)"
-                        type="number"
-                        value={artifactForm.artifactVersion}
-                      />
-                      <Input
-                        aria-label="Game SHA-256"
-                        className="min-h-9 font-mono text-xs"
-                        onChange={event => setArtifactForm(current => ({ ...current, gameSha256: event.currentTarget.value }))}
-                        placeholder="Game SHA-256 (64 hex chars)"
-                        value={artifactForm.gameSha256}
-                      />
-                      <Input
-                        aria-label="Manifest SHA-256"
-                        className="min-h-9 font-mono text-xs"
-                        onChange={event => setArtifactForm(current => ({ ...current, manifestSha256: event.currentTarget.value }))}
-                        placeholder="Manifest SHA-256 (64 hex chars)"
-                        value={artifactForm.manifestSha256}
-                      />
-                      <Input
-                        aria-label="Zip SHA-256"
-                        className="min-h-9 font-mono text-xs"
-                        onChange={event => setArtifactForm(current => ({ ...current, zipSha256: event.currentTarget.value }))}
-                        placeholder="Zip SHA-256 (64 hex chars)"
-                        value={artifactForm.zipSha256}
-                      />
-                      <Input
-                        aria-label="Approved by"
-                        className="min-h-9 text-xs"
-                        onChange={event => setArtifactForm(current => ({ ...current, approvedBy: event.currentTarget.value }))}
-                        placeholder="Approved by"
-                        value={artifactForm.approvedBy}
-                      />
-                      <Input
-                        aria-label="Approved at (timestamp)"
-                        className="min-h-9 text-xs"
-                        onChange={event => setArtifactForm(current => ({ ...current, approvedAt: event.currentTarget.value }))}
-                        placeholder="Approved at (Unix timestamp)"
-                        type="number"
-                        value={artifactForm.approvedAt}
-                      />
-                    </fieldset>
-                  ) : null}
-
                   <Button className="min-h-11 w-full" disabled={busy} onClick={() => void transition('conclude')}><Codicon name="check-all" /> Conclude meeting</Button>
+                </section>
+              ) : null}
+              {isProductionMeeting(selected.meeting) ? (
+                <section
+                  aria-label="Production completion"
+                  className="space-y-2 border-t border-(--ui-stroke-tertiary) pt-4"
+                >
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">
+                    Production completion
+                  </h3>
+                  <p className="text-xs leading-5 text-(--ui-text-secondary)">
+                    This meeting completes only when the owner approves a verified artifact
+                    version. Approval lives in the deliverable package panel in the room —
+                    the server derives the approver and writes every hash itself.
+                  </p>
+                  <dl className="space-y-1 text-xs text-(--ui-text-secondary)">
+                    <div className="flex gap-2">
+                      <dt className="w-32 shrink-0 text-(--ui-text-tertiary)">Product kind</dt>
+                      <dd>{selected.meeting.productKind}</dd>
+                    </div>
+                    <div className="flex gap-2">
+                      <dt className="w-32 shrink-0 text-(--ui-text-tertiary)">Output title</dt>
+                      <dd>{selected.meeting.outputTitle}</dd>
+                    </div>
+                    <div className="flex gap-2">
+                      <dt className="w-32 shrink-0 text-(--ui-text-tertiary)">Acceptance</dt>
+                      <dd className="min-w-0">{selected.meeting.acceptanceStatement}</dd>
+                    </div>
+                  </dl>
                 </section>
               ) : null}
             </div>
@@ -827,6 +1179,9 @@ export function MeetingsView({
         </DialogContent>
       </Dialog>
 
+      {produceNotice ? (
+        <p className="text-sm text-emerald-200" data-testid="produce-notice" role="status">{produceNotice}</p>
+      ) : null}
       {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
     </div>
   )

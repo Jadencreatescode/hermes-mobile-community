@@ -3,6 +3,7 @@ import { Button } from '@hermes/plugin-sdk'
 export const OPERATIONS_SECTIONS = [
   { id: 'overview', label: 'Overview' },
   { id: 'control-room', label: 'Control Room' },
+  { id: 'rooms', label: 'Rooms' },
   { id: 'mailroom', label: 'Mailroom' },
   { id: 'meetings', label: 'Meetings' },
   { id: 'workspace', label: 'Agent Workspace' },

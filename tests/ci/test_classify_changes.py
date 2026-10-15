@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -78,6 +80,14 @@ CASES = {
     "ui-tui → frontend": (["ui-tui/src/entry.ts"], _lanes(frontend=True)),
     # Lockfile bump shifts every TS package's tree, but not the Python suite.
     "root lockfile → frontend, not python": (["package-lock.json"], _lanes(frontend=True, npm_lock=True)),
+    "release security policy → frontend": (
+        ["scripts/release-security/npm-audit-policy.mjs"],
+        _lanes(python=True, frontend=True),
+    ),
+    "audit policy test → frontend": (
+        ["tests-js/website-audit-policy.test.ts"],
+        _lanes(frontend=True),
+    ),
     "nested lockfile → npm_lock": (["website/package-lock.json"], _lanes(site=True, npm_lock=True)),
     # A website file the Python suite cannot read stays site-only.
     "website config → site": (["website/docusaurus.config.ts"], _lanes(site=True)),
@@ -300,3 +310,22 @@ def test_ci_review_files_returns_only_sensitive_paths_sorted_and_unique():
         ".github/workflows/ci.yml",
         "apps/desktop/eslint.config.mjs",
     ]
+
+
+def test_classifier_executable_fails_open_for_aggregate_workflow_changes():
+    completed = subprocess.run(
+        [sys.executable, str(_PATH)],
+        cwd=_REPO,
+        input=".github/workflows/ci.yaml\n",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    outputs = dict(line.split("=", 1) for line in completed.stdout.splitlines())
+    assert outputs["ci_review"] == "true"
+    assert outputs["python"] == "true"
+    assert outputs["frontend"] == "true"
+    assert outputs["site"] == "true"
+    assert outputs["scan"] == "true"

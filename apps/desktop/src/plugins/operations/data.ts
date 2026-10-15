@@ -105,6 +105,7 @@ export interface OperationsAgentModel {
   sourceLabel: string
   state: OperationsAgentState
   workSummary: string
+  verified?: boolean
 }
 
 export interface OperationsSnapshot {
@@ -180,8 +181,11 @@ function harnessAgentToModel(agent: HarnessAgent): OperationsAgentModel {
     sourceId: 'a2a',
     sourceKind: 'a2a',
     sourceLabel: 'A2A Harness',
-    state: agent.status === 'verified' ? 'idle' : agent.status === 'pending' ? 'waiting' : 'unknown',
-    workSummary: agent.capabilities.slice(0, 3).join(', ') || 'A2A connected agent'
+    state: agent.status === 'verified' && agent.runtimeState !== 'offline'
+      ? (agent.runtimeState ?? 'unknown')
+      : 'unknown',
+    verified: agent.status === 'verified',
+    workSummary: agent.workSummary || agent.capabilities.slice(0, 3).join(', ') || 'A2A connected agent'
   }
 }
 
@@ -322,12 +326,16 @@ export async function loadOperationsSnapshot(
 // ── A2A harness agent types ─────────────────────────────────────────────────
 
 export type A2AConnectionStatus = 'pending' | 'verified' | 'degraded'
+export type A2ARuntimeState = OperationsAgentState | 'offline'
 
 export interface HarnessAgent {
   agentId: string
   name: string
   status: A2AConnectionStatus
   capabilities: string[]
+  runtimeState?: A2ARuntimeState
+  supportedOperations?: string[]
+  workSummary?: string
 }
 
 export interface AgentCard {
@@ -421,6 +429,7 @@ export async function renameA2AAgent(agentId: string, name: string): Promise<Ren
 
       if (match) {
         let parsed: unknown
+
         try {
           parsed = JSON.parse(match[1])
         } catch {
@@ -429,9 +438,11 @@ export async function renameA2AAgent(agentId: string, name: string): Promise<Ren
 
         if (parsed && typeof parsed === 'object' && parsed !== null && 'detail' in parsed) {
           const detail = (parsed as Record<string, unknown>).detail
+
           if (detail && typeof detail === 'object' && detail !== null && (detail as Record<string, unknown>).reason) {
             throw new Error(String((detail as Record<string, unknown>).reason))
           }
+
           if (typeof detail === 'string') {
             throw new Error(detail)
           }
@@ -455,6 +466,7 @@ export interface A2AChatMessage {
 export interface A2AChatHistory {
   messages: A2AChatMessage[]
   mirror_session_id?: string
+  pending_message?: string
   request_status?: string | null
 }
 
@@ -488,6 +500,7 @@ export async function getA2AChatHistory(agentId: string, requestId = ''): Promis
   return {
     messages,
     mirror_session_id: typeof row.mirror_session_id === 'string' ? row.mirror_session_id : undefined,
+    pending_message: typeof row.pending_message === 'string' ? row.pending_message : undefined,
     request_status: row.request_status === null ? null : typeof row.request_status === 'string' ? row.request_status : null
   }
 }
@@ -513,6 +526,57 @@ export async function sendA2AChatMessage(
   }
 }
 
+export interface A2AControlResult {
+  nativeSessionId: string
+  operation: string
+  state: A2ARuntimeState
+  supported: boolean
+}
+
+function normalizeControlResult(value: unknown): A2AControlResult {
+  const row = record(value)
+  const rawState = typeof row.state === 'string' ? row.state : 'unknown'
+
+  const state = ['idle', 'working', 'waiting', 'reviewing', 'blocked', 'offline'].includes(rawState)
+    ? rawState as A2ARuntimeState
+    : 'unknown'
+
+  return {
+    nativeSessionId: typeof row.native_session_id === 'string' ? row.native_session_id : '',
+    operation: typeof row.operation === 'string' ? row.operation : '',
+    state,
+    supported: row.supported === true
+  }
+}
+
+export async function refreshA2AAgent(agentId: string): Promise<HarnessAgent> {
+  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/refresh`, { method: 'POST' })
+
+  return normalizeHarnessAgent(response)
+}
+
+export async function getA2ALiveState(agentId: string): Promise<A2AControlResult> {
+  return normalizeControlResult(await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/state`))
+}
+
+export async function startOrResumeA2AAgent(agentId: string, prompt: string): Promise<A2AControlResult> {
+  return normalizeControlResult(await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/start-or-resume`, {
+    method: 'POST', body: { prompt: prompt.trim() }
+  }))
+}
+
+export async function steerA2AAgent(agentId: string, message: string): Promise<A2AControlResult> {
+  return normalizeControlResult(await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/steer`, {
+    method: 'POST', body: { message: message.trim() }
+  }))
+}
+
+export async function interruptA2AAgent(agentId: string): Promise<A2AControlResult> {
+  return normalizeControlResult(await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/interrupt`, {
+    method: 'POST', body: { confirm: true }
+  }))
+}
+
 // ── normalization ───────────────────────────────────────────────────────────
 
 function normalizeHarnessAgent(value: unknown): HarnessAgent {
@@ -527,6 +591,21 @@ function normalizeHarnessAgent(value: unknown): HarnessAgent {
 
   const rawCapabilities = Array.isArray(row.capabilities) ? row.capabilities : []
   const capabilities = rawCapabilities.filter((c: unknown): c is string => typeof c === 'string')
+  const rawOperations = Array.isArray(row.supported_operations) ? row.supported_operations : []
+  const supportedOperations = rawOperations.filter((operation: unknown): operation is string => typeof operation === 'string')
+  const rawRuntimeState = typeof row.runtime_state === 'string' ? row.runtime_state : 'unknown'
 
-  return { agentId, name, status, capabilities }
+  const runtimeState = ['idle', 'working', 'waiting', 'reviewing', 'blocked', 'offline'].includes(rawRuntimeState)
+    ? rawRuntimeState as A2ARuntimeState
+    : 'unknown'
+
+  return {
+    agentId,
+    name,
+    status,
+    capabilities,
+    runtimeState,
+    supportedOperations,
+    workSummary: typeof row.work_summary === 'string' ? row.work_summary : ''
+  }
 }

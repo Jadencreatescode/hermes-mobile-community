@@ -8,6 +8,7 @@ import { MailroomView } from './mailroom-view'
 import { MeetingsView } from './meetings-view'
 import { OperationsNavigation, type OperationsSection } from './navigation'
 import { type OperationsDelegation, OperationsOverview } from './overview'
+import { RoomsView } from './rooms-view'
 import { loadOperationsRoutines, type OperationsRoutinesSnapshot } from './routines'
 import { openAgentWorkspace } from './workspace'
 import { WorkspaceView } from './workspace-view'
@@ -37,6 +38,7 @@ export function OperationsPage({
   const [a2aError, setA2aError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [section, setSection] = useState<OperationsSection>('control-room')
+  const [meetingCreateRequested, setMeetingCreateRequested] = useState(false)
   const refreshGeneration = useRef(0)
   const foregroundGeneration = useRef(0)
 
@@ -156,6 +158,10 @@ export function OperationsPage({
               a2aError={a2aError}
               onboardingOpen={onboardingOpen}
               onChanged={() => void refresh(true)}
+              onMakeMeeting={() => {
+                setMeetingCreateRequested(true)
+                setSection('meetings')
+              }}
               onOnboardingOpenChange={onOnboardingOpenChange}
               onOpenAgent={agent => {
                 void openAgentWorkspace(host, agent).catch(cause => host.notifyError(cause, `Could not open ${agent.displayName}`))
@@ -176,7 +182,20 @@ export function OperationsPage({
               ]}
             />
           )}
-          {section === 'meetings' && <MeetingsView snapshot={stableSnapshot} />}
+          {section === 'rooms' && (
+            <RoomsView
+              agents={stableSnapshot.agents
+                .filter(agent => agent.sourceKind === 'a2a' && agent.verified === true)
+                .map(agent => ({ id: agent.profile, label: agent.displayName }))}
+            />
+          )}
+          {section === 'meetings' && (
+            <MeetingsView
+              createRequested={meetingCreateRequested}
+              onCreateRequestHandled={() => setMeetingCreateRequested(false)}
+              snapshot={stableSnapshot}
+            />
+          )}
           {section === 'workspace' && <WorkspaceView agents={stableSnapshot.agents} />}
           {section === 'forge' && <ForgeView />}
         </section>

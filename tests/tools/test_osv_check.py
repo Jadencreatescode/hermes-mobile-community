@@ -151,8 +151,8 @@ class TestCheckPackageForMalware:
         assert second == first
         assert mock_url.call_count == 1
 
-    def test_network_failure_not_cached(self):
-        """Fail-open results must not be cached — retry once network is back."""
+    def test_network_failure_blocks_and_is_not_cached(self):
+        """An unavailable malware verdict blocks, then retries once OSV is back."""
         mock_response = MagicMock()
         mock_response.read.return_value = json.dumps({"vulns": []}).encode()
         mock_response.__enter__ = lambda s: s
@@ -162,8 +162,13 @@ class TestCheckPackageForMalware:
             "tools.osv_check.urllib.request.urlopen",
             side_effect=OSError("network down"),
         ):
-            assert check_package_for_malware("uvx", ["mcp-server-time"]) is None
-        # Network is back: the next check must hit OSV, not a cached fail-open.
+            blocked = check_package_for_malware("uvx", ["mcp-server-time"])
+        assert blocked is not None
+        assert "BLOCKED" in blocked
+        assert "could not be verified" in blocked
+        assert "network down" not in blocked
+
+        # Network is back: the next check must hit OSV, not a cached failure.
         with patch(
             "tools.osv_check.urllib.request.urlopen", return_value=mock_response
         ) as mock_url:

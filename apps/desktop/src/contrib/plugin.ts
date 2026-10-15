@@ -20,7 +20,7 @@ import { dispatchPluginNativeNotification, type PluginNativeNotificationInput } 
 import { registry } from './registry'
 import type { Contribution } from './types'
 
-export type { PluginRestOptions } from '@/hermes'
+export type { PluginBinaryResponse, PluginRestOptions } from '@/hermes'
 export type { HermesOpenTarget } from '@/lib/hermes-open-target'
 export type { PluginNativeNotificationInput, PluginNotificationAction } from '@/store/native-notifications'
 

@@ -31,7 +31,10 @@ describe('renameA2AAgent', () => {
       agentId: 'a2a:one',
       capabilities: ['chat'],
       name: 'Darrell',
-      status: 'verified'
+      runtimeState: 'unknown',
+      status: 'verified',
+      supportedOperations: [],
+      workSummary: ''
     })
     expect(result.warnings).toEqual([])
   })

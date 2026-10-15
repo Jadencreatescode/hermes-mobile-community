@@ -3,11 +3,15 @@ import test from 'node:test'
 
 import {
   advanceProductionStage,
+  cancelMeeting,
   concludeMeeting,
   createMeeting,
   hydrateMeeting,
+  isProductionMeeting,
   MEETING_LIMITS,
+  MEETING_PRODUCT_KINDS,
   MEETING_PRODUCTION_STAGES,
+  MEETING_SCHEMA_VERSION,
   MEETING_SEAT_ROLES,
   MeetingTransitionError,
   MeetingValidationError,
@@ -15,671 +19,469 @@ import {
   startMeeting,
   submitContribution
 } from '../meeting-model.mjs'
+import { meetingRoleRestrictions } from '../meeting-runner.mjs'
 
 // ---------------------------------------------------------------------------
-// Shared route fixtures
+// Shared dummy route fixtures
 // ---------------------------------------------------------------------------
 
-const alice = Object.freeze({ connectionId: 'vps', profile: 'alice' })
-const bob = Object.freeze({ connectionId: 'vps', profile: 'bob' })
-const orch = Object.freeze({ connectionId: 'bridge', profile: 'orchestrator' })
-const prod = Object.freeze({ connectionId: 'bridge', profile: 'producer' })
-const reviewer = Object.freeze({ connectionId: 'vps', profile: 'reviewer' })
+const orchestrator = Object.freeze({ connectionId: 'local', profile: 'orchestrator' })
+const producer = Object.freeze({ connectionId: 'local', profile: 'producer' })
+const reviewer = Object.freeze({ connectionId: 'local', profile: 'reviewer' })
+const analyst = Object.freeze({ connectionId: 'local', profile: 'analyst' })
 
-function base(overrides = {}) {
+function conclusionInput(overrides = {}) {
   return {
-    id: 'meeting-prod-1',
-    source: { connectionId: 'vps', profile: 'default' },
-    title: 'Production meeting',
-    agenda: 'Build the thing.',
-    chair: alice,
-    participants: [alice, bob],
+    id: 'meeting-conclusion-1',
+    source: { connectionId: 'local', profile: 'default' },
+    title: 'Weekly review',
+    agenda: 'Decide whether to publish.',
+    chair: orchestrator,
+    participants: [orchestrator, producer],
     maxRounds: 3,
     ...overrides
   }
 }
 
-// ---------------------------------------------------------------------------
-// C1 — orchestrator+producer mandatory pairing
-// ---------------------------------------------------------------------------
-
-test('C1: orchestrator and producer both absent — creates a plain meeting without production anchors', () => {
-  const meeting = createMeeting(base())
-  assert.equal(meeting.orchestrator, undefined)
-  assert.equal(meeting.producer, undefined)
-})
-
-test('C1: orchestrator and producer both present and distinct — creates a production meeting', () => {
-  const meeting = createMeeting(base({ orchestrator: orch, producer: prod }))
-  assert.deepEqual(meeting.orchestrator, orch)
-  assert.deepEqual(meeting.producer, prod)
-})
-
-test('C1: orchestrator without producer is rejected', () => {
-  assert.throws(
-    () => createMeeting(base({ orchestrator: orch })),
-    err => err instanceof MeetingValidationError && /producer is required when orchestrator is present/.test(err.message)
-  )
-})
-
-test('C1: producer without orchestrator is rejected', () => {
-  assert.throws(
-    () => createMeeting(base({ producer: prod })),
-    err => err instanceof MeetingValidationError && /orchestrator is required when producer is present/.test(err.message)
-  )
-})
-
-test('C1: orchestrator and producer identical routes are rejected', () => {
-  assert.throws(
-    () => createMeeting(base({ orchestrator: orch, producer: orch })),
-    err => err instanceof MeetingValidationError && /orchestrator and producer must be distinct/.test(err.message)
-  )
-})
-
-test('C1: orchestrator with malformed route is rejected', () => {
-  assert.throws(
-    () => createMeeting(base({ orchestrator: { connectionId: '' }, producer: prod })),
-    MeetingValidationError
-  )
-})
-
-// ---------------------------------------------------------------------------
-// C2 — reviewer seat cannot equal producer route
-// ---------------------------------------------------------------------------
-
-test('C2: reviewer seat with a different bot than producer is accepted', () => {
-  const meeting = createMeeting(base({
-    orchestrator: orch,
-    producer: prod,
+function productionInput(overrides = {}) {
+  return {
+    id: 'meeting-production-1',
+    source: { connectionId: 'local', profile: 'default' },
+    title: 'Ship the onboarding guide',
+    agenda: 'Produce and review the onboarding guide.',
+    chair: orchestrator,
+    participants: [orchestrator, producer, reviewer],
+    maxRounds: 3,
+    orchestrator,
+    producer,
     seats: [
-      { bot: reviewer, role: 'reviewer', label: 'Review seat' }
-    ]
-  }))
-  assert.equal(meeting.seats.length, 1)
-  assert.equal(meeting.seats[0].role, 'reviewer')
-})
+      { bot: orchestrator, role: 'specialist', label: 'Orchestrator' },
+      { bot: producer, role: 'contributor', label: 'Producer' },
+      { bot: reviewer, role: 'reviewer', label: 'Independent reviewer' }
+    ],
+    productKind: 'document',
+    outputTitle: 'Onboarding guide',
+    acceptanceStatement: 'A reviewer confirms every onboarding step is reproducible.',
+    ...overrides
+  }
+}
 
-test('C2: reviewer seat whose bot equals the producer route is rejected at creation', () => {
-  assert.throws(
-    () => createMeeting(base({
-      orchestrator: orch,
-      producer: prod,
-      seats: [
-        { bot: prod, role: 'reviewer', label: 'Bad seat' }
-      ]
-    })),
-    err => err instanceof MeetingValidationError && /reviewer seat cannot be the producer/.test(err.message)
-  )
-})
-
-test('C2: reviewer seat without producer present is accepted (no producer = no restriction)', () => {
-  // No orchestrator/producer — reviewer seats are unrestricted.
-  const meeting = createMeeting(base({
-    seats: [
-      { bot: alice, role: 'reviewer', label: 'Review seat' }
-    ]
-  }))
-  assert.equal(meeting.seats[0].role, 'reviewer')
-})
-
-test('C2: reviewer-cannot-be-producer is also enforced at hydration', () => {
-  // Build a valid meeting, then tamper its serialization to inject the violation.
-  const meeting = createMeeting(base({
-    orchestrator: orch,
-    producer: prod,
-    seats: [
-      { bot: reviewer, role: 'reviewer', label: 'Review seat' }
-    ]
-  }))
-  const raw = JSON.parse(serializeMeeting(meeting))
-  // Replace the reviewer bot with the producer route.
-  raw.seats[0].bot = { ...prod }
-  assert.throws(
-    () => hydrateMeeting(JSON.stringify(raw)),
-    err => err instanceof MeetingValidationError && /reviewer seat cannot be the producer/.test(err.message)
-  )
-})
-
-// ---------------------------------------------------------------------------
-// C3 — ordered seats model
-// ---------------------------------------------------------------------------
-
-test('C3: seats omitted — meeting has no seats property', () => {
-  const meeting = createMeeting(base())
-  assert.equal(meeting.seats, undefined)
-})
-
-test('C3: seats present with all valid roles — preserved and frozen in order', () => {
-  const seatDefs = [
-    { bot: { connectionId: 'vps', profile: 'p1' }, role: 'contributor', label: 'Contributor seat' },
-    { bot: { connectionId: 'vps', profile: 'p2' }, role: 'thinker', label: 'Thinker seat' },
-    { bot: { connectionId: 'vps', profile: 'p3' }, role: 'specialist', label: 'Specialist seat' },
-    { bot: reviewer, role: 'reviewer', label: 'Reviewer seat', instructions: 'Review carefully.' }
-  ]
-  const meeting = createMeeting(base({ seats: seatDefs }))
-  assert.equal(meeting.seats.length, 4)
-  assert.equal(meeting.seats[0].role, 'contributor')
-  assert.equal(meeting.seats[1].role, 'thinker')
-  assert.equal(meeting.seats[2].role, 'specialist')
-  assert.equal(meeting.seats[3].role, 'reviewer')
-  assert.equal(meeting.seats[3].instructions, 'Review carefully.')
-  assert.equal(Object.isFrozen(meeting.seats), true)
-  assert.equal(Object.isFrozen(meeting.seats[0]), true)
-})
-
-test('C3: seats with instructions=undefined are stored without the key', () => {
-  const meeting = createMeeting(base({
-    seats: [{ bot: alice, role: 'contributor', label: 'A seat' }]
-  }))
-  assert.equal(Object.prototype.hasOwnProperty.call(meeting.seats[0], 'instructions'), false)
-})
-
-test('C3: duplicate bots in seats are rejected', () => {
-  assert.throws(
-    () => createMeeting(base({
-      seats: [
-        { bot: alice, role: 'contributor', label: 'First' },
-        { bot: alice, role: 'thinker', label: 'Dup' }
-      ]
-    })),
-    err => err instanceof MeetingValidationError && /seats must contain unique bots/.test(err.message)
-  )
-})
-
-test('C3: more than maxSeats items are rejected', () => {
-  const tooMany = Array.from({ length: MEETING_LIMITS.maxSeats + 1 }, (_, i) => ({
-    bot: { connectionId: 'vps', profile: `bot${i}` },
-    role: 'contributor',
-    label: `Seat ${i}`
-  }))
-  assert.throws(
-    () => createMeeting(base({ seats: tooMany })),
-    err => err instanceof MeetingValidationError && new RegExp(`seats must contain at most ${MEETING_LIMITS.maxSeats}`).test(err.message)
-  )
-})
-
-test('C3: invalid role is rejected', () => {
-  assert.throws(
-    () => createMeeting(base({
-      seats: [{ bot: alice, role: 'unknown_role', label: 'Bad seat' }]
-    })),
-    err => err instanceof MeetingValidationError && /role is not allowed/.test(err.message)
-  )
-})
-
-test('C3: seats must be an array (not an object)', () => {
-  assert.throws(
-    () => createMeeting(base({ seats: { bot: alice, role: 'contributor', label: 'Bad' } })),
-    MeetingValidationError
-  )
-})
-
-test('C3: seats round-trip through serialize/hydrate intact', () => {
-  const meeting = createMeeting(base({
-    orchestrator: orch,
-    producer: prod,
-    seats: [
-      { bot: alice, role: 'contributor', label: 'Contributor' },
-      { bot: reviewer, role: 'reviewer', label: 'Review', instructions: 'Be thorough.' }
-    ]
-  }))
-  const hydrated = hydrateMeeting(serializeMeeting(meeting))
-  assert.deepEqual(hydrated.seats, meeting.seats)
-  assert.equal(Object.isFrozen(hydrated.seats), true)
-  assert.equal(Object.isFrozen(hydrated.seats[1]), true)
-  assert.deepEqual(hydrated.orchestrator, orch)
-  assert.deepEqual(hydrated.producer, prod)
-})
-
-// ---------------------------------------------------------------------------
-// MEETING_SEAT_ROLES export
-// ---------------------------------------------------------------------------
-
-test('MEETING_SEAT_ROLES exports exactly the four allowed roles', () => {
-  assert.deepEqual(Object.keys(MEETING_SEAT_ROLES).sort(), ['contributor', 'reviewer', 'specialist', 'thinker'])
-  assert.equal(Object.isFrozen(MEETING_SEAT_ROLES), true)
-})
-
-// ---------------------------------------------------------------------------
-// Non-regression: ordinary (no orchestrator/producer) meetings are unchanged
-// ---------------------------------------------------------------------------
-
-test('Non-regression: ordinary meeting auto-completes on all-pass without any production fields', () => {
-  let m = startMeeting(createMeeting(base()))
-  m = submitContribution(m, { participant: alice, kind: 'pass' })
-  m = submitContribution(m, { participant: bob, kind: 'pass' })
-  assert.equal(m.state, 'completed')
-  assert.equal(m.orchestrator, undefined)
-  assert.equal(m.producer, undefined)
-})
-
-test('Non-regression: ordinary meeting auto-completes at round cap without production fields', () => {
-  let m = startMeeting(createMeeting(base({ maxRounds: 1 })))
-  m = submitContribution(m, { participant: alice, kind: 'speak', text: 'Go.' })
-  m = submitContribution(m, { participant: bob, kind: 'pass' })
-  assert.equal(m.state, 'completed')
-})
-
-test('Non-regression: hydrate/serialize of an ordinary meeting remains stable', () => {
-  const original = startMeeting(createMeeting(base()))
-  const withContrib = submitContribution(original, { participant: alice, kind: 'speak', text: 'Evidence.' })
-  const hydrated = hydrateMeeting(serializeMeeting(withContrib))
-  assert.deepEqual(hydrated, withContrib)
-  assert.equal(hydrated.orchestrator, undefined)
-  assert.equal(hydrated.seats, undefined)
-})
-
-// ---------------------------------------------------------------------------
-// Shared valid artifact binding fixture
-// ---------------------------------------------------------------------------
-
-const validBinding = Object.freeze({
-  outputId: 'game-v1.0',
+const binding = Object.freeze({
+  outputId: 'mout_1',
   artifactVersion: 1,
   gameSha256: 'a'.repeat(64),
   manifestSha256: 'b'.repeat(64),
   zipSha256: 'c'.repeat(64),
-  approvedBy: 'boss',
-  approvedAt: 1_700_000_000
+  approvedBy: 'Owner',
+  approvedAt: 1_800_000_000
 })
 
-function prodBase(overrides = {}) {
-  return base({ orchestrator: orch, producer: prod, ...overrides })
+// ---------------------------------------------------------------------------
+// canonical schema v2
+// ---------------------------------------------------------------------------
+
+test('every new meeting carries canonical schema version 2', () => {
+  assert.equal(MEETING_SCHEMA_VERSION, 2)
+  assert.equal(createMeeting(conclusionInput()).schemaVersion, 2)
+  assert.equal(createMeeting(productionInput()).schemaVersion, 2)
+})
+
+test('a production meeting keeps the complete bundle and starts at briefing', () => {
+  const meeting = createMeeting(productionInput())
+
+  assert.equal(isProductionMeeting(meeting), true)
+  assert.deepEqual(meeting.orchestrator, orchestrator)
+  assert.deepEqual(meeting.producer, producer)
+  assert.equal(meeting.productKind, 'document')
+  assert.equal(meeting.outputTitle, 'Onboarding guide')
+  assert.equal(meeting.productionStage, 'briefing')
+  assert.equal(meeting.seats.length, 3)
+  assert.equal(meeting.artifactBinding, undefined)
+})
+
+test('a conclusion meeting carries no production field at all', () => {
+  const meeting = createMeeting(conclusionInput())
+
+  assert.equal(isProductionMeeting(meeting), false)
+  for (const field of [
+    'orchestrator', 'producer', 'seats', 'productKind', 'outputTitle',
+    'acceptanceStatement', 'productionStage', 'artifactBinding'
+  ]) {
+    assert.equal(meeting[field], undefined, field)
+  }
+})
+
+test('the legal production stages and product kinds are bounded', () => {
+  assert.deepEqual(MEETING_PRODUCTION_STAGES, [
+    'briefing', 'working', 'production_ready', 'producing',
+    'reviewing', 'changes_requested', 'approval_ready', 'completed'
+  ])
+  assert.deepEqual([...MEETING_PRODUCT_KINDS].sort(), [
+    'audio_asset', 'document', 'interactive_web_app', 'three_scene', 'video_asset'
+  ])
+  assert.ok(Object.prototype.hasOwnProperty.call(MEETING_SEAT_ROLES, 'reviewer'))
+})
+
+// ---------------------------------------------------------------------------
+// all-or-none production bundle
+// ---------------------------------------------------------------------------
+
+for (const missing of ['orchestrator', 'producer', 'seats', 'productKind', 'outputTitle', 'acceptanceStatement']) {
+  test(`a production bundle missing ${missing} is refused`, () => {
+    const input = productionInput()
+    delete input[missing]
+    assert.throws(() => createMeeting(input), MeetingValidationError)
+  })
 }
 
-function prodConclusion(bindingOverride) {
-  return {
-    chair: alice,
+test('production-only fields on a conclusion meeting are refused', () => {
+  for (const [field, value] of [
+    ['productKind', 'document'],
+    ['outputTitle', 'Guide'],
+    ['acceptanceStatement', 'Reviewed.'],
+    ['productionStage', 'briefing'],
+    ['artifactBinding', binding],
+    ['seats', [{ bot: orchestrator, role: 'reviewer', label: 'O' }]]
+  ]) {
+    assert.throws(
+      () => createMeeting(conclusionInput({ [field]: value })),
+      MeetingValidationError,
+      field
+    )
+  }
+})
+
+test('orchestrator and producer must be distinct participants', () => {
+  assert.throws(
+    () => createMeeting(productionInput({ producer: orchestrator })),
+    MeetingValidationError
+  )
+  assert.throws(
+    () => createMeeting(productionInput({ orchestrator: { connectionId: 'local', profile: 'stranger' } })),
+    MeetingValidationError
+  )
+})
+
+test('seats must be an ordered one-to-one assignment of the participants', () => {
+  const cases = [
+    [
+      { bot: orchestrator, role: 'specialist', label: 'O' },
+      { bot: orchestrator, role: 'contributor', label: 'O again' },
+      { bot: reviewer, role: 'reviewer', label: 'R' }
+    ],
+    [
+      { bot: orchestrator, role: 'specialist', label: 'O' },
+      { bot: reviewer, role: 'reviewer', label: 'R' }
+    ],
+    [
+      { bot: orchestrator, role: 'specialist', label: 'O' },
+      { bot: producer, role: 'contributor', label: 'P' },
+      { bot: analyst, role: 'reviewer', label: 'Stranger' }
+    ]
+  ]
+
+  for (const seats of cases) {
+    assert.throws(() => createMeeting(productionInput({ seats })), MeetingValidationError)
+  }
+})
+
+test('at least one reviewer seat is required and must be independent', () => {
+  assert.throws(() => createMeeting(productionInput({
+    seats: [
+      { bot: orchestrator, role: 'specialist', label: 'O' },
+      { bot: producer, role: 'contributor', label: 'P' },
+      { bot: reviewer, role: 'thinker', label: 'R' }
+    ]
+  })), MeetingValidationError)
+
+  for (const impostor of [orchestrator, producer]) {
+    assert.throws(() => createMeeting(productionInput({
+      seats: [
+        { bot: orchestrator, role: impostor === orchestrator ? 'reviewer' : 'specialist', label: 'O' },
+        { bot: producer, role: impostor === producer ? 'reviewer' : 'contributor', label: 'P' },
+        { bot: reviewer, role: 'contributor', label: 'R' }
+      ]
+    })), MeetingValidationError)
+  }
+})
+
+test('production requires at least three source-qualified participants', () => {
+  assert.throws(() => createMeeting(productionInput({
+    participants: [orchestrator, producer],
+    seats: [
+      { bot: orchestrator, role: 'specialist', label: 'O' },
+      { bot: producer, role: 'reviewer', label: 'P' }
+    ]
+  })), MeetingValidationError)
+})
+
+test('product kind, output title, and acceptance statement are bounded', () => {
+  assert.throws(() => createMeeting(productionInput({ productKind: 'nuclear_reactor' })), MeetingValidationError)
+  assert.throws(
+    () => createMeeting(productionInput({ outputTitle: 'x'.repeat(MEETING_LIMITS.maxTitleLength + 1) })),
+    MeetingValidationError
+  )
+  assert.throws(
+    () => createMeeting(productionInput({
+      acceptanceStatement: 'x'.repeat(MEETING_LIMITS.maxAcceptanceStatementLength + 1)
+    })),
+    MeetingValidationError
+  )
+})
+
+// ---------------------------------------------------------------------------
+// server-owned artifact binding
+// ---------------------------------------------------------------------------
+
+test('a client cannot author an artifact binding at creation', () => {
+  assert.throws(
+    () => createMeeting(productionInput({ artifactBinding: binding })),
+    MeetingValidationError
+  )
+})
+
+test('a client cannot choose any production stage other than briefing at creation', () => {
+  assert.equal(createMeeting(productionInput({ productionStage: 'briefing' })).productionStage, 'briefing')
+  for (const stage of ['working', 'producing', 'approval_ready', 'completed']) {
+    assert.throws(
+      () => createMeeting(productionInput({ productionStage: stage })),
+      MeetingValidationError,
+      stage
+    )
+  }
+})
+
+test('a hydrated artifact binding must carry the non-identifying Owner label', () => {
+  const approved = {
+    ...createMeeting(productionInput()),
+    state: 'completed',
+    currentRound: 1,
+    productionStage: 'completed',
+    artifactBinding: binding
+  }
+
+  assert.deepEqual(hydrateMeeting(JSON.stringify(approved)).artifactBinding, binding)
+
+  for (const bad of [
+    { ...binding, approvedBy: 'jane@example.test' },
+    { ...binding, approvedBy: '' },
+    { ...binding, gameSha256: 'not-a-digest' },
+    { ...binding, artifactVersion: 0 },
+    { ...binding, approvedAt: -1 }
+  ]) {
+    assert.throws(
+      () => hydrateMeeting(JSON.stringify({ ...approved, artifactBinding: bad })),
+      MeetingValidationError
+    )
+  }
+})
+
+// ---------------------------------------------------------------------------
+// transitions
+// ---------------------------------------------------------------------------
+
+test('the generic conclude path refuses a production meeting', () => {
+  const running = startMeeting(createMeeting(productionInput()))
+
+  assert.throws(
+    () => concludeMeeting(running, {
+      chair: orchestrator,
+      decisions: [],
+      dissent: [],
+      actionItems: []
+    }),
+    MeetingTransitionError
+  )
+  assert.throws(
+    () => concludeMeeting(running, {
+      artifactBinding: binding,
+      chair: orchestrator,
+      decisions: [],
+      dissent: [],
+      actionItems: []
+    }),
+    MeetingTransitionError
+  )
+})
+
+test('a conclusion meeting still concludes through the existing path', () => {
+  const running = startMeeting(createMeeting(conclusionInput()))
+  const completed = concludeMeeting(running, {
+    chair: orchestrator,
+    decisions: [{ id: 'd1', text: 'Publish.', evidenceRefs: [] }],
+    dissent: [],
+    actionItems: [{
+      id: 'publish',
+      ownerRoute: producer,
+      title: 'Publish the changelog',
+      acceptanceCriteria: 'The changelog is live.',
+      priority: 'normal',
+      dueIntent: 'This week'
+    }]
+  })
+
+  assert.equal(completed.state, 'completed')
+  assert.equal(completed.decisions.length, 1)
+  assert.equal(completed.actionItems[0].dedupeKey, 'meeting:meeting-conclusion-1:action:publish')
+  assert.equal(completed.artifactBinding, undefined)
+  assert.equal(completed.productionStage, undefined)
+})
+
+test('a production meeting does not auto-complete on all-pass or max round', () => {
+  let meeting = startMeeting(createMeeting(productionInput({ maxRounds: 1 })))
+  for (const participant of [orchestrator, producer, reviewer]) {
+    meeting = submitContribution(meeting, { participant, kind: 'pass' })
+  }
+
+  assert.equal(meeting.state, 'running')
+  assert.equal(meeting.productionStage, 'briefing')
+})
+
+test('a conclusion meeting still auto-completes on all-pass', () => {
+  let meeting = startMeeting(createMeeting(conclusionInput({ maxRounds: 1 })))
+  for (const participant of [orchestrator, producer]) {
+    meeting = submitContribution(meeting, { participant, kind: 'pass' })
+  }
+
+  assert.equal(meeting.state, 'completed')
+})
+
+test('the production stage ladder is exact and never reaches completed locally', () => {
+  const running = startMeeting(createMeeting(productionInput()))
+
+  const working = advanceProductionStage(running, 'working')
+  assert.equal(working.productionStage, 'working')
+  assert.equal(advanceProductionStage(working, 'production_ready').productionStage, 'production_ready')
+
+  assert.throws(() => advanceProductionStage(running, 'producing'), MeetingTransitionError)
+  assert.throws(() => advanceProductionStage(running, 'completed'), MeetingTransitionError)
+  assert.throws(() => advanceProductionStage(running, 'not_a_stage'), MeetingValidationError)
+  assert.throws(
+    () => advanceProductionStage(startMeeting(createMeeting(conclusionInput())), 'working'),
+    MeetingTransitionError
+  )
+})
+
+test('cancellation freezes a production lifecycle without completing it', () => {
+  const cancelled = cancelMeeting(startMeeting(createMeeting(productionInput())))
+
+  assert.equal(cancelled.state, 'cancelled')
+  assert.equal(cancelled.artifactBinding, undefined)
+  assert.throws(() => advanceProductionStage(cancelled, 'working'), MeetingTransitionError)
+})
+
+// ---------------------------------------------------------------------------
+// hydration
+// ---------------------------------------------------------------------------
+
+test('a production meeting round-trips through serialize and hydrate', () => {
+  const meeting = startMeeting(createMeeting(productionInput()))
+  const hydrated = hydrateMeeting(serializeMeeting(meeting))
+
+  assert.deepEqual(hydrated.seats.map(seat => seat.role), ['specialist', 'contributor', 'reviewer'])
+  assert.equal(hydrated.productKind, 'document')
+  assert.equal(hydrated.acceptanceStatement, meeting.acceptanceStatement)
+  assert.equal(hydrated.productionStage, 'briefing')
+  assert.equal(Object.isFrozen(hydrated.seats), true)
+})
+
+test('a hydrated production meeting preserves a server-advanced stage', () => {
+  const meeting = {
+    ...startMeeting(createMeeting(productionInput())),
+    productionStage: 'reviewing'
+  }
+
+  assert.equal(hydrateMeeting(JSON.stringify(meeting)).productionStage, 'reviewing')
+})
+
+test('a legacy record without a schema version hydrates as a conclusion meeting', () => {
+  const legacy = {
+    id: 'meeting-legacy-1',
+    source: { connectionId: 'local', profile: 'default' },
+    title: 'Legacy meeting',
+    agenda: 'Legacy agenda.',
+    chair: orchestrator,
+    participants: [orchestrator, producer],
+    maxRounds: 3,
+    currentRound: 1,
+    contributions: [{
+      id: 'c1',
+      round: 1,
+      participant: orchestrator,
+      kind: 'speak',
+      text: 'Legacy text.',
+      evidenceRefs: []
+    }],
+    evidenceRefs: [],
     decisions: [],
     dissent: [],
     actionItems: [],
-    ...(bindingOverride !== undefined ? { artifactBinding: bindingOverride } : { artifactBinding: validBinding })
+    state: 'running'
   }
-}
 
-// ---------------------------------------------------------------------------
-// C5 — artifact-binding schema validation
-// ---------------------------------------------------------------------------
+  const hydrated = hydrateMeeting(JSON.stringify(legacy))
 
-test('C5: valid artifact binding is accepted on createMeeting', () => {
-  const meeting = createMeeting(prodBase({ artifactBinding: validBinding }))
-  assert.equal(meeting.artifactBinding.outputId, 'game-v1.0')
-  assert.equal(meeting.artifactBinding.artifactVersion, 1)
-  assert.equal(Object.isFrozen(meeting.artifactBinding), true)
+  assert.equal(hydrated.schemaVersion, 2)
+  assert.equal(isProductionMeeting(hydrated), false)
+  assert.equal(hydrated.contributions.length, 1)
 })
 
-test('C5: artifact binding without outputId is rejected', () => {
-  const noId = {
-    artifactVersion: validBinding.artifactVersion,
-    gameSha256: validBinding.gameSha256,
-    manifestSha256: validBinding.manifestSha256,
-    zipSha256: validBinding.zipSha256,
-    approvedBy: validBinding.approvedBy,
-    approvedAt: validBinding.approvedAt
+test('a completed production meeting must carry an approved artifact binding', () => {
+  const completed = {
+    ...startMeeting(createMeeting(productionInput())),
+    state: 'completed',
+    currentRound: 1,
+    productionStage: 'completed'
   }
+
+  assert.throws(() => hydrateMeeting(JSON.stringify(completed)), MeetingValidationError)
   assert.throws(
-    () => createMeeting(prodBase({ artifactBinding: noId })),
-    err => err instanceof MeetingValidationError && /outputId is required/.test(err.message)
+    () => hydrateMeeting(JSON.stringify({ ...completed, productionStage: 'approval_ready', artifactBinding: binding })),
+    MeetingValidationError
   )
 })
 
-test('C5: artifact binding with non-positive artifactVersion is rejected', () => {
-  assert.throws(
-    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, artifactVersion: 0 } })),
-    err => err instanceof MeetingValidationError && /artifactVersion must be a positive integer/.test(err.message)
-  )
+// ---------------------------------------------------------------------------
+// role-specific session policy
+// ---------------------------------------------------------------------------
+
+test('an ordinary discussion turn stays clarify-only with no cwd', () => {
+  const policy = meetingRoleRestrictions()
+
+  assert.deepEqual(policy.enabled_toolsets, ['clarify'])
+  assert.equal(policy.cwd, undefined)
+  assert.equal(policy.skip_memory, true)
+  assert.equal(policy.skip_context_files, true)
+  assert.equal(policy.skip_background_review, true)
+  assert.equal(policy.source, 'meeting')
+  assert.deepEqual(meetingRoleRestrictions('discussion'), policy)
 })
 
-test('C5: artifact binding with non-integer artifactVersion is rejected', () => {
-  assert.throws(
-    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, artifactVersion: 1.5 } })),
-    err => err instanceof MeetingValidationError && /artifactVersion must be a positive integer/.test(err.message)
-  )
-})
+test('a producer turn adds only file authority and is confined to the minted cwd', () => {
+  const policy = meetingRoleRestrictions('producer', { cwd: '/server/owned/workspace' })
 
-test('C5: artifact binding with invalid gameSha256 (not 64 hex chars) is rejected', () => {
-  assert.throws(
-    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, gameSha256: 'ZZZZ' } })),
-    err => err instanceof MeetingValidationError && /gameSha256/.test(err.message)
-  )
-})
-
-test('C5: artifact binding with uppercase hex in sha256 is rejected', () => {
-  assert.throws(
-    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, manifestSha256: 'A'.repeat(64) } })),
-    err => err instanceof MeetingValidationError && /manifestSha256/.test(err.message)
-  )
-})
-
-test('C5: artifact binding without approvedBy is rejected', () => {
-  const noApprovedBy = {
-    outputId: validBinding.outputId,
-    artifactVersion: validBinding.artifactVersion,
-    gameSha256: validBinding.gameSha256,
-    manifestSha256: validBinding.manifestSha256,
-    zipSha256: validBinding.zipSha256,
-    approvedAt: validBinding.approvedAt
+  assert.deepEqual([...policy.enabled_toolsets].sort(), ['clarify', 'file'])
+  assert.equal(policy.cwd, '/server/owned/workspace')
+  assert.equal(policy.skip_memory, true)
+  // No terminal or browser authority is ever requested for a producer turn.
+  for (const forbidden of ['terminal', 'browser', 'code_execution', 'delegation']) {
+    assert.equal(policy.enabled_toolsets.includes(forbidden), false, forbidden)
   }
-  assert.throws(
-    () => createMeeting(prodBase({ artifactBinding: noApprovedBy })),
-    err => err instanceof MeetingValidationError && /approvedBy is required/.test(err.message)
-  )
 })
 
-test('C5: artifact binding with non-number approvedAt is rejected', () => {
-  assert.throws(
-    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: 'now' } })),
-    err => err instanceof MeetingValidationError && /approvedAt must be a finite non-negative number/.test(err.message)
-  )
+test('a producer turn without a server-minted cwd is refused', () => {
+  assert.throws(() => meetingRoleRestrictions('producer'), /server-minted workspace cwd/)
+  assert.throws(() => meetingRoleRestrictions('producer', { cwd: '' }), /server-minted workspace cwd/)
 })
 
-test('C5: artifact binding with NaN approvedAt is rejected', () => {
-  assert.throws(
-    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: NaN } })),
-    err => err instanceof MeetingValidationError && /approvedAt must be a finite non-negative number/.test(err.message)
-  )
+test('a reviewer turn receives no cwd and no file authority', () => {
+  const policy = meetingRoleRestrictions('reviewer')
+
+  assert.deepEqual(policy.enabled_toolsets, ['clarify'])
+  assert.equal(policy.cwd, undefined)
+  assert.equal(policy.enabled_toolsets.includes('file'), false)
 })
 
-test('C5: artifact binding with Infinity approvedAt is rejected', () => {
-  assert.throws(
-    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: Infinity } })),
-    err => err instanceof MeetingValidationError && /approvedAt must be a finite non-negative number/.test(err.message)
-  )
-})
-
-test('C5: artifact binding with -Infinity approvedAt is rejected', () => {
-  assert.throws(
-    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: -Infinity } })),
-    err => err instanceof MeetingValidationError && /approvedAt must be a finite non-negative number/.test(err.message)
-  )
-})
-
-test('C5: artifact binding with negative approvedAt is rejected', () => {
-  assert.throws(
-    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: -1 } })),
-    err => err instanceof MeetingValidationError && /approvedAt must be a finite non-negative number/.test(err.message)
-  )
-})
-
-test('C5: artifact binding with zero approvedAt is accepted', () => {
-  assert.doesNotThrow(
-    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: 0 } }))
-  )
-})
-
-test('C5: artifact binding with valid finite non-negative approvedAt is accepted', () => {
-  assert.doesNotThrow(
-    () => createMeeting(prodBase({ artifactBinding: { ...validBinding, approvedAt: 1_700_000_000 } }))
-  )
-})
-
-test('C5: artifact binding on a non-production meeting (no orchestrator) is rejected', () => {
-  assert.throws(
-    () => createMeeting(base({ artifactBinding: validBinding })),
-    err => err instanceof MeetingValidationError && /artifactBinding requires orchestrator and producer/.test(err.message)
-  )
-})
-
-test('C5: artifact binding round-trips through serialize/hydrate', () => {
-  const meeting = createMeeting(prodBase({ artifactBinding: validBinding }))
-  const hydrated = hydrateMeeting(serializeMeeting(meeting))
-  assert.deepEqual(hydrated.artifactBinding, meeting.artifactBinding)
-  assert.equal(Object.isFrozen(hydrated.artifactBinding), true)
-})
-
-// ---------------------------------------------------------------------------
-// C6 — production stages FSM
-// ---------------------------------------------------------------------------
-
-test('C6: MEETING_PRODUCTION_STAGES exports all 8 stages as a frozen array', () => {
-  const expected = ['briefing', 'working', 'production_ready', 'producing', 'reviewing', 'changes_requested', 'approval_ready', 'completed']
-  assert.deepEqual([...MEETING_PRODUCTION_STAGES], expected)
-  assert.equal(Object.isFrozen(MEETING_PRODUCTION_STAGES), true)
-})
-
-test('C6: productionStage is set on createMeeting', () => {
-  const meeting = createMeeting(prodBase({ productionStage: 'briefing' }))
-  assert.equal(meeting.productionStage, 'briefing')
-})
-
-test('C6: productionStage on non-production meeting is rejected', () => {
-  assert.throws(
-    () => createMeeting(base({ productionStage: 'briefing' })),
-    err => err instanceof MeetingValidationError && /productionStage requires orchestrator and producer/.test(err.message)
-  )
-})
-
-test('C6: invalid productionStage value is rejected', () => {
-  assert.throws(
-    () => createMeeting(prodBase({ productionStage: 'unknown_stage' })),
-    err => err instanceof MeetingValidationError && /not a valid production stage/.test(err.message)
-  )
-})
-
-test('C6: advanceProductionStage advances stage on production meeting', () => {
-  const meeting = createMeeting(prodBase({ productionStage: 'briefing' }))
-  const advanced = advanceProductionStage(meeting, 'working')
-  assert.equal(advanced.productionStage, 'working')
-  // original unchanged
-  assert.equal(meeting.productionStage, 'briefing')
-})
-
-test('C6: advanceProductionStage rejects invalid stage', () => {
-  const meeting = createMeeting(prodBase())
-  assert.throws(
-    () => advanceProductionStage(meeting, 'nonexistent'),
-    err => err instanceof MeetingValidationError && /not a valid production stage/.test(err.message)
-  )
-})
-
-test('C6: advanceProductionStage rejects non-production meeting', () => {
-  const meeting = createMeeting(base())
-  assert.throws(
-    () => advanceProductionStage(meeting, 'briefing'),
-    err => err instanceof MeetingTransitionError && /requires orchestrator and producer/.test(err.message)
-  )
-})
-
-test('C6: productionStage round-trips through serialize/hydrate', () => {
-  const meeting = createMeeting(prodBase({ productionStage: 'producing' }))
-  const hydrated = hydrateMeeting(serializeMeeting(meeting))
-  assert.equal(hydrated.productionStage, 'producing')
-})
-
-test('C6: productionStage absent on ordinary meeting after hydrate', () => {
-  const meeting = createMeeting(base())
-  const hydrated = hydrateMeeting(serializeMeeting(meeting))
-  assert.equal(hydrated.productionStage, undefined)
-})
-
-// ---------------------------------------------------------------------------
-// C4 — hard completion gate
-// ---------------------------------------------------------------------------
-
-test('C4: production meeting with valid artifactBinding can be concluded', () => {
-  const m = startMeeting(createMeeting(prodBase()))
-  const concluded = concludeMeeting(m, prodConclusion())
-  assert.equal(concluded.state, 'completed')
-  assert.deepEqual(concluded.artifactBinding.outputId, validBinding.outputId)
-})
-
-test('C4: production meeting without artifactBinding cannot be concluded', () => {
-  const m = startMeeting(createMeeting(prodBase()))
-  assert.throws(
-    () => concludeMeeting(m, prodConclusion(null)),
-    err => err instanceof MeetingTransitionError && /cannot complete without an approved artifact binding/.test(err.message)
-  )
-})
-
-test('C4: production meeting with invalid artifactBinding (bad sha) is rejected at conclude', () => {
-  const badBinding = { ...validBinding, zipSha256: 'not-valid' }
-  const m = startMeeting(createMeeting(prodBase()))
-  assert.throws(
-    () => concludeMeeting(m, prodConclusion(badBinding)),
-    err => err instanceof MeetingValidationError && /zipSha256/.test(err.message)
-  )
-})
-
-test('C4: ordinary meeting concludes without any artifact binding', () => {
-  const m = startMeeting(createMeeting(base()))
-  const concluded = concludeMeeting(m, {
-    chair: alice,
-    decisions: [],
-    dissent: [],
-    actionItems: []
-  })
-  assert.equal(concluded.state, 'completed')
-  assert.equal(concluded.artifactBinding, undefined)
-})
-
-test('C4: production meeting pre-loaded with artifactBinding can conclude without passing binding again', () => {
-  const m = startMeeting(createMeeting(prodBase({ artifactBinding: validBinding })))
-  const concluded = concludeMeeting(m, { chair: alice, decisions: [], dissent: [], actionItems: [] })
-  assert.equal(concluded.state, 'completed')
-  assert.deepEqual(concluded.artifactBinding.outputId, validBinding.outputId)
-})
-
-test('C4: production meeting at completed state cannot be hydrated without artifactBinding', () => {
-  const m = startMeeting(createMeeting(prodBase()))
-  const concluded = concludeMeeting(m, prodConclusion())
-  const raw = JSON.parse(serializeMeeting(concluded))
-  delete raw.artifactBinding
-  assert.throws(
-    () => hydrateMeeting(JSON.stringify(raw)),
-    err => err instanceof MeetingValidationError && /cannot complete without an approved artifact binding/.test(err.message)
-  )
-})
-
-test('C4: production meeting with valid artifact binding round-trips through hydrate in completed state', () => {
-  const m = startMeeting(createMeeting(prodBase()))
-  const concluded = concludeMeeting(m, prodConclusion())
-  const hydrated = hydrateMeeting(serializeMeeting(concluded))
-  assert.equal(hydrated.state, 'completed')
-  assert.deepEqual(hydrated.artifactBinding.gameSha256, validBinding.gameSha256)
-})
-
-test('C4: production meeting does NOT auto-complete via all-pass rounds', () => {
-  let m = startMeeting(createMeeting(prodBase()))
-  m = submitContribution(m, { participant: alice, kind: 'pass' })
-  m = submitContribution(m, { participant: bob, kind: 'pass' })
-  // rounds exhaust but production meetings must not auto-complete
-  assert.notEqual(m.state, 'completed')
-})
-
-test('C4: production meeting does NOT auto-complete at round cap', () => {
-  let m = startMeeting(createMeeting(prodBase({ maxRounds: 1 })))
-  m = submitContribution(m, { participant: alice, kind: 'speak', text: 'Progress.' })
-  m = submitContribution(m, { participant: bob, kind: 'pass' })
-  assert.notEqual(m.state, 'completed')
-})
-
-// ---------------------------------------------------------------------------
-// C7 — contribution kinds (speak, pass, brief, produce, review)
-// ---------------------------------------------------------------------------
-
-test('C7: speak contribution is accepted with non-empty text', () => {
-  let m = startMeeting(createMeeting(base()))
-  m = submitContribution(m, { participant: alice, kind: 'speak', text: 'My point.' })
-  const c = m.contributions.at(-1)
-  assert.equal(c.kind, 'speak')
-  assert.equal(c.text, 'My point.')
-})
-
-test('C7: pass contribution is accepted with no text required', () => {
-  let m = startMeeting(createMeeting(base()))
-  m = submitContribution(m, { participant: alice, kind: 'pass' })
-  const c = m.contributions.at(-1)
-  assert.equal(c.kind, 'pass')
-  assert.equal(c.text, '')
-})
-
-test('C7: brief contribution is accepted with non-empty text', () => {
-  let m = startMeeting(createMeeting(base()))
-  m = submitContribution(m, { participant: alice, kind: 'brief', text: 'Briefing summary.' })
-  const c = m.contributions.at(-1)
-  assert.equal(c.kind, 'brief')
-  assert.equal(c.text, 'Briefing summary.')
-})
-
-test('C7: produce contribution is accepted with non-empty text', () => {
-  let m = startMeeting(createMeeting(base()))
-  m = submitContribution(m, { participant: alice, kind: 'produce', text: 'Production artifact ref.' })
-  const c = m.contributions.at(-1)
-  assert.equal(c.kind, 'produce')
-  assert.equal(c.text, 'Production artifact ref.')
-})
-
-test('C7: review contribution is accepted with non-empty text', () => {
-  let m = startMeeting(createMeeting(base()))
-  m = submitContribution(m, { participant: alice, kind: 'review', text: 'LGTM.' })
-  const c = m.contributions.at(-1)
-  assert.equal(c.kind, 'review')
-  assert.equal(c.text, 'LGTM.')
-})
-
-test('C7: unknown contribution kind is rejected', () => {
-  const m = startMeeting(createMeeting(base()))
-  assert.throws(
-    () => submitContribution(m, { participant: alice, kind: 'vote', text: 'Yes.' }),
-    err => err instanceof MeetingValidationError && /kind must be speak, pass, brief, produce, or review/.test(err.message)
-  )
-})
-
-test('C7: brief kind without text is rejected', () => {
-  const m = startMeeting(createMeeting(base()))
-  assert.throws(
-    () => submitContribution(m, { participant: alice, kind: 'brief' }),
-    err => err instanceof MeetingValidationError && /contribution\.text/.test(err.message)
-  )
-})
-
-test('C7: produce kind without text is rejected', () => {
-  const m = startMeeting(createMeeting(base()))
-  assert.throws(
-    () => submitContribution(m, { participant: alice, kind: 'produce' }),
-    err => err instanceof MeetingValidationError && /contribution\.text/.test(err.message)
-  )
-})
-
-test('C7: review kind without text is rejected', () => {
-  const m = startMeeting(createMeeting(base()))
-  assert.throws(
-    () => submitContribution(m, { participant: alice, kind: 'review' }),
-    err => err instanceof MeetingValidationError && /contribution\.text/.test(err.message)
-  )
-})
-
-// ---------------------------------------------------------------------------
-// C8 — non-production auto-complete guard (regression)
-// ---------------------------------------------------------------------------
-
-test('C8: non-production meeting still auto-completes on all-pass round (no regression)', () => {
-  let m = startMeeting(createMeeting(base()))
-  m = submitContribution(m, { participant: alice, kind: 'pass' })
-  m = submitContribution(m, { participant: bob, kind: 'pass' })
-  assert.equal(m.state, 'completed')
-})
-
-test('C8: non-production meeting still auto-completes at round cap', () => {
-  let m = startMeeting(createMeeting(base({ maxRounds: 1 })))
-  m = submitContribution(m, { participant: alice, kind: 'speak', text: 'Point.' })
-  m = submitContribution(m, { participant: bob, kind: 'pass' })
-  assert.equal(m.state, 'completed')
-})
-
-test('C8: non-production meeting with new kinds (brief/produce/review) still auto-completes at round cap', () => {
-  let m = startMeeting(createMeeting(base({ maxRounds: 1 })))
-  m = submitContribution(m, { participant: alice, kind: 'brief', text: 'Here is the brief.' })
-  m = submitContribution(m, { participant: bob, kind: 'review', text: 'Reviewed.' })
-  // round capped, non-production — should auto-complete
-  assert.equal(m.state, 'completed')
-})
-
-test('C8: production meeting with new kinds does NOT auto-complete at round cap', () => {
-  let m = startMeeting(createMeeting(prodBase({ maxRounds: 1 })))
-  m = submitContribution(m, { participant: alice, kind: 'brief', text: 'Brief.' })
-  m = submitContribution(m, { participant: bob, kind: 'review', text: 'LGTM.' })
-  // production meeting — must not auto-complete
-  assert.notEqual(m.state, 'completed')
-  assert.equal(m.state, 'running')
+test('an unknown turn role is refused rather than silently widened', () => {
+  assert.throws(() => meetingRoleRestrictions('owner'), /unknown meeting turn role/)
 })

@@ -1038,6 +1038,7 @@ export { Tip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@
 export type { GatewayEventListener } from '@/contrib/events'
 export type {
   HermesPlugin,
+  PluginBinaryResponse,
   PluginContext,
   PluginContribution,
   PluginNativeNotificationInput,

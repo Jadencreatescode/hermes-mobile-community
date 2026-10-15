@@ -23,6 +23,7 @@ const participants = [
 ]
 
 const a2aParticipant = { connectionId: 'a2a', profile: 'agent-1' }
+
 const a2aAgent = {
   assignments: [],
   displayName: 'A2A Harness Bot',
@@ -80,7 +81,9 @@ describe('Operations structured meeting client', () => {
       runnerSessions: { 'a2a::agent-1': 'agent-1' },
       state: 'running' as const
     }
+
     const { runnerSessions: _staleBinding, ...meetingWithoutBinding } = meeting
+
     const rest = vi.fn().mockResolvedValue({
       meeting: {
         ...meetingWithoutBinding,
@@ -110,6 +113,7 @@ describe('Operations structured meeting client', () => {
       runnerSessions: { 'a2a::agent-1': 'agent-1' },
       state: 'running' as const
     }
+
     const rest = vi.fn(async (path: string, options?: { method?: string }) => {
       if (path === '/meetings/meeting-1') {
         return { meeting, version: 3 }
@@ -137,6 +141,7 @@ describe('Operations structured meeting client', () => {
 
     unbind = bindOperationsApi(rest as never)
     const requestProfile = vi.fn()
+
     const result = await injectMeetingParticipantPrompt(
       { requestProfile } as never,
       meeting,
@@ -177,8 +182,10 @@ describe('Operations structured meeting client', () => {
       runnerSessions: { 'bridge::research': 'stored-research' },
       state: 'running' as const
     }
+
     const rest = vi.fn().mockResolvedValue({ meeting, version: 4 })
     let resumes = 0
+
     const requestProfile = vi.fn(async (_route, method: string) => {
       if (method === 'prompt.submit') {return { ok: true }}
 
@@ -197,6 +204,7 @@ describe('Operations structured meeting client', () => {
     })
 
     unbind = bindOperationsApi(rest)
+
     const result = await injectMeetingParticipantPrompt(
       { requestProfile } as never,
       meeting,
@@ -232,6 +240,7 @@ describe('Operations structured meeting client', () => {
       runnerSessions: { 'a2a::agent-1': 'agent-1' },
       state: 'running' as const
     }
+
     const rest = vi.fn().mockResolvedValue({
       messages: [
         { role: 'user', content: 'Unrelated private conversation.' },
@@ -246,6 +255,7 @@ describe('Operations structured meeting client', () => {
     })
 
     unbind = bindOperationsApi(rest)
+
     const result = await getMeetingParticipantConversation(
       { requestProfile: vi.fn() } as never,
       meeting,
@@ -274,6 +284,7 @@ describe('Operations structured meeting client', () => {
       runnerSessions: { 'bridge::research': 'stored-research' },
       state: 'running' as const
     }
+
     const requestProfile = vi.fn().mockResolvedValue({
       messages: [
         { role: 'user', content: '<hermes-meeting id="meeting-1">\nCheck the release evidence.' },
@@ -321,7 +332,9 @@ describe('Operations structured meeting client', () => {
       runnerSessions: { 'bridge::research': 'stored-research' },
       state: 'running' as const
     }
+
     const requestProfile = vi.fn().mockResolvedValue({ messages: [] })
+
     const connectedAgent = {
       ...a2aAgent,
       id: 'bridge::research',
@@ -346,6 +359,7 @@ describe('Operations structured meeting client', () => {
       runnerSessions: { 'bridge::research': 'stored-research' },
       state: 'running' as const
     }
+
     const requestProfile = vi.fn().mockResolvedValue({ messages: [] })
 
     await expect(getMeetingParticipantConversation(
@@ -465,17 +479,20 @@ describe('Operations structured meeting client', () => {
 
   it('applies every meeting round run freshness boundary', () => {
     const now = 2_000_000_000_000
+
     const freshMarker = {
       participant: participants[1],
       round: 2,
       startedAt: now - MEETING_ROUND_RUN_LEASE_MS + 1
     }
+
     const running: MeetingRecord = {
       ...draft(),
       currentRound: 2,
       roundRun: freshMarker,
       state: 'running'
     }
+
     const cases: Array<{ caseName: string; expected: boolean; meeting: MeetingRecord }> = [
       { caseName: 'one millisecond inside the lease', expected: true, meeting: running },
       {
@@ -625,6 +642,7 @@ describe('Operations structured meeting client', () => {
       pending: { participant: participants[1], requestId: 'request-1' },
       state: 'waiting' as const
     }
+
     const rest = vi.fn()
 
     unbind = bindOperationsApi(rest as never)
@@ -677,11 +695,14 @@ describe('Operations structured meeting client', () => {
       participants: [participants[0], a2aParticipant],
       state: 'running'
     }
+
     const connectedA2A = {
       ...a2aAgent,
       sourceKind: 'connected'
     }
+
     const writes: Array<Record<string, unknown>> = []
+
     const rest = vi.fn(async (path: string, options?: { body?: { record?: Record<string, unknown> } }) => {
       if (path.startsWith('/agents/a2a/')) {
         throw new Error('public A2A REST must not be called')
@@ -694,6 +715,7 @@ describe('Operations structured meeting client', () => {
 
       return { meeting: record, version: 5 + writes.length }
     })
+
     const requestProfile = vi.fn()
 
     unbind = bindOperationsApi(rest as never)
@@ -714,6 +736,7 @@ describe('Operations structured meeting client', () => {
 
   it('completes a public A2A round with one deterministic request identity and a durable contribution', async () => {
     vi.useFakeTimers()
+
     const running: MeetingRecord = {
       ...draft(),
       contributions: [{
@@ -728,6 +751,7 @@ describe('Operations structured meeting client', () => {
       participants: [participants[0], a2aParticipant],
       state: 'running'
     }
+
     const requestProfile = vi.fn()
 
     const executeRound = async () => {
@@ -735,6 +759,7 @@ describe('Operations structured meeting client', () => {
       let storedVersion = 5
       const requestIds: string[] = []
       const writes: Array<Record<string, unknown>> = []
+
       const rest = vi.fn(async (path: string, options?: {
         body?: { message?: string; record?: Record<string, unknown>; request_id?: string }
         method?: string
@@ -776,6 +801,7 @@ describe('Operations structured meeting client', () => {
       })
 
       unbind = bindOperationsApi(rest as never)
+
       const pending = runMeetingRound(
         { requestProfile } as never,
         running,
@@ -836,9 +862,11 @@ describe('Operations structured meeting client', () => {
       participants: [participants[0], a2aParticipant],
       state: 'running'
     }
+
     let storedVersion = 5
     const requestIds: string[] = []
     const writes: Array<Record<string, unknown>> = []
+
     const rest = vi.fn(async (path: string, options?: {
       body?: { record?: Record<string, unknown> }
       method?: string
@@ -861,9 +889,11 @@ describe('Operations structured meeting client', () => {
 
       return { messages: [], request_status: 'waiting' }
     })
+
     const requestProfile = vi.fn()
 
     unbind = bindOperationsApi(rest as never)
+
     const result = await runMeetingRound(
       { requestProfile } as never,
       running,
@@ -903,6 +933,7 @@ describe('Operations structured meeting client', () => {
 
   it('claims before native RPC and durably checkpoints each contribution before progress', async () => {
     vi.useFakeTimers()
+
     const running: MeetingRecord = {
       ...draft(),
       contributions: [{
@@ -916,9 +947,11 @@ describe('Operations structured meeting client', () => {
       currentRound: 1,
       state: 'running'
     }
+
     const events: string[] = []
     let storedVersion = 5
     const writes: Array<{ expectedVersion: number; record: Record<string, unknown> }> = []
+
     const rest = vi.fn(async (_path: string, options?: { body?: { expected_version?: number; record?: Record<string, unknown> } }) => {
       const expectedVersion = options?.body?.expected_version
       const record = options?.body?.record
@@ -930,12 +963,16 @@ describe('Operations structured meeting client', () => {
 
       return { meeting: record, version: storedVersion }
     })
+
     const resumeCounts = new Map<string, number>()
+
     const requestProfile = vi.fn(async (route, method: string) => {
       events.push(`rpc:${method}:${route.profile}`)
+
       if (method === 'session.create') {
         return { session_id: 'runtime-research', stored_session_id: 'stored-research' }
       }
+
       if (method === 'session.resume') {
         const count = resumeCounts.get(route.profile) ?? 0
         resumeCounts.set(route.profile, count + 1)
@@ -944,17 +981,21 @@ describe('Operations structured meeting client', () => {
           ? { session_id: 'runtime-research', messages: [], running: false }
           : { session_id: 'runtime-research', messages: [{ role: 'assistant', content: '(pass)' }], running: false }
       }
+
       if (method === 'prompt.submit') {return { ok: true }}
       throw new Error(`unexpected ${method}`)
     })
+
     const onParticipantStart = vi.fn(async participant => {
       events.push(`ui:start:${participant.profile}`)
     })
+
     const onProgress = vi.fn(async value => {
       events.push(`ui:progress:${value.version}`)
     })
 
     unbind = bindOperationsApi(rest as never)
+
     const pendingResult = runMeetingRound(
       { requestProfile } as never,
       running,
@@ -1001,6 +1042,7 @@ describe('Operations structured meeting client', () => {
 
   it('recovers a waiting participant turn before prompting anyone again', async () => {
     vi.useFakeTimers()
+
     const waiting: MeetingRecord = {
       ...draft(),
       contributions: [{
@@ -1021,8 +1063,10 @@ describe('Operations structured meeting client', () => {
       runnerSessions: { 'bridge::research': 'stored-research' },
       state: 'waiting'
     }
+
     let storedVersion = 5
     const writes: Array<Record<string, unknown>> = []
+
     const rest = vi.fn(async (_path: string, options?: { body?: { record?: Record<string, unknown> } }) => {
       const record = options?.body?.record
 
@@ -1032,6 +1076,7 @@ describe('Operations structured meeting client', () => {
 
       return { meeting: record, version: storedVersion }
     })
+
     const requestProfile = vi.fn(async (_route, method: string) => {
       if (method !== 'session.resume') {throw new Error(`unexpected ${method}`)}
 
@@ -1046,6 +1091,7 @@ describe('Operations structured meeting client', () => {
     })
 
     unbind = bindOperationsApi(rest as never)
+
     const pendingResult = runMeetingRound(
       { requestProfile } as never,
       waiting,
@@ -1075,12 +1121,14 @@ describe('Operations structured meeting client', () => {
 
   it('rejects a fresh duplicate round before REST writes or native RPC', async () => {
     const now = 2_000_000_000_000
+
     const running: MeetingRecord = {
       ...draft(),
       currentRound: 1,
       roundRun: { participant: participants[0], round: 1, startedAt: now - 1 },
       state: 'running'
     }
+
     const rest = vi.fn()
     const requestProfile = vi.fn()
 
@@ -1099,6 +1147,7 @@ describe('Operations structured meeting client', () => {
 
   it('replaces a stale round marker with a fresh claim before native RPC', async () => {
     const now = 2_000_000_000_000
+
     const running: MeetingRecord = {
       ...draft(),
       currentRound: 1,
@@ -1109,8 +1158,10 @@ describe('Operations structured meeting client', () => {
       },
       state: 'running'
     }
+
     const writes: Array<{ expectedVersion: number; record: Record<string, unknown> }> = []
     let storedVersion = 5
+
     const rest = vi.fn(async (_path: string, options?: { body?: { expected_version?: number; record?: Record<string, unknown> } }) => {
       const expectedVersion = options?.body?.expected_version
       const record = options?.body?.record
@@ -1121,10 +1172,12 @@ describe('Operations structured meeting client', () => {
 
       return { meeting: record, version: storedVersion }
     })
+
     const requestProfile = vi.fn(async (_route, method: string) => {
       if (method === 'session.create') {
         return { session_id: 'runtime-chair', stored_session_id: 'stored-chair' }
       }
+
       if (method === 'session.resume') {
         return {
           messages: [],
@@ -1132,10 +1185,12 @@ describe('Operations structured meeting client', () => {
           session_id: 'runtime-chair'
         }
       }
+
       throw new Error(`unexpected ${method}`)
     })
 
     unbind = bindOperationsApi(rest as never)
+
     const result = await runMeetingRound(
       { requestProfile } as never,
       running,
@@ -1165,17 +1220,21 @@ describe('Operations structured meeting client', () => {
       currentRound: 1,
       state: 'running'
     }
+
     const authoritative: MeetingRecord = {
       ...running,
       pending: { kind: 'clarify', question: 'Choose a target.' },
       state: 'waiting'
     }
+
     const rest = vi.fn()
       .mockRejectedValueOnce(Object.assign(new Error('409 Meeting version conflict'), { status: 409 }))
       .mockResolvedValueOnce({ meeting: authoritative, version: 9 })
+
     const requestProfile = vi.fn()
 
     unbind = bindOperationsApi(rest as never)
+
     const result = await runMeetingRound(
       { requestProfile } as never,
       running,
@@ -1208,20 +1267,24 @@ describe('Operations structured meeting client', () => {
       currentRound: 1,
       state: 'running'
     }
+
     const nativeError = new Error('native session creation failed')
     const writes: Array<{ expectedVersion: number; record: Record<string, unknown> }> = []
+
     const rest = vi.fn(async (_path: string, options?: { body?: { expected_version?: number; record?: Record<string, unknown> } }) => {
       const expectedVersion = options?.body?.expected_version
       const record = options?.body?.record
 
       if (expectedVersion === undefined || !record) {throw new Error('unexpected read')}
       writes.push({ expectedVersion, record })
+
       if (writes.length === 2 && cleanupConflict) {
         throw Object.assign(new Error('409 Meeting version conflict'), { status: 409 })
       }
 
       return { meeting: record, version: expectedVersion + 1 }
     })
+
     const requestProfile = vi.fn().mockRejectedValue(nativeError)
 
     unbind = bindOperationsApi(rest as never)

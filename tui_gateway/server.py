@@ -953,6 +953,22 @@ def _teardown_session(session: dict | None, *, end_reason: str = "tui_close") ->
             agent.close()
     except Exception:
         pass
+    try:
+        from tools.terminal_tool import clear_task_env_overrides
+
+        if key := session.get("session_key"):
+            expected = {"cwd": session.get("cwd")}
+            if session.get("_cwd_fd") is not None:
+                expected["file_scope_root"] = session.get("cwd")
+            clear_task_env_overrides(key, expected=expected)
+    except Exception:
+        pass
+    try:
+        cwd_fd = session.pop("_cwd_fd", None)
+        if cwd_fd is not None:
+            os.close(int(cwd_fd))
+    except Exception:
+        pass
     # NOTE: the slash-worker is closed inside _finalize_session (the single
     # _finalized-guarded chokepoint that main folded it into), exactly once.
     # We deliberately do NOT re-close it here — _teardown_session's job beyond
@@ -2707,6 +2723,59 @@ def _session_cwd(session: dict | None) -> str:
     return _completion_cwd()
 
 
+def _pinned_workspace_cwd(params: dict):
+    """Turn a verified workspace identity into a descriptor-backed cwd."""
+    identity = params.get("cwd_identity")
+    if not isinstance(identity, dict):
+        return None
+    raw = str(params.get("cwd") or "").strip()
+    try:
+        expected = (int(identity["device"]), int(identity["inode"]))
+        expected_output = (int(identity["output_device"]), int(identity["output_inode"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("cwd_identity is invalid") from exc
+    if not raw:
+        raise ValueError("cwd is required with cwd_identity")
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(raw, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != expected:
+            raise ValueError("the workspace directory identity changed")
+        output_fd = os.open("output", flags, dir_fd=descriptor)
+        try:
+            output = os.fstat(output_fd)
+            if (output.st_dev, output.st_ino) != expected_output:
+                raise ValueError("the workspace output identity changed")
+        finally:
+            os.close(output_fd)
+        candidates = (f"/proc/{os.getpid()}/fd/{descriptor}", f"/dev/fd/{descriptor}")
+        capability = next((value for value in candidates if os.path.isdir(value)), "")
+        if not capability:
+            raise ValueError("descriptor-backed workspaces are unsupported on this host")
+        return {
+            "capability": capability,
+            "descriptor": descriptor,
+            "identity": expected,
+            "output_identity": expected_output,
+            "persisted_cwd": raw,
+        }
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _attach_pinned_cwd(record: dict, pinned: dict | None) -> dict:
+    if pinned:
+        record["cwd"] = pinned["capability"]
+        record["_cwd_fd"] = pinned["descriptor"]
+        record["_cwd_identity"] = pinned["identity"]
+        record["_cwd_output_identity"] = pinned["output_identity"]
+        record["persisted_cwd"] = pinned["persisted_cwd"]
+        record["explicit_cwd"] = True
+    return record
+
+
 # Sources whose launch directory is an artifact of how the app was started, not
 # a workspace the user picked. Everything else is terminal-started: the process
 # runs in a directory the user deliberately cd'd into.
@@ -2720,7 +2789,7 @@ def _persisted_session_cwd(session: dict) -> str | None:
     workspace for terminal sessions but not for the desktop.
     """
     if session.get("explicit_cwd"):
-        return _session_cwd(session)
+        return str(session.get("persisted_cwd") or _session_cwd(session))
     if _session_source(session) in _LAUNCH_CWD_NOT_A_WORKSPACE:
         return None
     # Only the session's OWN directory. `_session_cwd` falls back to the
@@ -2919,18 +2988,24 @@ def _session_source(session: dict | None) -> str:
     return _resolve_session_platform()
 
 
-def _register_session_cwd(session: dict | None) -> None:
+def _register_session_cwd(session: dict | None) -> bool:
     if not session:
-        return
+        return False
     try:
         from tools.terminal_tool import register_task_env_overrides
 
         cwd, cwd_source = _terminal_task_cwd_with_source(session)
-        register_task_env_overrides(
-            session["session_key"], {"cwd": cwd, "cwd_source": cwd_source}
-        )
+        overrides = {"cwd": cwd, "cwd_source": cwd_source}
+        if session.get("_cwd_fd") is not None:
+            # A cwd_identity-backed internal session is a filesystem capability,
+            # not merely a preferred working directory. File tools consume this
+            # root to reject absolute paths, parent traversal, and symlink escapes.
+            overrides["file_scope_root"] = cwd
+        register_task_env_overrides(session["session_key"], overrides)
+        return True
     except Exception:
-        pass
+        logger.exception("failed to register session working-directory authority")
+        return False
 
 
 def _ensure_session_db_row(session: dict) -> None:
@@ -8771,21 +8846,52 @@ def _session_satisfies_agent_restrictions(
     )
 
 
+def _dispose_unregistered_session(record: dict | None, lease=None) -> None:
+    """Release every capability owned by a resume candidate that lost ownership."""
+    if not record:
+        if lease is not None:
+            lease.release()
+        return
+    cwd_fd = record.pop("_cwd_fd", None)
+    if cwd_fd is not None:
+        try:
+            os.close(int(cwd_fd))
+        except OSError:
+            pass
+    stored_lease = record.pop("active_session_lease", None)
+    owned_lease = lease if lease is not None else stored_lease
+    if stored_lease is not None and stored_lease is not owned_lease:
+        stored_lease.release()
+    if owned_lease is not None:
+        owned_lease.release()
+
+
+class WorkspaceScopeRegistrationError(RuntimeError):
+    """A pinned workspace could not install its file-tool authority."""
+
+
 def _claim_or_reuse_live(
     sid: str, session_key: str, record: dict, lease
 ) -> tuple[str, dict] | None:
     """Register ``record`` as the live session for ``session_key`` under the
     resume lock, or — if a concurrent resume already won — release ``lease`` and
     return the winner for the caller to reuse."""
+    refused = None
     with _session_resume_lock:
         live = _find_live_session_by_key(session_key)
         if live is not None:
-            if lease is not None:
-                lease.release()
+            _dispose_unregistered_session(record, lease)
             return live
         with _sessions_lock:
             _sessions[sid] = record
-            _register_session_cwd(_sessions[sid])
+            registered = _register_session_cwd(_sessions[sid])
+            if record.get("_cwd_fd") is not None and not registered:
+                refused = _sessions.pop(sid, None)
+    if refused is not None:
+        _dispose_unregistered_session(refused, lease)
+        raise WorkspaceScopeRegistrationError(
+            "workspace authority refused: filesystem scope unavailable"
+        )
     return None
 
 
@@ -8859,9 +8965,10 @@ def _schedule_resume_hydration(
             _emit("error", sid, {"message": message})
             with _sessions_lock:
                 discarded = _sessions.pop(sid, None) if _sessions.get(sid) is session else None
-            lease = (discarded or {}).get("active_session_lease")
-            if lease is not None:
-                lease.release()
+            if discarded is not None:
+                discarded["_sid"] = sid
+                _dispose_unregistered_session(discarded)
+                _teardown_session(discarded, end_reason="resume_failed")
         finally:
             if close_db and hasattr(db, "close"):
                 try:
@@ -10949,7 +11056,11 @@ def _run_prompt_submit(
                 history = list(session["history"])
                 history_version = int(session.get("history_version", 0))
             cwd = _session_cwd(session)
-            _register_session_cwd(session)
+            cwd_registered = _register_session_cwd(session)
+            if session.get("_cwd_fd") is not None and not cwd_registered:
+                raise WorkspaceScopeRegistrationError(
+                    "workspace authority refused: filesystem scope unavailable"
+                )
             cols = session.get("cols", 80)
             streamer = make_stream_renderer(cols)
             prompt = text

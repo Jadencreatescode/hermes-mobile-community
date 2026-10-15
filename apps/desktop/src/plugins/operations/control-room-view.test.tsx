@@ -162,6 +162,15 @@ describe('ControlRoomView visual shell', () => {
     expect(screen.getByLabelText('Agent card URL')).toBeTruthy()
   })
 
+  it('opens the requested meeting flow from the Control Room hero', () => {
+    const onMakeMeeting = vi.fn()
+
+    render(<ControlRoomView onMakeMeeting={onMakeMeeting} snapshot={emptySnapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Make a Meeting' }))
+    expect(onMakeMeeting).toHaveBeenCalledOnce()
+  })
+
   it('opens its existing onboarding dialog when the route controls it', () => {
     render(<ControlRoomView onboardingOpen snapshot={emptySnapshot} />)
 

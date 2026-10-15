@@ -206,7 +206,7 @@ import {
 } from './native-oauth'
 import { runNativeLogin } from './native-oauth-login'
 import { loadNativeTokenSet, type NativeTokenStoreIo, persistNativeTokenSet } from './native-token-store'
-import { serializeJsonBody, setJsonRequestHeaders } from './oauth-net-request'
+import { binaryTransportResponse, serializeJsonBody, setJsonRequestHeaders } from './oauth-net-request'
 import {
   createParentStartMarkerResolver,
   electronProcessStartMarker,
@@ -4855,6 +4855,26 @@ function fetchJson(url, token, options: any = {}) {
         res.on('error', reject)
         res.on('data', chunk => chunks.push(chunk))
         res.on('end', () => {
+          // Binary responses (artifact previews, package downloads) are
+          // returned as raw bytes plus the response media type and the
+          // response headers the caller needs to verify a digest. They are
+          // NEVER JSON-parsed, and they ride the same authenticated transport.
+          if (options.responseType === 'binary') {
+            const shaped = binaryTransportResponse(
+              res.statusCode,
+              res.headers,
+              Buffer.concat(chunks)
+            )
+
+            if (shaped instanceof Error) {
+              reject(shaped)
+            } else {
+              resolve(shaped)
+            }
+
+            return
+          }
+
           const text = Buffer.concat(chunks).toString('utf8')
 
           if ((res.statusCode || 500) >= 400) {
@@ -7123,6 +7143,27 @@ function fetchJsonViaOauthSession(url, options: any = {}) {
         }
 
         clearTimeout(timer)
+
+        // Binary responses (artifact previews, package downloads) ride this
+        // same cookie-authenticated transport. Honor the caller's
+        // responseType BEFORE any utf8 decode: JSON-parsing a ZIP would turn
+        // a healthy 200 into a bogus "invalid JSON" failure.
+        if (options.responseType === 'binary') {
+          const shaped = binaryTransportResponse(
+            res.statusCode,
+            res.headers,
+            Buffer.concat(chunks)
+          )
+
+          if (shaped instanceof Error) {
+            reject(shaped)
+          } else {
+            resolve(shaped)
+          }
+
+          return
+        }
+
         const text = Buffer.concat(chunks).toString('utf8')
         const statusCode = res.statusCode || 500
 
@@ -13140,7 +13181,14 @@ async function getJsonForBackend(descriptor, path, opts: any = {}) {
 async function fetchJsonForBackend(
   descriptor,
   path,
-  opts: { method?: string; body?: unknown; upload?: unknown; timeoutMs?: number } = {}
+  opts: {
+    method?: string
+    body?: unknown
+    upload?: unknown
+    timeoutMs?: number
+    headers?: Record<string, string>
+    responseType?: 'json' | 'binary'
+  } = {}
 ) {
   const url = `${descriptor.baseUrl}${path}`
 
@@ -13159,7 +13207,8 @@ async function fetchJsonForBackend(
         body: opts.body,
         timeoutMs: opts.timeoutMs,
         bearer: nativeAt,
-        headers: descriptor.headers
+        responseType: opts.responseType,
+        headers: { ...descriptor.headers, ...(opts.headers || {}) }
       })
     }
 
@@ -13167,7 +13216,8 @@ async function fetchJsonForBackend(
       method: opts.method,
       body: opts.body,
       timeoutMs: opts.timeoutMs,
-      headers: descriptor.headers
+      responseType: opts.responseType,
+      headers: { ...descriptor.headers, ...(opts.headers || {}) }
     })
   }
 
@@ -13176,7 +13226,8 @@ async function fetchJsonForBackend(
     body: opts.body,
     upload: opts.upload,
     timeoutMs: opts.timeoutMs,
-    headers: descriptor.headers
+    responseType: opts.responseType,
+    headers: { ...descriptor.headers, ...(opts.headers || {}) }
   })
 }
 
@@ -13660,6 +13711,28 @@ async function pooledRegistrySessionSources(): Promise<RegistrySessionSource[]> 
   return sources
 }
 
+/** Bounded request headers a renderer REST call may add.
+ *
+ *  An allowlist, not a pass-through: only `Idempotency-Key` is forwarded, so a
+ *  renderer can make a lifecycle mutation replay-safe without being able to
+ *  forge authentication, routing, or content-negotiation headers. */
+export function apiRequestHeaders(request: any): Record<string, string> {
+  const supplied = request?.headers
+
+  if (!supplied || typeof supplied !== 'object' || Array.isArray(supplied)) {
+    return {}
+  }
+
+  const key = String((supplied as Record<string, unknown>)['Idempotency-Key'] ?? '').trim()
+
+  return key && key.length <= 200 && !key.includes('\u0000') ? { 'Idempotency-Key': key } : {}
+}
+
+/** Only an explicit `binary` opts out of JSON parsing; anything else is JSON. */
+export function apiRequestResponseType(request: any): 'json' | 'binary' {
+  return request?.responseType === 'binary' ? 'binary' : 'json'
+}
+
 async function handleHermesApiRequest(request) {
   // Registry-pinned request (request.connectionId): the renderer is working
   // against a REGISTERED gateway connection, so the data — cron jobs and their
@@ -13686,6 +13759,8 @@ async function handleHermesApiRequest(request) {
       method: request?.method,
       body: request?.body,
       upload: request?.upload,
+      headers: apiRequestHeaders(request),
+      responseType: apiRequestResponseType(request),
       timeoutMs: resolveTimeoutMs(request?.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
     })
   }
@@ -13756,12 +13831,16 @@ async function handleHermesApiRequest(request) {
           method: request?.method,
           body: request?.body,
           timeoutMs,
+          headers: apiRequestHeaders(request),
+          responseType: apiRequestResponseType(request),
           bearer: restAuth.token
         })
       } else {
         response = await fetchJsonViaOauthSession(url, {
           method: request?.method,
           body: request?.body,
+          headers: apiRequestHeaders(request),
+          responseType: apiRequestResponseType(request),
           timeoutMs
         })
       }
@@ -13770,6 +13849,8 @@ async function handleHermesApiRequest(request) {
         method: request?.method,
         body: request?.body,
         upload: request?.upload,
+        headers: apiRequestHeaders(request),
+        responseType: apiRequestResponseType(request),
         timeoutMs
       })
     }

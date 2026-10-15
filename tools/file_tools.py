@@ -9,7 +9,7 @@ import os
 import posixpath
 import sys
 import threading
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from agent.file_safety import get_read_block_error
 from tools.binary_extensions import (
@@ -274,6 +274,110 @@ def _registered_task_cwd_override(task_id: str = "default") -> str | None:
     return _sentinel_free_abs_cwd(overrides.get("cwd"))
 
 
+class ProductionFileScopeError(PermissionError):
+    """A production-session file request escaped its server-minted workspace."""
+
+
+def _production_file_scope_root(task_id: str = "default") -> Path | None:
+    """Return the descriptor-backed root assigned to a production session.
+
+    The gateway adds this override only after validating ``cwd_identity`` and
+    pinning the workspace directory with an open descriptor. Ordinary sessions
+    have no such override and retain the existing unrestricted file behavior.
+    """
+    try:
+        from tools.terminal_tool import resolve_task_overrides
+
+        raw = resolve_task_overrides(task_id).get("file_scope_root")
+    except Exception:
+        raw = None
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip() or not os.path.isabs(raw):
+        raise ProductionFileScopeError("Production file scope is unavailable.")
+    root = Path(raw)
+    try:
+        if not root.is_dir():
+            raise ProductionFileScopeError("Production file scope is unavailable.")
+    except OSError as exc:
+        raise ProductionFileScopeError("Production file scope is unavailable.") from exc
+    return root
+
+
+def _production_scoped_path(
+    filepath: str, task_id: str = "default"
+) -> Path | None:
+    """Resolve one model-supplied path inside a production workspace.
+
+    Production file capabilities are deliberately narrower than normal Hermes
+    file tools: paths must be relative, may not contain parent traversal, and
+    may not cross a symlink at any existing component. The returned path stays
+    beneath the gateway's descriptor capability instead of resolving that
+    anchor back to a mutable host pathname.
+    """
+    root = _production_file_scope_root(task_id)
+    if root is None:
+        return None
+    if not isinstance(filepath, str) or not filepath:
+        raise ProductionFileScopeError(
+            "Production file scope requires a non-empty relative path."
+        )
+    if "\x00" in filepath:
+        raise ProductionFileScopeError("Production file scope rejected an invalid path.")
+
+    posix = PurePosixPath(filepath)
+    windows = PureWindowsPath(filepath)
+    if posix.is_absolute() or windows.is_absolute() or Path(_expand_tilde(filepath)).is_absolute():
+        raise ProductionFileScopeError(
+            "Production file scope rejects absolute paths; use a workspace-relative path."
+        )
+    if ".." in posix.parts or ".." in windows.parts:
+        raise ProductionFileScopeError(
+            "Production file scope rejects parent-directory traversal."
+        )
+
+    parts = [part for part in posix.parts if part not in ("", ".")]
+    candidate = root
+    for part in parts:
+        candidate = candidate / part
+        try:
+            if candidate.is_symlink():
+                raise ProductionFileScopeError(
+                    "Production file scope rejects symlink paths."
+                )
+        except OSError as exc:
+            raise ProductionFileScopeError(
+                "Production file scope could not validate the requested path."
+            ) from exc
+    return candidate
+
+
+def _production_scope_error(filepath: str, task_id: str = "default") -> str | None:
+    """Return a secret-free scope refusal for one model-supplied path."""
+    try:
+        _production_scoped_path(filepath, task_id)
+    except ProductionFileScopeError as exc:
+        return str(exc)
+    return None
+
+
+def _production_search_scope_error(path: str, task_id: str = "default") -> str | None:
+    """Reject the search tool's implicit multi-root syntax in a scoped session."""
+    try:
+        scoped = _production_scoped_path(path, task_id)
+    except ProductionFileScopeError as exc:
+        return str(exc)
+    if scoped is None or scoped.exists():
+        return None
+    parts = [part for chunk in path.split(",") for part in chunk.split() if part]
+    if len(parts) >= 2:
+        return (
+            "Production file scope rejects multiple search roots; search one "
+            "workspace-relative path at a time."
+        )
+    return None
+
+
 def _authoritative_workspace_root(task_id: str = "default") -> str | None:
     """Best-effort absolute workspace root for divergence checks.
 
@@ -376,6 +480,10 @@ def _resolve_path_for_task(filepath: str, task_id: str = "default") -> Path | Pu
     translated to ``C:\\Users\\...`` before resolution so file tools don't
     treat them as relative ``\\c\\Users\\...`` under the process cwd.
     """
+    scoped = _production_scoped_path(filepath, task_id)
+    if scoped is not None:
+        return scoped
+
     container_paths = _uses_container_paths(task_id)
     if container_paths:
         expanded = _expand_tilde(filepath)
@@ -1626,6 +1734,10 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 2000, task_id: str =
     try:
         offset, limit = normalize_read_pagination(offset, limit)
 
+        scope_err = _production_scope_error(path, task_id)
+        if scope_err:
+            return tool_error(scope_err)
+
         # ── Device path guard ─────────────────────────────────────────
         # Block paths that would hang the process (infinite output,
         # blocking on input).  Pure path check — no I/O.
@@ -2230,6 +2342,9 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
     Pass ``True`` after explicit user direction — same shape as ``force``
     on the terminal tool.
     """
+    scope_err = _production_scope_error(path, task_id)
+    if scope_err:
+        return tool_error(scope_err)
     sensitive_err = _check_sensitive_path(path, task_id)
     if sensitive_err:
         return tool_error(sensitive_err)
@@ -2374,6 +2489,9 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                     return _err
                 _paths_to_check.append(v4a_path)
     for _p in _paths_to_check:
+        scope_err = _production_scope_error(_p, task_id)
+        if scope_err:
+            return tool_error(scope_err)
         sensitive_err = _check_sensitive_path(_p, task_id)
         if sensitive_err:
             return tool_error(sensitive_err)
@@ -2539,6 +2657,10 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
     """Search for content or files."""
     try:
         offset, limit = normalize_search_pagination(offset, limit)
+
+        scope_err = _production_search_scope_error(path, task_id)
+        if scope_err:
+            return tool_error(scope_err)
 
         # Track searches to detect *consecutive* repeated search loops.
         # Include pagination args so users can page through truncated

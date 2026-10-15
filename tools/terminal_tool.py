@@ -1185,6 +1185,7 @@ def _maybe_reap_docker_orphans(container_config: Dict[str, Any]) -> None:
 # This is never exposed to the model -- only infrastructure code calls it.
 # Thread-safe because each task_id is unique per rollout.
 _task_env_overrides: Dict[str, Dict[str, Any]] = {}
+_task_env_overrides_lock = threading.Lock()
 
 # ── Per-session cwd records (cwd rearchitecture, step 1) ────────────────────
 #
@@ -1255,7 +1256,8 @@ def register_task_env_overrides(task_id: str, overrides: Dict[str, Any]):
         task_id: The rollout's unique task identifier
         overrides: Dict of config keys to override
     """
-    _task_env_overrides[task_id] = overrides
+    with _task_env_overrides_lock:
+        _task_env_overrides[task_id] = overrides
 
     # If a live environment already exists for this task, a freshly registered
     # ``cwd`` override (e.g. the ACP client switching the editor's project root
@@ -1279,16 +1281,29 @@ def register_task_env_overrides(task_id: str, overrides: Dict[str, Any]):
             env.cwd = new_cwd
 
 
-def clear_task_env_overrides(task_id: str):
+def clear_task_env_overrides(
+    task_id: str, expected: Optional[Dict[str, Any]] = None
+) -> bool:
     """
     Clear environment overrides for a task after rollout completes.
 
     Called during cleanup to avoid stale entries accumulating.
     """
-    _task_env_overrides.pop(task_id, None)
-    clear_session_cwd(task_id)
+    with _task_env_overrides_lock:
+        current = _task_env_overrides.get(task_id)
+        if expected is not None and (
+            current is None
+            or any(current.get(key) != value for key, value in expected.items())
+        ):
+            return False
+        removed = _task_env_overrides.pop(task_id, None)
+    expected_cwd = expected.get("cwd") if expected else None
+    with _session_cwd_lock:
+        if expected_cwd is None or _session_cwd.get(task_id) == expected_cwd:
+            _session_cwd.pop(task_id, None)
     with _container_alias_lock:
         _container_aliases.pop(task_id, None)
+    return removed is not None
 
 
 # Subagent → parent container aliasing.  delegate_task children get their own
@@ -1354,9 +1369,11 @@ def _has_isolation_overrides(task_id: Optional[str]) -> bool:
     predicate — shared by container-key resolution and container creation so
     the two can't drift.
     """
-    if not task_id or task_id not in _task_env_overrides:
+    if not task_id:
         return False
-    return bool(set(_task_env_overrides[task_id].keys()) & _ISOLATION_OVERRIDE_KEYS)
+    with _task_env_overrides_lock:
+        overrides = _task_env_overrides.get(task_id)
+        return bool(overrides and set(overrides.keys()) & _ISOLATION_OVERRIDE_KEYS)
 
 
 def _resolve_container_task_id(task_id: Optional[str]) -> str:
@@ -1425,11 +1442,13 @@ def resolve_task_overrides(task_id: Optional[str]) -> Dict[str, Any]:
     source of that lookup so the terminal and file layers can't drift apart.
     """
     raw = task_id or "default"
-    return (
-        _task_env_overrides.get(raw)
-        or _task_env_overrides.get(_resolve_container_task_id(raw))
-        or {}
-    )
+    container_id = _resolve_container_task_id(raw)
+    with _task_env_overrides_lock:
+        return dict(
+            _task_env_overrides.get(raw)
+            or _task_env_overrides.get(container_id)
+            or {}
+        )
 
 
 def _resolve_task_host_cwd(config: Dict[str, Any], task_id: Optional[str]) -> Optional[str]:

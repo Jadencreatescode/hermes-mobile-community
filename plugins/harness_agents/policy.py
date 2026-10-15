@@ -10,8 +10,6 @@ import ipaddress
 import json
 import re
 import socket
-import urllib.error
-import urllib.request
 from types import MappingProxyType
 from typing import AbstractSet, Any, Final, Mapping
 from urllib.parse import urlsplit, urlunsplit
@@ -210,30 +208,10 @@ def validate_url(
     return scheme, host, port
 
 
-def _build_opener() -> urllib.request.OpenerDirector:
-    """Build an urllib opener that rejects redirects."""
-    handlers = [
-        urllib.request.HTTPHandler(),
-        urllib.request.HTTPSHandler(),
-    ]
-    return urllib.request.build_opener(*handlers)
 
 
-def _no_redirect_handler(opener: urllib.request.OpenerDirector) -> None:
-    """urllib does not follow redirects by default for custom openers,
-    but we also intercept HTTPError for redirect codes and treat them
-    as policy violations.
-    """
 
 
-class _NoRedirectProcessor(urllib.request.HTTPRedirectHandler):
-    def http_error_302(self, req, fp, code, msg, headers):
-        raise urllib.error.HTTPError(req.get_full_url(), code, msg, headers, fp)
-
-    http_error_301 = http_error_302
-    http_error_303 = http_error_302
-    http_error_307 = http_error_302
-    http_error_308 = http_error_302
 
 
 def fetch_json(
@@ -250,55 +228,51 @@ def fetch_json(
     """
     validate_url(url, allowlist=allowlist, require_https=True)
 
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-
     req_headers = {"Accept": "application/json"}
     if headers:
         req_headers.update(headers)
-    if data is not None:
+    if body is not None:
         req_headers.setdefault("Content-Type", "application/json")
 
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers=req_headers,
-        method=method,
-    )
+    import httpx
 
-    opener = urllib.request.build_opener(_NoRedirectProcessor)
+    from tools.url_safety import SSRFConnectionBlocked, ssrf_safe_http_transport
+
     try:
-        with opener.open(
-            req, timeout=_CONNECT_TIMEOUT_S
-        ) as resp:
-            # Headers arrived within the connect bound. Widen the socket
-            # timeout to the read bound for the bounded body read below.
-            # The attribute chain is CPython internals; if it is ever
-            # unavailable the connect timeout still bounds the read, so a
-            # failure here degrades safely and must not abort the fetch.
-            try:
-                resp.fp.raw._sock.settimeout(_READ_TIMEOUT_S)
-            except (AttributeError, OSError, TypeError):
-                pass
-            # Re-validate the final URL if it differed from the request
-            final_url = resp.geturl()
-            if final_url != url:
-                validate_url(final_url, allowlist=allowlist, require_https=True)
-
-            # Bounded read
-            content = resp.read(_MAX_RESPONSE_BYTES + 1)
-            if len(content) > _MAX_RESPONSE_BYTES:
-                raise ValueError("response exceeds the maximum allowed size")
-            if not content:
-                return {}
-            return json.loads(content.decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        if exc.code in _REDIRECT_CODES:
-            raise ValueError("redirects are not allowed") from exc
-        raise ValueError(f"HTTP error {exc.code}") from exc
-    except urllib.error.URLError as exc:
-        raise ValueError(f"request failed: {exc.reason}") from exc
+        timeout = httpx.Timeout(
+            connect=_CONNECT_TIMEOUT_S,
+            read=_READ_TIMEOUT_S,
+            write=_READ_TIMEOUT_S,
+            pool=_CONNECT_TIMEOUT_S,
+        )
+        with httpx.Client(
+            transport=ssrf_safe_http_transport(),
+            follow_redirects=False,
+            timeout=timeout,
+        ) as client:
+            with client.stream(method, url, headers=req_headers, json=body) as response:
+                if response.status_code in _REDIRECT_CODES:
+                    raise ValueError("redirects are not allowed")
+                if response.is_error:
+                    raise ValueError(f"HTTP error {response.status_code}")
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > _MAX_RESPONSE_BYTES:
+                        raise ValueError("response exceeds the maximum allowed size")
+                    chunks.append(chunk)
+        content = b"".join(chunks)
+        if not content:
+            return {}
+        decoded = json.loads(content.decode("utf-8"))
+        if not isinstance(decoded, dict):
+            raise ValueError("response JSON must be an object")
+        return decoded
+    except SSRFConnectionBlocked as exc:
+        raise ValueError(str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise ValueError(f"request failed: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise ValueError("response is not valid JSON") from exc
 
