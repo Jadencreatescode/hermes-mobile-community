@@ -5,7 +5,7 @@ import { useGatewayRequest } from '@/app/gateway/hooks/use-gateway-request'
 import { useOnProfileSwitch } from '@/app/hooks/use-on-profile-switch'
 import { useRouteOverlayActive } from '@/app/hooks/use-route-overlay-active'
 import { PetHeartField } from '@/components/chat/vibe-hearts'
-import { useMediaQuery } from '@/hooks/use-media-query'
+import { PetBubble } from '@/components/pet/pet-bubble'
 import { persistString, storedString } from '@/lib/storage'
 import { $changeEventsAvailable, $petChange } from '@/store/live-sync'
 import {
@@ -112,7 +112,6 @@ export function FloatingPet() {
   const atRest = useStore($petAtRest)
   const roamDir = useStore($petRoamDir)
   const routeOverlayOpen = useRouteOverlayActive()
-  const narrowOverlay = useMediaQuery('(max-width: 639px)')
 
   const [position, setPosition] = useState<Point>(loadPosition)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -461,13 +460,12 @@ export function FloatingPet() {
 
   // While popped out, the desktop overlay window owns the mascot — hide the
   // in-window one so there aren't two.
-  if (!info.enabled || !info.spritesheetBase64 || overlayActive || (routeOverlayOpen && narrowOverlay)) {
+  if (!info.enabled || !info.spritesheetBase64 || overlayActive) {
     return null
   }
 
   return (
     <div
-      data-slot="floating-pet"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -511,6 +509,22 @@ export function FloatingPet() {
       {/* Hearts puff off the pet; its celebrate ("yay"/jump) pose is driven by
           burstVibeHearts's router. */}
       <PetHeartField petH={petH} petW={petW} />
+      {/* Plugin lines (ctx.pet.say) float above the pet, upright (outside the
+          mirrored sprite wrapper) and grown toward the window's middle so a pet
+          parked at an edge never pushes its bubble off-screen. Core status
+          lines stay in the pop-out overlay; in-window the app is the surface. */}
+      <div
+        style={{
+          bottom: '100%',
+          marginBottom: 4,
+          pointerEvents: 'none',
+          position: 'absolute',
+          zIndex: 2,
+          ...(position.x + petW / 2 < (window.innerWidth || 800) / 2 ? { left: 0 } : { right: 0 })
+        }}
+      >
+        <PetBubble showStatus={false} />
+      </div>
     </div>
   )
 }

@@ -123,13 +123,9 @@ function normalizeBasePath(basePath: string | undefined): string {
     return ''
   }
 
-  let normalized = basePath.startsWith('/') ? basePath : `/${basePath}`
+  const withLead = basePath.startsWith('/') ? basePath : `/${basePath}`
 
-  while (normalized.endsWith('/')) {
-    normalized = normalized.slice(0, -1)
-  }
-
-  return normalized
+  return withLead.replace(/\/+$/, '')
 }
 
 function normalizeEndpointPath(path: string): string {

@@ -8,7 +8,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { useImageDownload } from '@/hooks/use-image-download'
 import { useI18n } from '@/i18n'
 import { readDesktopFileDataUrlLocalFirst } from '@/lib/desktop-fs'
-import { AlertCircle, FileText, FolderOpen, ImageIcon, Link, Loader2, MessageCode, Terminal } from '@/lib/icons'
+import { AlertCircle, FileText, FolderOpen, ImageIcon, Link, Loader2, Terminal } from '@/lib/icons'
 import { normalizeOrLocalPreviewTarget } from '@/lib/local-preview'
 import { cn } from '@/lib/utils'
 import type { ComposerAttachment } from '@/store/composer'
@@ -23,7 +23,10 @@ export function AttachmentList({
   onRemove?: (id: string) => void
 }) {
   return (
-    <div className="flex max-w-full flex-wrap gap-1.5 px-1 pt-1" data-slot="composer-attachments">
+    <div
+      className="flex max-w-full flex-shrink-0 flex-wrap gap-1.5 px-1 pt-1 overflow-hidden"
+      data-slot="composer-attachments"
+    >
       {attachments.filter(Boolean).map(attachment => (
         <AttachmentPill
           attachment={attachment}
@@ -43,7 +46,6 @@ function AttachmentPill({ attachment, onRemove }: { attachment: ComposerAttachme
     file: FileText,
     folder: FolderOpen,
     image: ImageIcon,
-    review: MessageCode,
     terminal: Terminal,
     url: Link
   }[attachment.kind]
@@ -54,15 +56,9 @@ function AttachmentPill({ attachment, onRemove }: { attachment: ComposerAttachme
   const isUploading = attachment.uploadState === 'uploading'
   const hasUploadError = attachment.uploadState === 'error'
 
-  // A review card's detail is its resolved-comment JSON, not a previewable
-  // path — clicking it should do nothing rather than toast a bogus failure.
-  const canPreview =
-    attachment.kind !== 'folder' && attachment.kind !== 'terminal' && attachment.kind !== 'review' && !isUploading
+  const canPreview = attachment.kind !== 'folder' && attachment.kind !== 'terminal' && !isUploading
 
-  const detail =
-    attachment.kind !== 'review' && attachment.detail && attachment.detail !== attachment.label
-      ? attachment.detail
-      : undefined
+  const detail = attachment.detail && attachment.detail !== attachment.label ? attachment.detail : undefined
 
   // Keep full image bytes out of composer state. New chips read their path only
   // when clicked; previewUrl remains a compatibility fallback for older drafts.
@@ -140,7 +136,7 @@ function AttachmentPill({ attachment, onRemove }: { attachment: ComposerAttachme
         throw new Error(c.couldNotPreview(attachment.label))
       }
 
-      openPreview(preview, 'manual')
+      openPreview(preview)
     } catch (error) {
       notifyError(error, c.previewUnavailable)
     }
@@ -204,7 +200,7 @@ function AttachmentPill({ attachment, onRemove }: { attachment: ComposerAttachme
           {onRemove && (
             <button
               aria-label={c.removeAttachment(attachment.label)}
-              className="absolute -right-1 -top-1 grid size-3.5 place-items-center rounded-full border border-border/70 bg-background text-muted-foreground opacity-0 shadow-xs transition hover:bg-accent hover:text-foreground group-hover/attachment:opacity-100 focus-visible:opacity-100 max-sm:-right-2 max-sm:-top-2 max-sm:size-11 max-sm:opacity-100"
+              className="absolute -right-1 -top-1 grid size-3.5 place-items-center rounded-full border border-border/70 bg-background text-muted-foreground opacity-0 shadow-xs transition hover:bg-accent hover:text-foreground group-hover/attachment:opacity-100 focus-visible:opacity-100"
               onClick={() => onRemove(attachment.id)}
               type="button"
             >

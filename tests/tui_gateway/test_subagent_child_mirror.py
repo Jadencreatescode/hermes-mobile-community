@@ -10,8 +10,6 @@ shows a real midstream turn instead of sitting silent until persistence.
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -38,8 +36,7 @@ def server():
 
     yield mod
     mod._sessions.clear()
-    mod._pending.clear()
-    mod._answers.clear()
+    __import__("tui_gateway.server_requests", fromlist=["x"]).reset_for_tests()
     mod._child_mirrors.clear()
     mod._active_child_runs.clear()
 
@@ -57,7 +54,9 @@ def emits(server, monkeypatch):
 
 
 def _relay(server, event_type, **payload):
-    """Drive _on_tool_progress the way the delegate relay does."""
+    """Drive _on_tool_progress the way the delegate relay does; the parent record
+    exists like any live turn's does (launch profile: no profile_home)."""
+    server._sessions.setdefault("parent-sid", {"session_key": "parent"})
     server._on_tool_progress(
         "parent-sid",
         event_type,
@@ -128,7 +127,7 @@ def test_live_child_session_gets_native_stream(server, emits):
 def test_window_closed_midrun_drops_state_then_fresh_turn_on_reopen(server, emits):
     server._sessions["live-1"] = {"session_key": "child-1", "agent": None}
     _relay(server, "subagent.tool", tool_name="terminal", child_session_id="child-1")
-    assert "child-1" in server._child_mirrors
+    assert (None, "child-1") in server._child_mirrors
 
     # Window closes → live session gone → state dropped on the next event.
     server._sessions.clear()
@@ -155,18 +154,18 @@ def test_upgraded_child_session_not_mirrored(server, emits):
     assert [(e, s) for e, s, _ in emits] == [("subagent.tool", "parent-sid")]
     assert server._child_mirrors == {}
     # Liveness registry still updates — it serves resume, not the mirror.
-    assert "child-1" in server._active_child_runs
+    assert (None, "child-1") in server._active_child_runs
 
 
 def test_stale_child_run_not_reported_active(server, emits):
     """A leaked registry entry (lost completion event) must age out instead of
     pinning running=true on every future lazy resume of that child."""
-    server._active_child_runs["child-1"] = 0.0  # epoch — ancient
+    server._active_child_runs[(None, "child-1")] = 0.0  # epoch — ancient
 
-    assert server._child_run_active("child-1") is False
+    assert server._child_run_active("child-1", None) is False
 
     _relay(server, "subagent.tool", tool_name="terminal", child_session_id="child-1")
-    assert server._child_run_active("child-1") is True
+    assert server._child_run_active("child-1", None) is True
 
 
 def test_prompt_submit_rejected_while_child_run_active(server, emits):
@@ -189,296 +188,7 @@ def test_prompt_submit_rejected_while_child_run_active(server, emits):
     # Run completes → the same submit upgrades into a real conversation
     # (passes the guard; fails later only because this test stubs no agent).
     _relay(server, "subagent.complete", child_session_id="child-1", status="completed", summary="ok")
-    assert server._child_run_active("child-1") is False
-
-
-def test_prompt_submit_dispatch_identity_is_an_atomic_concurrency_gate(server, monkeypatch):
-    """Two callers for one durable dispatch may start only one prompt turn."""
-    import threading
-
-    entered = threading.Event()
-    release = threading.Event()
-    calls = []
-    server._sessions["live-1"] = {
-        "agent": None,
-        "attached_images": [],
-        "history": [],
-        "history_lock": threading.Lock(),
-        "running": False,
-        "session_key": "stored-1",
-        "transport": None,
-    }
-    monkeypatch.setattr(server, "_ensure_active_session_slot", lambda *_: None)
-    monkeypatch.setattr(server, "_load_dashboard_process_isolation_config", lambda: {})
-    monkeypatch.setattr(server, "_session_uses_compute_host", lambda *_: True)
-    monkeypatch.setattr(server, "_start_inflight_turn", lambda *_: None)
-
-    def dispatch(*args, **kwargs):
-        calls.append((args, kwargs))
-        entered.set()
-        assert release.wait(2)
-        return {"id": "rpc", "result": {"status": "streaming"}}
-
-    monkeypatch.setattr(server, "_submit_prompt_to_compute_host", dispatch)
-    results = []
-    first = threading.Thread(
-        target=lambda: results.append(server._methods["prompt.submit"](
-            "rid-1",
-            {"session_id": "live-1", "text": "produce", "idempotency_key": "mrun-1"},
-        ))
-    )
-    first.start()
-    assert entered.wait(2)
-    replay = server._methods["prompt.submit"](
-        "rid-2",
-        {"session_id": "live-1", "text": "produce", "idempotency_key": "mrun-1"},
-    )
-    release.set()
-    first.join(2)
-
-    assert len(calls) == 1
-    assert replay["result"]["idempotent_replay"] is True
-    assert results[0]["result"]["status"] == "streaming"
-
-
-def test_failed_agent_initialization_releases_the_dispatch_key_for_one_retry(
-    server, monkeypatch
-):
-    import threading
-    import time
-
-    failed = threading.Event()
-    retried = threading.Event()
-    waits = iter([{"error": {"message": "agent build failed"}}, None])
-    submits = []
-    session = {
-        "agent": None,
-        "agent_ready": threading.Event(),
-        "attached_images": [],
-        "history": [],
-        "history_lock": threading.Lock(),
-        "running": False,
-        "session_key": "stored-1",
-        "transport": None,
-    }
-    server._sessions["live-1"] = session
-    monkeypatch.setattr(server, "_ensure_active_session_slot", lambda *_: None)
-    monkeypatch.setattr(server, "_load_dashboard_process_isolation_config", lambda: {})
-    monkeypatch.setattr(server, "_session_uses_compute_host", lambda *_: False)
-    monkeypatch.setattr(server, "_ensure_session_db_row", lambda *_: None)
-    monkeypatch.setattr(server, "_persist_branch_seed", lambda *_: None)
-    monkeypatch.setattr(server, "_start_agent_build", lambda *_: None)
-    monkeypatch.setattr(server, "_emit_terminal_turn_error", lambda *_args, **_kwargs: failed.set())
-    monkeypatch.setattr(server, "_emit", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(server, "_session_info", lambda *_: {})
-    monkeypatch.setattr(server, "_wait_agent_for_prompt", lambda *_: next(waits))
-
-    def submit(*args, **kwargs):
-        submits.append((args, kwargs))
-        with session["history_lock"]:
-            session["running"] = False
-        retried.set()
-
-    monkeypatch.setattr(server, "_run_prompt_submit", submit)
-    params = {"session_id": "live-1", "text": "produce", "idempotency_key": "mrun-1"}
-    assert server._methods["prompt.submit"]("rid-1", params)["result"]["status"] == "streaming"
-    assert failed.wait(2)
-    deadline = time.monotonic() + 2
-    while session.get("running") and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert "mrun-1" not in session.get("_prompt_idempotency", {})
-
-    assert server._methods["prompt.submit"]("rid-2", params)["result"]["status"] == "streaming"
-    assert retried.wait(2)
-    assert len(submits) == 1
-
-
-def test_concurrent_resume_loser_closes_its_pinned_workspace_descriptor(
-    server, tmp_path
-):
-    server._sessions["winner"] = {"session_key": "stored-1"}
-    for _ in range(20):
-        descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
-        record = {"_cwd_fd": descriptor, "active_session_lease": None}
-        assert server._claim_or_reuse_live("loser", "stored-1", record, None)[0] == "winner"
-        with pytest.raises(OSError):
-            os.fstat(descriptor)
-
-
-def test_resume_hydration_failure_closes_the_pinned_workspace_descriptor(
-    server, monkeypatch, tmp_path
-):
-    import threading
-    import time
-
-    class BrokenDb:
-        def reopen_session(self, _stored_id):
-            raise RuntimeError("broken history")
-
-    descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
-    ready = threading.Event()
-    session = {
-        "_cwd_fd": descriptor,
-        "active_session_lease": None,
-        "agent_ready": threading.Event(),
-        "history_lock": threading.Lock(),
-        "resume_history_ready": ready,
-    }
-    server._sessions["hydrating"] = session
-    monkeypatch.setattr(server, "_emit", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(server, "_teardown_session", lambda *_args, **_kwargs: None)
-
-    server._schedule_resume_hydration("hydrating", "stored-1", BrokenDb())
-    assert ready.wait(2)
-    deadline = time.monotonic() + 2
-    while "hydrating" in server._sessions and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert "hydrating" not in server._sessions
-    with pytest.raises(OSError):
-        os.fstat(descriptor)
-
-
-def test_session_create_consumes_workspace_through_a_pinned_descriptor(
-    server, monkeypatch, tmp_path
-):
-    run = tmp_path / "run"
-    output = run / "output"
-    output.mkdir(parents=True)
-    run_stat = run.stat()
-    output_stat = output.stat()
-    monkeypatch.setattr(server, "_schedule_agent_build", lambda *_: None)
-    monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda: None)
-
-    created = server._methods["session.create"](
-        "rid-create",
-        {
-            "cwd": str(run),
-            "cwd_identity": {
-                "device": str(run_stat.st_dev),
-                "inode": str(run_stat.st_ino),
-                "output_device": str(output_stat.st_dev),
-                "output_inode": str(output_stat.st_ino),
-            },
-            "source": "desktop",
-        },
-    )
-
-    assert "error" not in created
-    sid = created["result"]["session_id"]
-    session = server._sessions[sid]
-    capability = session["cwd"]
-    assert os.stat(capability).st_ino == run_stat.st_ino
-
-    from tools.terminal_tool import resolve_task_overrides
-
-    session_key = session["session_key"]
-    overrides = resolve_task_overrides(session_key)
-    assert overrides["file_scope_root"] == capability
-
-    moved = tmp_path / "moved"
-    run.rename(moved)
-    (run / "output").mkdir(parents=True)
-    assert os.stat(capability).st_ino == run_stat.st_ino
-    assert os.stat(capability).st_ino != run.stat().st_ino
-
-    server._close_session_by_id(sid)
-    assert resolve_task_overrides(session_key) == {}
-
-
-def test_session_create_fails_closed_when_file_scope_registration_fails(
-    server, monkeypatch, tmp_path
-):
-    run = tmp_path / "run"
-    output = run / "output"
-    output.mkdir(parents=True)
-    run_stat = run.stat()
-    output_stat = output.stat()
-    monkeypatch.setattr(server, "_register_session_cwd", lambda *_: False)
-    monkeypatch.setattr(server, "_schedule_agent_build", lambda *_: None)
-    monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda: None)
-
-    created = server._methods["session.create"](
-        "rid-create",
-        {
-            "cwd": str(run),
-            "cwd_identity": {
-                "device": str(run_stat.st_dev),
-                "inode": str(run_stat.st_ino),
-                "output_device": str(output_stat.st_dev),
-                "output_inode": str(output_stat.st_ino),
-            },
-            "source": "desktop",
-        },
-    )
-
-    assert created["error"]["code"] == 4034
-    assert "filesystem scope" in created["error"]["message"]
-    assert not server._sessions
-    matching_fds = []
-    for entry in Path("/proc/self/fd").iterdir():
-        try:
-            if entry.stat().st_ino == run_stat.st_ino:
-                matching_fds.append(entry)
-        except OSError:
-            continue
-    assert matching_fds == []
-
-
-def test_old_teardown_cannot_clear_replacement_session_scope(
-    server, monkeypatch, tmp_path
-):
-    from tools.terminal_tool import clear_task_env_overrides, resolve_task_overrides
-
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-    first.mkdir()
-    second.mkdir()
-    first_fd = os.open(first, os.O_RDONLY | os.O_DIRECTORY)
-    second_fd = os.open(second, os.O_RDONLY | os.O_DIRECTORY)
-    first_capability = f"/proc/{os.getpid()}/fd/{first_fd}"
-    second_capability = f"/proc/{os.getpid()}/fd/{second_fd}"
-    old = {
-        "_cwd_fd": first_fd,
-        "cwd": first_capability,
-        "session_key": "shared-session-key",
-    }
-    replacement = {
-        "_cwd_fd": second_fd,
-        "cwd": second_capability,
-        "session_key": "shared-session-key",
-    }
-    monkeypatch.setattr(server, "_finalize_session", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(server, "_announce_session_reclaimed", lambda *_args, **_kwargs: None)
-
-    assert server._register_session_cwd(old) is True
-    assert server._register_session_cwd(replacement) is True
-    server._teardown_session(old)
-
-    assert resolve_task_overrides("shared-session-key")["file_scope_root"] == second_capability
-    assert os.fstat(second_fd).st_ino == second.stat().st_ino
-    clear_task_env_overrides("shared-session-key")
-    os.close(second_fd)
-
-
-def test_pinned_resume_registration_failure_discards_record(
-    server, monkeypatch, tmp_path
-):
-    descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
-    capability = f"/proc/{os.getpid()}/fd/{descriptor}"
-    record = {
-        "_cwd_fd": descriptor,
-        "active_session_lease": None,
-        "cwd": capability,
-        "session_key": "stored-1",
-    }
-    monkeypatch.setattr(server, "_register_session_cwd", lambda *_: False)
-
-    with pytest.raises(RuntimeError, match="filesystem scope"):
-        server._claim_or_reuse_live("resumed", "stored-1", record, None)
-
-    assert "resumed" not in server._sessions
-    with pytest.raises(OSError):
-        os.fstat(descriptor)
+    assert server._child_run_active("child-1", None) is False
 
 
 def test_active_child_runs_registry_tracks_liveness(server, emits):
@@ -486,13 +196,13 @@ def test_active_child_runs_registry_tracks_liveness(server, emits):
     open), and completion clears it — lazy watch resumes read this registry to
     report running=true while the child is silent inside a long tool call."""
     _relay(server, "subagent.start", preview="go", child_session_id="child-1")
-    assert "child-1" in server._active_child_runs
+    assert (None, "child-1") in server._active_child_runs
 
     _relay(server, "subagent.tool", tool_name="terminal", child_session_id="child-1")
-    assert "child-1" in server._active_child_runs
+    assert (None, "child-1") in server._active_child_runs
 
     _relay(server, "subagent.complete", child_session_id="child-1", status="completed", summary="ok")
-    assert "child-1" not in server._active_child_runs
+    assert (None, "child-1") not in server._active_child_runs
 
 
 def test_start_mirrors_as_immediate_header_line(server, emits):

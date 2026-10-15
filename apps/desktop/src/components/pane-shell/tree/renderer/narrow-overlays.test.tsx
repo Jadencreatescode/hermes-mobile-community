@@ -3,19 +3,14 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { PANE_TOGGLE_REVEAL_EVENT } from '@/components/pane-shell'
 import { registry } from '@/contrib/registry'
-import { toggleFileBrowserOpen } from '@/store/layout'
+import { $paneStates, setPaneWidthOverride } from '@/store/panes'
+import { $connection } from '@/store/session'
 import { stubResizeObserver } from '@/test/jsdom'
 
-import { allPaneIds, group, split } from '../model'
-import {
-  $dismissedPanes,
-  $hiddenTreePanes,
-  $layoutTree,
-  $narrowViewport,
-  declareDefaultTree
-} from '../store'
+import { group, split } from '../model'
+import { $hiddenTreePanes, $layoutTree, $narrowViewport, declareDefaultTree } from '../store'
 
-import { NarrowOverlays } from './narrow-overlays'
+import { NarrowOverlays, narrowOverlayWidth } from './narrow-overlays'
 
 // Ground truth for "the Bots tab is still visible when the sessions sidebar
 // collapses on a narrow window". A collapsible pane DOCKED into the sessions
@@ -43,7 +38,6 @@ const registerPane = (id: string, title: string, data: Record<string, unknown>, 
 
 beforeEach(() => {
   window.localStorage.clear()
-  $dismissedPanes.set(new Set())
   $hiddenTreePanes.set(new Set())
 
   registerPane('sessions', 'sessions', { collapsible: true, placement: 'left', width: '237px' }, 'session rows')
@@ -58,6 +52,9 @@ afterEach(() => {
   cleanup()
   $narrowViewport.set(false)
   $layoutTree.set(null)
+  $connection.set(null)
+  vi.restoreAllMocks()
+  delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
   disposers.splice(0).forEach(dispose => dispose())
 })
 
@@ -100,48 +97,78 @@ describe('narrow overlay of a stacked zone', () => {
     expect(overlayTab('sessions')).toBeNull()
   })
 
-  it('reveals an absent-from-tree collapsible as a narrow overlay without adopting it back', () => {
-    const originalMatchMedia = window.matchMedia
+  it('pads the overlay below the native window controls on macOS', () => {
+    // Ground truth for "the SESSIONS tab strip slides under the traffic
+    // lights on a narrow window" (#110033). The overlay starts at the
+    // viewport's top edge, so without a reservation its tab strip sits under
+    // the native controls.
+    Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: {} })
+    $connection.set({ windowButtonPosition: { x: 24, y: 0 } } as never)
+    // jsdom has no layout: the overlay fills the viewport's top-left corner.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      bottom: 800,
+      height: 800,
+      left: 0,
+      right: 237,
+      toJSON: () => ({}),
+      top: 0,
+      width: 237,
+      x: 0,
+      y: 0
+    } as DOMRect)
 
-    Object.defineProperty(window, 'matchMedia', {
-      configurable: true,
-      value: vi.fn(() => ({ matches: true }))
-    })
+    render(<NarrowOverlays />)
+    revealPane('sessions')
 
-    try {
-      registerPane(
-        'files',
-        'files',
-        {
-          collapsible: true,
-          dock: { pane: 'workspace', pos: 'right' },
-          placement: 'right',
-          revealAliases: ['file-browser'],
-          width: '237px'
-        },
-        'file browser'
-      )
-      // The pane is registered but absent from the tree (the portrait regression
-      // scenario: the user dismissed the right sidebar, or it was never opened).
-      $layoutTree.set(group(['workspace']))
+    // Controls rect = { x: 0, y: 0, width: 24 + 58, height: 34 }; the
+    // reservation is the overlap's bottom edge, so the strip starts below it.
+    const overlay = document.querySelector<HTMLElement>('[data-narrow-overlay="sessions"]')
+    expect(overlay?.style.paddingTop).toBe('34px')
+    // The reserved band stays a window-drag target, as in a docked TreeGroup.
+    const dragSpacer = overlay?.querySelector<HTMLElement>('[aria-hidden="true"]')
+    expect(dragSpacer).not.toBeNull()
+    expect(dragSpacer?.style.height).toBe('34px')
+  })
 
-      expect(allPaneIds($layoutTree.get()!)).not.toContain('files')
+  it('honors the user drag width, not the declared width, when the zone collapsed', () => {
+    // The sash writes a widthOverride per shown pane of the zone; the overlay
+    // must size from the same resolution the docked zone uses (fixedTrackSize
+    // = declared max() refined by overrides), not from data.width alone.
+    // jsdom's CSSOM drops the min() wrapper from style.width, so the rendered
+    // width is unobservable here — assert the overlay's own resolution
+    // (narrowOverlayWidth, the pure helper the component styles from) against
+    // the live tree + store the mounted overlay saw.
+    setPaneWidthOverride('sessions', 170)
+    setPaneWidthOverride('bots', 170)
 
-      const { getByTestId, queryByTestId } = render(<NarrowOverlays />)
+    const { container } = render(<NarrowOverlays />)
 
-      expect(queryByTestId('files-body')).toBeNull()
+    revealPane('bots')
 
-      // Tapping the right sidebar toggle in portrait must show the overlay — the
-      // button must not be unresponsive just because the pane is absent from the
-      // tree.
-      act(() => toggleFileBrowserOpen())
-      expect(getByTestId('files-body')).toBeTruthy()
+    const overlay = container.querySelector<HTMLElement>('[data-narrow-overlay]')
+    expect(overlay).toBeTruthy()
 
-      // A second tap closes it.
-      act(() => toggleFileBrowserOpen())
-      expect(queryByTestId('files-body')).toBeNull()
-    } finally {
-      Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia })
-    }
+    const tree = $layoutTree.get()!
+    const bots = registry.getArea('panes').find(p => p.id === 'bots')!
+
+    const width = narrowOverlayWidth(
+      {
+        paneFor: id => registry.getArea('panes').find(p => p.id === id),
+        paneGone: () => false,
+        overrides: $paneStates.get()
+      },
+      tree,
+      bots
+    )
+
+    // The user dragged the zone to 170px; the declared 260px must lose.
+    expect(width).toBe('170px')
+    expect(width).not.toBe('260px')
+
+    // And the seamless fallback: without a tree the declared width still
+    // sizes the overlay.
+    expect(narrowOverlayWidth({ paneFor: () => undefined, paneGone: () => false, overrides: {} }, null, bots)).toBe(
+      '260px'
+    )
   })
 })

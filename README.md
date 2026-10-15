@@ -2,49 +2,6 @@
   <img src="assets/banner.png" alt="Hermes Agent" width="100%">
 </p>
 
-## Hermes Mobile Control Center
-
-The Hermes desktop experience is available as an installable phone interface. It preserves conversations, models, voice, memory, notifications, plugins, agents, files, and the wider control surface in layouts designed for phones and foldable devices. The images below use sanitized test data.
-
-### Public contribution boundary
-
-This public repository contains the shareable Hermes Mobile renderer, relay, tests, and Strix Halo installer. It is intentionally separate from the private Hermes Owner application.
-
-The private owner source, Android message access, private node addresses, credentials, deployment state, release branches, and history are not present here. Changes pushed to this repository do not deploy to or modify the private owner application. Owner releases can adopt public changes only through a separate review and manual import.
-
-### iPhone and iPad edition
-
-The public Apple edition is the installable Hermes Mobile web app, not a separate App Store binary. Open the private Hermes Mobile URL in Safari, choose **Add to Home Screen**, and launch it from the new icon.
-
-It uses upstream Hermes for conversations, Messaging, Bot Mode, Operations, Training Mode, models, voice, files, browser features, profiles, cron, and updates. The public Operations Pack adds a coordinated view of Bots, delegated workers, source health, Kanban assignments, and routines; a durable Mailroom with bounded urgency and exact expiring Critical policies; bounded structured meetings with immutable contributions and duplicate-safe Kanban actions; and exact Agent Workspace navigation through existing Hermes sessions. Training Mode includes an optional renderer-only coaching session that cannot call Hermes tools or the backend. It submits only bounded semantic task details, converts raw-value actions and private browser data into fresh human-input gates, displays the exact deterministic SKILL.md and full-hash approval phrase, then saves through the canonical Hermes skill manager only after the server regenerates the draft and verifies the literal installed bytes. It exposes no browser execution, task execution, or scheduling route. The public shell includes the phone and tablet layouts, iOS safe areas, full-height dynamic viewport handling, authenticated audio and video playback, service-worker updates, and the 64 MB upload boundary. Private Owner node policy, private nodes, Android bridges, SMS access, privileged screen takeover, private browser capture and replay, and the phone-brokered Watch implementation are deliberately excluded.
-
-For full feature parity, the Hermes backend and mobile renderer must come from the same public Hermes Mobile release. Training Mode depends on the public release's authenticated backend plugin until that capability lands upstream, so a generic older or newer upstream backend alone is not sufficient. A tester should update this public repository and restart its gateway before testing the latest mobile renderer. They do not need the private Owner edition.
-
-See [iPhone and iPad testing](docs/iphone-ipad-testing.md) for installation, update, compatibility, and acceptance steps.
-
-Dependency findings and the Electron compatibility exceptions are documented in [the NPM security policy](docs/npm-security-policy.md). The exact shipped archive boundary and release gates are documented in [the mobile release security scope](docs/security/mobile-release-scope.md).
-
-### About the creator
-
-Jaden Gibson grew up in Las Vegas, a city whose constant reinvention helped shape his curiosity about how systems work. He immersed himself in coding out of genuine interest and learned by building practical tools that connect artificial intelligence, personal knowledge, and the devices people use every day.
-
-His current work includes the Hermes Mobile Control Center, which brings the Hermes desktop experience to phones and foldable devices, and [My Journal for Hermes](https://github.com/Jadencreatescode/my-journal), which turns approved conversations into private, evidence backed daily progress notes. Both projects reflect a focus on useful software, user ownership, privacy, access across devices, and open collaboration.
-
-<p align="center">
-  <img src="docs/mobile-screenshots/01-chat.png" alt="Hermes mobile chat" width="18%">
-  <img src="docs/mobile-screenshots/02-appearance.png" alt="Appearance settings" width="18%">
-  <img src="docs/mobile-screenshots/03-voice.png" alt="Voice settings" width="18%">
-  <img src="docs/mobile-screenshots/04-memory.png" alt="Memory settings" width="18%">
-  <img src="docs/mobile-screenshots/05-notifications.png" alt="Notification settings" width="18%">
-</p>
-<p align="center">
-  <img src="docs/mobile-screenshots/06-keyboard-shortcuts.png" alt="Keyboard shortcuts" width="18%">
-  <img src="docs/mobile-screenshots/07-plugins.png" alt="Plugin management" width="18%">
-  <img src="docs/mobile-screenshots/08-about.png" alt="About and updates" width="18%">
-  <img src="docs/mobile-screenshots/09-agents.png" alt="Live agents" width="18%">
-  <img src="docs/mobile-screenshots/10-starmap.png" alt="Memory starmap" width="18%">
-</p>
-
 # Hermes Agent ☤
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/">Hermes Agent</a> | <a href="https://hermes-agent.nousresearch.com/">Hermes Desktop</a>
@@ -77,7 +34,7 @@ Use any model you want — [Nous Portal](https://portal.nousresearch.com), OpenR
 
 ## Quick Install
 
-### Linux, macOS, WSL2, Termux
+### Linux, macOS, WSL2
 
 ```bash
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
@@ -93,11 +50,13 @@ Run this in PowerShell:
 iex (irm https://hermes-agent.nousresearch.com/install.ps1)
 ```
 
-The installer handles everything: uv, Python 3.11, Node.js, ripgrep, ffmpeg, **and a portable Git Bash** (MinGit, unpacked to `%LOCALAPPDATA%\hermes\git` — no admin required, completely isolated from any system Git install). Hermes uses this bundled Git Bash to run shell commands.
+The source installer delegates Python 3.14, Node.js, npm, ripgrep, FFmpeg,
+and Python dependencies to PM. If Git is absent, it stages the verified Git
+for Windows archive in Hermes' tool store. It does not replace your system Git.
+See [installation methods](https://hermes-agent.nousresearch.com/docs/getting-started/installation)
+for the separate MSIX/App Installer package and its update ownership.
 
-If you already have Git installed, the installer detects it and uses that instead. Otherwise a ~45MB MinGit download is all you need — it won't touch or interfere with any system Git.
-
-> **Android / Termux:** The tested manual path is documented in the [Termux guide](https://hermes-agent.nousresearch.com/docs/getting-started/termux). On Termux, Hermes installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
+> **Android / Termux:** A signed APT repository is available for aarch64 devices, with a `stable` channel (tagged releases) and a prerelease `canary` channel. The package includes Python, Node.js, and the TUI. Use the [Termux guide](https://hermes-agent.nousresearch.com/docs/getting-started/termux), not the desktop/server installer script.
 >
 > **Windows:** Native Windows is fully supported — the PowerShell one-liner above installs everything. If you'd rather use WSL2, the Linux command works there too. Native Windows install lives under `%LOCALAPPDATA%\hermes`; WSL2 installs under `~/.hermes` as on Linux.
 
@@ -169,7 +128,7 @@ hermes doctor       # Diagnose any issues
 Hermes works with whatever provider you want — that's not changing. But if you'd rather not collect five separate API keys for the model, web search, image generation, TTS, and a cloud browser, **[Nous Portal](https://portal.nousresearch.com)** covers all of them under one subscription:
 
 - **300+ models** — pick any of them with `/model <name>`
-- **Tool Gateway** — web search (Firecrawl), image generation (FAL), text-to-speech (OpenAI), cloud browser (Browser Use), all routed through your sub. No extra accounts.
+- **Tool Gateway** — web search, image generation (FAL), text-to-speech (OpenAI), cloud browser (Browser Use), all routed through your sub. No extra accounts.
 
 One command from a fresh install:
 
@@ -261,32 +220,9 @@ See `hermes claw migrate --help` for all options, or use the `openclaw-migration
 
 We welcome contributions! See the [Contributing Guide](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) for development setup, code style, and PR process.
 
-Quick start for contributors — use the standard installer, then work from the
-full git checkout it creates at `$HERMES_HOME/hermes-agent` (usually
-`~/.hermes/hermes-agent`). This matches the layout used by `hermes update`, the
-managed venv, lazy dependencies, gateway, and docs tooling.
-
-```bash
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-cd "${HERMES_HOME:-$HOME/.hermes}/hermes-agent"
-uv pip install -e ".[all,dev]"
-scripts/run_tests.sh
-```
-
-Manual clone fallback (for throwaway clones/CI where you intentionally do not
-want the managed install layout):
-
-Create the venv outside the cloned source tree — a venv inside the directory
-the agent operates from can be wiped by a relative-path command the agent runs
-against its own checkout, destroying the running runtime mid-session.
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv venv ~/.hermes/venvs/hermes-dev --python 3.11
-source ~/.hermes/venvs/hermes-dev/bin/activate
-uv pip install -e ".[all,dev]"
-scripts/run_tests.sh
-```
+Start with the [PM developer workflow](website/docs/reference/package-management.md#developer-workflow)
+for activation, daily use, dependency changes, and leaving the environment.
+[Development Setup](CONTRIBUTING.md#development-setup) covers the separate test environment and verification commands.
 
 ---
 

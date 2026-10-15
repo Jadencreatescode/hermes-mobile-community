@@ -1,8 +1,0 @@
-{
-  "name": "training-mode",
-  "label": "Training Mode",
-  "description": "Create reviewed reusable skills with hash-bound approval",
-  "icon": "GraduationCap",
-  "version": "1.0.0",
-  "api": "plugin_api.py"
-}

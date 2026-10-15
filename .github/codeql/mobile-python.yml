@@ -1,7 +1,0 @@
-name: Hermes Mobile Python surface
-
-paths:
-  - deploy/strix-halo
-  - plugins/operations/dashboard
-  - server
-  - tui_gateway
