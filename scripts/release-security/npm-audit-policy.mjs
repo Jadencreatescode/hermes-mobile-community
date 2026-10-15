@@ -481,7 +481,10 @@ function validateFinding(name, finding, policy, errors) {
       ? sameArrayMembers(finding[field], policy.finding[field])
       : sameValue(finding[field], policy.finding[field])
     if (!matches) {
-      errors.push(`${name} audit field ${field} differs from the reviewed finding`)
+      errors.push(
+        `${name} audit field ${field} differs from the reviewed finding ` +
+        `(actual=${JSON.stringify(finding[field])}, expected=${JSON.stringify(policy.finding[field])})`
+      )
     }
   }
   const expectedKeys = Object.keys(policy.finding).sort()

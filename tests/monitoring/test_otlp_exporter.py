@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import pytest
 
-otel = pytest.importorskip("opentelemetry.sdk.trace", reason="otlp extra not installed")
+otel = pytest.importorskip(
+    "opentelemetry.sdk.trace",
+    reason="otlp extra not installed or unavailable in the selected optional extras",
+    exc_type=ImportError,
+)
 
 import agent.monitoring.otlp_exporter as OE
 from agent.monitoring.emitter import MonitoringEmitter
