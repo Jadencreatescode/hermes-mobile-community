@@ -294,9 +294,10 @@ export function selectionLinkLabel(editor: HTMLElement): string | null {
 
 /** Markdown link for a paste-over-selection: the label the user selected, the
  *  URL they pasted. Square brackets in the label are escaped so the link
- *  survives markdown parsing downstream. */
+ *  survives markdown parsing downstream. Backslashes are escaped first so
+ *  an attacker-controlled backslash cannot consume an inserted bracket escape. */
 export function markdownLinkFor(label: string, url: string): string {
-  return `[${label.replace(/([[\]])/g, '\\$1')}](${url})`
+  return `[${label.replace(/[\\[\]]/g, '\\$&')}](${url})`
 }
 
 /** A plain space finishing a typed link commits it as a chip (followed by

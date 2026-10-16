@@ -416,6 +416,12 @@
     "reason": "records, as an absolute path, the git this updater already runs (git_cmd[0] on the PATH expose_pm_git extended) so the launch-time repair can rerun it without importing pm"
   },
   {
+    "path": "hermes_cli/update_cmd_git.py",
+    "symbol": "_path_git_candidates",
+    "kind": "bare_which",
+    "reason": "inspects the PATH git only to infer a Git for Windows installation root and recover the real git-core binary when the PATH shim is broken; managed PortableGit candidates are checked separately"
+  },
+  {
     "path": "hermes_cli/update_restart_recovery.py",
     "symbol": "_systemctl_scopes",
     "kind": "bare_which"

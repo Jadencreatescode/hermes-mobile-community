@@ -75,6 +75,9 @@ HERMES_OVERLAYS: dict[str, HermesOverlay] = {
                                base_url_override="https://api.fireworks.ai/inference/v1"),
     "actual": HermesOverlay(transport="chat_completions", extra_env_vars=("ACTUAL_API_KEY",),
                             base_url_override="https://api.actual.inc/v1", base_url_env_var="ACTUAL_BASE_URL"),
+    # CommandCode shipped as a Hermes plugin before models.dev catalogued it. Keep the
+    # plugin's established credential name when a newer live catalog also supplies CMD_API_KEY.
+    "commandcode": HermesOverlay(extra_env_vars=("COMMANDCODE_API_KEY",)),
     "upstage": HermesOverlay(extra_env_vars=("UPSTAGE_API_KEY",), base_url_override="https://api.upstage.ai/v1",
                              base_url_env_var="UPSTAGE_BASE_URL"),
     "nebius-token-factory": HermesOverlay(extra_env_vars=("NEBIUS_API_KEY", "NEBIUS_TOKEN_FACTORY_API_KEY"),
