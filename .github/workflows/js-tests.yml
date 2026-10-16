@@ -15,7 +15,9 @@ jobs:
     # The public repository uses a standard hosted runner. Serialize workspace
     # checks so concurrent compilers do not exhaust its CPU/RAM budget.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The serialized workspace checks exceed 30 minutes on a standard hosted
+    # runner. Keep serialization for memory safety and give the checks headroom.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:

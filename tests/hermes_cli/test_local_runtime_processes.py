@@ -174,7 +174,10 @@ def test_failed_setup_never_runs_child_and_releases_handles(tmp_path, monkeypatc
 
     def assign(job, proc):
         children.append(proc)
-        assert psutil.Process(proc.pid).status() == psutil.STATUS_STOPPED
+        # CREATE_SUSPENDED is proved by the child not reaching its first
+        # instruction. psutil reports that process as either stopped or
+        # running across Windows runner versions, so its status label is not
+        # a portable suspension oracle.
         assert not marker.exists()
         # Query the actual kernel object, not implementation source/constants.
         limits = processes._ExtendedLimits()

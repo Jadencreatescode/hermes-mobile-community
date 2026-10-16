@@ -7,6 +7,7 @@ test patches on ``update_cmd`` stay effective).
 
 import logging
 from contextlib import nullcontext, suppress
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone, UTC
@@ -576,6 +577,23 @@ def _portable_git_candidates() -> list:
     return candidates
 
 
+def _path_git_candidates() -> list[Path]:
+    """Return the PATH git plus real-binary locations inferred from its install root."""
+    executable = shutil.which("git")
+    if not executable:
+        return []
+    path = Path(executable)
+    candidates = [path]
+    root = next((parent for parent in path.parents if parent.name.lower() == "git"), None)
+    if root is not None:
+        candidates += [
+            root / arch / leaf / "git.exe"
+            for arch in ("clangarm64", "mingw64", "mingw32")
+            for leaf in (Path("libexec") / "git-core", Path("bin"))
+        ]
+    return candidates
+
+
 def _locate_real_git() -> Optional[Path]:
     """Find a real Git-for-Windows ``git-core/git.exe`` (standard locations + managed PortableGit) that runs
     without the trampoline guard. None when nothing suits — callers keep the broken command and let the
@@ -585,7 +603,7 @@ def _locate_real_git() -> Optional[Path]:
     re-exec git-core, while the real binary at ``mingw64\\libexec\\git-core\\git.exe`` (≈4.4MB) works when
     invoked directly (#87876).
     """
-    candidates = [
+    candidates = _path_git_candidates() + [
         Path(base) / "Git" / arch / "libexec" / "git-core" / "git.exe"
         for base in (r"C:\Program Files", r"C:\Program Files (x86)")
         for arch in ("clangarm64", "mingw64", "mingw32")

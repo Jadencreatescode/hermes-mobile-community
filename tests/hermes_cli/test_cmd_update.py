@@ -127,3 +127,47 @@ class TestGitTrampolineSelfHeal:
         assert candidates[1] == (
             profile_home / "git" / "mingw64" / "libexec" / "git-core" / "git.exe"
         )
+
+    def test_path_git_candidates_include_discovered_executable_and_real_layouts(self, monkeypatch):
+        from pathlib import Path
+
+        from hermes_cli.update_cmd_git import _path_git_candidates
+
+        discovered = Path("/opt/Git/cmd/git.exe")
+        monkeypatch.setattr("hermes_cli.update_cmd_git.shutil.which", lambda _name: str(discovered))
+
+        candidates = _path_git_candidates()
+
+        assert candidates[0] == discovered
+        assert Path("/opt/Git/mingw64/libexec/git-core/git.exe") in candidates
+        assert Path("/opt/Git/mingw64/bin/git.exe") in candidates
+
+    def test_path_git_candidates_are_empty_without_a_path_git(self, monkeypatch):
+        from hermes_cli.update_cmd_git import _path_git_candidates
+
+        monkeypatch.setattr("hermes_cli.update_cmd_git.shutil.which", lambda _name: None)
+
+        assert _path_git_candidates() == []
+
+    def test_locate_real_git_requires_an_existing_healthy_candidate(self, tmp_path, monkeypatch):
+        from hermes_cli.update_cmd_git import _locate_real_git
+
+        missing = tmp_path / "missing" / "git.exe"
+        broken = tmp_path / "broken" / "git.exe"
+        healthy = tmp_path / "healthy" / "git.exe"
+        broken.parent.mkdir()
+        healthy.parent.mkdir()
+        broken.touch()
+        healthy.touch()
+
+        monkeypatch.setattr(
+            "hermes_cli.update_cmd_git._path_git_candidates",
+            lambda: [missing, broken, healthy],
+        )
+        monkeypatch.setattr("hermes_cli.update_cmd_git._portable_git_candidates", list)
+        monkeypatch.setattr(
+            "hermes_cli.update_cmd_git._probe_fork_bomb",
+            lambda command: command == [str(broken)],
+        )
+
+        assert _locate_real_git() == healthy

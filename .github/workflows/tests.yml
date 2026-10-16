@@ -41,7 +41,9 @@ jobs:
     # Public repositories use the standard hosted runner rather than an
     # organization-provisioned larger runner.
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The complete public suite currently needs about 95 minutes on a standard
+    # hosted runner. Keep enough headroom for cold caches and runner variance.
+    timeout-minutes: 180
     steps:
       - name: Checkout code
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1

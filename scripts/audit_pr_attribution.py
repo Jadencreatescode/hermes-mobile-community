@@ -10,6 +10,8 @@ you are about to push:
 
 Logic (kept in sync with contributor-check.yml):
   - scans ``git log $(git merge-base origin/main HEAD)..HEAD --format=%ae``
+    except for the approved one-time upstream migration, which starts at its
+    exact imported release
   - skips teknium/bot emails and ``<id>+<login>@users.noreply.github.com``
     (CI auto-resolves those)
   - everything else must have ``contributors/emails/<email>`` or a legacy
@@ -32,6 +34,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+MIGRATION_MARKER = ".github/code-health-migration-base"
+APPROVED_MIGRATION_BASE = "d923a5eb487a17c0a68801bba9ef0f56c81040a8"
 
 SKIP_SUBSTRINGS = (
     "teknium",
@@ -58,6 +62,14 @@ def run(*args: str, check: bool = True) -> str:
 
 def new_emails() -> list[str]:
     base = run("git", "merge-base", "origin/main", "HEAD")
+    marker = REPO_ROOT / MIGRATION_MARKER
+    inherited = run("git", "show", f"origin/main:{MIGRATION_MARKER}", check=False)
+    if marker.is_file() and not inherited:
+        migration_base = marker.read_text(encoding="utf-8-sig").strip()
+        if migration_base != APPROVED_MIGRATION_BASE:
+            raise RuntimeError(f"unapproved migration attribution base: {migration_base or '<empty>'}")
+        run("git", "merge-base", "--is-ancestor", migration_base, "HEAD")
+        base = migration_base
     log = run("git", "log", f"{base}..HEAD", "--format=%ae", "--no-merges", check=False)
     return sorted({e for e in log.splitlines() if e.strip()})
 

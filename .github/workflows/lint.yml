@@ -191,9 +191,10 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
           ref: ${{ inputs.commit }}
-          # Depth three also reaches an approved upstream parent carried by a one-time migration
-          # commit. Ordinary PRs still ratchet against the merge commit's first parent.
-          fetch-depth: 3
+          # The approved migration baseline is an ancestor behind the public
+          # adaptation commits, so the ratchet needs the complete commit graph.
+          # Ordinary PRs still ratchet against the merge commit's first parent.
+          fetch-depth: 0
 
       - uses: ./.github/actions/setup-pm
         with:

@@ -76,6 +76,26 @@ jobs:
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
 
+          # During the one-time approved upstream migration, scan the public
+          # adaptation delta after the exact imported release. The imported
+          # release is the trusted baseline being adopted, not newly authored
+          # fork code. Once the marker exists on main, ordinary PRs use their
+          # normal GitHub base again.
+          MIGRATION_MARKER=.github/code-health-migration-base
+          if git cat-file -e "${HEAD}:${MIGRATION_MARKER}" 2>/dev/null && \
+             ! git cat-file -e "origin/main:${MIGRATION_MARKER}" 2>/dev/null; then
+            MIGRATION_BASE=$(git show "${HEAD}:${MIGRATION_MARKER}" | tr -d '[:space:]')
+            if [ "$MIGRATION_BASE" != "d923a5eb487a17c0a68801bba9ef0f56c81040a8" ]; then
+              echo "Unapproved migration supply-chain base: ${MIGRATION_BASE:-<empty>}" >&2
+              exit 2
+            fi
+            if ! git merge-base --is-ancestor "$MIGRATION_BASE" "$HEAD"; then
+              echo "Approved migration supply-chain base is not an ancestor: $MIGRATION_BASE" >&2
+              exit 2
+            fi
+            BASE=$MIGRATION_BASE
+          fi
+
           # Added lines only, excluding lockfiles.
           # Three-point diff (base...head) diffs from the merge base to HEAD,
           # so only changes introduced by this PR are included — not changes
