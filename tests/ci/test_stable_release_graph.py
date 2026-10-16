@@ -35,6 +35,15 @@ def ancestors(jobs, name):
     return seen
 
 
+def test_desktop_release_reads_workspace_local_electron_builder_version():
+    text = (ROOT / ".github/workflows/desktop-bundled-release.yml").read_text(encoding="utf-8")
+    workspace_lock_key = 'packages["apps/desktop/node_modules/electron-builder"]'
+    stale_root_lock_key = 'packages["node_modules/electron-builder"]'
+
+    assert text.count(workspace_lock_key) == 3
+    assert stale_root_lock_key not in text
+
+
 def test_admit_can_read_the_claim_draft():
     jobs = workflow("stable-release.yml")["jobs"]
     assert jobs["admit"]["permissions"]["contents"] == "write"
