@@ -1314,7 +1314,7 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
                 ))}
               </SelectContent>
             </Select>
-            <label className="flex items-center gap-2 rounded-sm border border-border px-2 py-1 text-xs">
+            <label className="flex min-h-11 items-center gap-2 rounded-sm border border-border px-2 py-1 text-xs">
               {m.moaEnabled}
               <Switch
                 checked={currentMoaPreset.enabled !== false}
@@ -1400,19 +1400,22 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
             {currentMoaPreset.reference_models.map((slot, index) => (
               <ListRow
                 action={
-                  <Switch
-                    aria-label={m.moaReferenceToggle(slot.enabled !== false, index + 1)}
-                    checked={slot.enabled !== false}
-                    disabled={applying}
-                    onCheckedChange={checked =>
-                      updateMoaPreset(prev => ({
-                        ...prev,
-                        reference_models: prev.reference_models.map((s, i) =>
-                          i === index ? { ...s, enabled: checked === true } : s
-                        )
-                      }))
-                    }
-                  />
+                  <label className="flex min-h-11 items-center gap-2 text-xs text-muted-foreground">
+                    <span>{m.moaEnabled}</span>
+                    <Switch
+                      aria-label={m.moaReferenceToggle(slot.enabled !== false, index + 1)}
+                      checked={slot.enabled !== false}
+                      disabled={applying}
+                      onCheckedChange={checked =>
+                        updateMoaPreset(prev => ({
+                          ...prev,
+                          reference_models: prev.reference_models.map((s, i) =>
+                            i === index ? { ...s, enabled: checked === true } : s
+                          )
+                        }))
+                      }
+                    />
+                  </label>
                 }
                 below={
                   <div className="mt-2 flex flex-wrap items-center gap-2 pt-1">

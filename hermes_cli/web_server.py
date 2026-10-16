@@ -9,6 +9,7 @@ Usage: ``python -m hermes_cli.main web [--port 8080]``.
 from contextlib import asynccontextmanager
 
 import asyncio
+import contextlib
 from collections import deque
 import hmac
 import logging
@@ -1041,11 +1042,67 @@ from hermes_cli.web_routers import (
     skills as _skills_routes,
     tools as _tools_routes,
     analytics as _analytics_routes,
+    bots as _bots_routes,
     chat_ws as _chat_ws_routes,
     chat_workspaces as _chat_workspaces_routes,
     dashboard_ui as _dashboard_ui_routes,
     shared_metrics as _shared_metrics_routes,
 )
+
+
+def _custom_endpoint_async_client(*, timeout: float):
+    """HTTP client for public custom endpoints: LAN is allowed; metadata/proxies are not."""
+    from tools.url_safety import create_ssrf_safe_async_client
+    return create_ssrf_safe_async_client(
+        timeout=timeout, allow_private_urls=True,
+        follow_redirects=False, trust_env=False)
+
+
+def _custom_endpoint_url_allowed(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return False
+        from tools.url_safety import (
+            _BLOCKED_HOSTNAMES, _normalize_hostname, _resolved_ip_block_reason)
+        hostname = _normalize_hostname(parsed.hostname)
+        if not hostname or hostname in _BLOCKED_HOSTNAMES:
+            return False
+        import ipaddress
+        with contextlib.suppress(ValueError):
+            return _resolved_ip_block_reason(
+                ipaddress.ip_address(hostname), allow_private=True) is None
+        return True
+    except Exception:  # health: allow BLE001 -- endpoint validation fails closed for every parser or resolver failure
+        return False
+
+
+# Keep upstream endpoint discovery and transport probing; narrow only its
+# network client and reject unsafe user-entered URLs before opening a socket.
+_config_env_routes._endpoint_probe_client = (
+    lambda _url, timeout: _custom_endpoint_async_client(timeout=timeout))
+
+
+@app.post("/api/providers/custom-endpoints/validate")
+async def _public_validate_custom_endpoint(body: _config_env_routes.CustomEndpointUpdate):
+    base_url = (body.base_url or "").strip().rstrip("/")
+    if base_url and not await asyncio.to_thread(_custom_endpoint_url_allowed, base_url):
+        return {"ok": False, "reachable": False,
+                "message": "Endpoint URL is not allowed.", "models": []}
+    return await _config_env_routes.validate_custom_endpoint(body)
+
+
+@app.post("/api/providers/validate")
+async def _public_validate_provider_credential(
+    body: _config_env_routes.EnvVarUpdate, request: Request,
+):
+    value = (body.value or "").strip()
+    if body.key == "OPENAI_BASE_URL" and value \
+            and not await asyncio.to_thread(_custom_endpoint_url_allowed, value):
+        return {"ok": False, "reachable": False,
+                "message": "Endpoint URL is not allowed."}
+    return await _config_env_routes.validate_provider_credential(body, request)
+
 
 app.include_router(_files_routes.router)
 app.include_router(_git_routes.router)
@@ -1074,6 +1131,7 @@ app.include_router(_profiles_routes.router)
 app.include_router(_skills_routes.router)
 app.include_router(_tools_routes.router)
 app.include_router(_analytics_routes.router)
+app.include_router(_bots_routes.router)
 app.include_router(_chat_ws_routes.router)
 app.include_router(_chat_workspaces_routes.router)
 app.include_router(_dashboard_ui_routes.router)

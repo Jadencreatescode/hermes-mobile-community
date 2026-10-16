@@ -55,6 +55,8 @@ declare global {
       }) => Promise<GatewayWsUrlResult>
       // Union agent roster across every registered connection.
       getAgentRoster?: () => Promise<DesktopAgentRoster>
+      // Unified machine roster: registry connections + discovered Tailscale peers.
+      getMachineRoster?: () => Promise<DesktopMachineRoster>
       // Credential-free routes across the union connection registry. The
       // optional profile list is used only by the single-local v1 fallback;
       // endpoint and auth material never crosses the IPC boundary.
@@ -308,6 +310,14 @@ declare global {
       readFileDataUrl: (filePath: string) => Promise<string | HermesReadFileErrorResult>
       /** Remote non-image attach: higher dedicated cap than preview/Settings default. */
       readFileDataUrlForAttach?: (filePath: string) => Promise<string | HermesReadFileErrorResult>
+      /** Browser relay: authenticated same-origin URL for gateway audio/video. */
+      gatewayMediaStreamUrl?: (payload: {
+        connectionId?: null | string
+        path: string
+        profile?: null | string
+      }) => string
+      /** Browser-only cleanup for synthetic phone-selected file handles. */
+      releaseBrowserFile?: (filePath: string) => boolean
       /** Settings → Chat: max size for local files loaded as data URLs (attach/preview). */
       dataUrlReadMax?: {
         get: () => Promise<{ defaultMaxMb: number; maxBytes: number; maxMb: number }>
@@ -1235,6 +1245,18 @@ export interface DesktopAgentRoster {
   }[]
 }
 
+export interface DesktopMachineRosterEntry {
+  id: string
+  label: string
+  kind: DesktopConnectionKind | 'tailscale'
+  state: 'online' | 'offline' | 'unreachable' | 'not_connected'
+  connected: boolean
+}
+
+export interface DesktopMachineRoster {
+  machines: DesktopMachineRosterEntry[]
+}
+
 // Per-connection result row from the update fan-out.
 export interface DesktopConnectionUpdateResult {
   connectionId: string
@@ -1521,6 +1543,13 @@ export interface HermesApiRequest {
   // ArrayBuffer. Token-mode backends only.
   upload?: { filename: string; contentType?: string; bytes: ArrayBuffer }
   timeoutMs?: number
+  // Bounded extra request headers. Main forwards an allowlist (today only
+  // `Idempotency-Key`), so a renderer can make a lifecycle mutation
+  // replay-safe without being able to forge auth or routing headers.
+  headers?: Record<string, string>
+  // `binary` returns raw bytes plus the response media type and headers
+  // instead of parsed JSON — artifact previews and package downloads.
+  responseType?: 'json' | 'binary'
   // Route this REST call to a specific profile's backend. Omit for the primary
   // (window) backend. Read-only cross-profile data is served by the primary, so
   // this is only needed for profile-scoped live/settings calls.

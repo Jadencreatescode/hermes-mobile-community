@@ -49,6 +49,7 @@ import type { DropPosition, GroupNode } from '../model'
 import {
   $dropHint,
   $hiddenTreePanes,
+  $hoverNone,
   $narrowViewport,
   $newSessionTabAction,
   $panesWithCloser,
@@ -238,6 +239,7 @@ function ZoneMenu({
   )
 }
 
+// health: allow FUNC_LINES -- retained mobile pane behavior is migration scoped; preserve the reviewed layout interaction
 export function TreeGroup({
   node,
   parentAxis,
@@ -280,6 +282,7 @@ export function TreeGroup({
   const narrow = useStore($narrowViewport)
   const workspaceMode = useStore($workspaceMode)
   const workspaceOwnerKey = useStore($workspaceOwnerKey)
+  const noHover = useStore($hoverNone)
   const newSessionTabAction = useStore($newSessionTabAction)
   const panesWithCloser = useStore($panesWithCloser)
   // Multi-tab selection (⌥/Ctrl-click, Shift-click) — null for every zone but
@@ -625,10 +628,12 @@ export function TreeGroup({
                   const closeable = closeableTab(paneId)
                   const title = tabText(paneId)
                   const isSelected = tabSelection?.groupId === node.id && tabSelection.ids.has(paneId)
+                  const alwaysClose = narrow || noHover
 
                   const tab = (
                     <PaneTab
                       active={isActive}
+                      alwaysClose={alwaysClose}
                       aria-selected={isActive}
                       data-tree-tab={paneId}
                       key={paneId}
@@ -724,7 +729,7 @@ export function TreeGroup({
                           </TabKeyHint>
                         </span>
                       ) : null}
-                      <PaneTabLabel>{tabLabel(paneId)}</PaneTabLabel>
+                      <PaneTabLabel reserveClose={alwaysClose}>{tabLabel(paneId)}</PaneTabLabel>
                     </PaneTab>
                   )
 

@@ -1,3 +1,4 @@
+// health: allow FILE_LINES -- retained public mobile regression coverage stays intact during the upstream migration
 import { JsonRpcGatewayError } from '@hermes/shared'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import type { MutableRefObject } from 'react'
@@ -36,6 +37,8 @@ import type { SessionInfo } from '@/types/hermes'
 import { actRender, Harness, type HarnessHandle, RUNTIME_SESSION_ID } from './prompt-actions-harness'
 import { clearSingleFlightSessionResumeState } from './single-flight-resume'
 import { SESSION_COMPRESS_TIMEOUT_MS } from './slash'
+
+import { uploadComposerAttachment } from '.'
 
 // Suites in this file reuse the same stored-id constants. The module-level
 // single-flight resume map (and drift-recovery cache) would otherwise leak a
@@ -3171,6 +3174,58 @@ describe('usePromptActions file attachment sync', () => {
     })
   })
 
+  it('uploads a browser-selected file before submit and releases its bytes after submit lands', async () => {
+    $connection.set({ mode: 'remote', profile: 'coder', connectionId: 'phone' } as never)
+    const path = 'browser-file://selected/report.pdf'
+    const readFileDataUrlForAttach = vi.fn(async () => 'data:application/pdf;base64,AAECA/7/')
+    const releaseBrowserFile = vi.fn(() => true)
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { readFileDataUrlForAttach, releaseBrowserFile }
+    })
+    const calls: { method: string; params?: Record<string, unknown> }[] = []
+
+    const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      calls.push({ method, params })
+
+      if (method === 'file.attach') {
+        return {
+          attached: true,
+          ref_text: '@file:.hermes/desktop-attachments/report.pdf',
+          uploaded: true
+        } as never
+      }
+
+      return {} as never
+    })
+
+    let handle: HarnessHandle | null = null
+
+    await actRender(
+      <Harness onReady={h => (handle = h)} refreshSessions={async () => undefined} requestGateway={requestGateway} />
+    )
+
+    const attachment: ComposerAttachment = {
+      id: `file:${path}`,
+      kind: 'file',
+      label: 'report.pdf',
+      path,
+      refText: `@file:${path}`
+    }
+
+    expect(await handle!.submitText('summarize', { attachments: [attachment] })).toBe(true)
+    expect(calls.map(call => call.method)).toEqual(['file.attach', 'prompt.submit'])
+    expect(calls[0]?.params).toMatchObject({
+      data_url: 'data:application/pdf;base64,AAECA/7/',
+      name: 'report.pdf',
+      path
+    })
+    expect(calls[1]?.params).toMatchObject({
+      text: '@file:.hermes/desktop-attachments/report.pdf\n\nsummarize'
+    })
+    expect(releaseBrowserFile).toHaveBeenCalledWith(path)
+  })
+
   it('uploads Windows file bytes when local mode fronts a POSIX WSL/Docker backend', async () => {
     $connection.set({ mode: 'local' } as never)
     $currentCwd.set('/root')
@@ -5686,6 +5741,145 @@ describe('usePromptActions eager attachment upload (drop-time)', () => {
 
     await Promise.resolve()
     expect(requestGateway).not.toHaveBeenCalledWith('file.attach', expect.anything())
+  })
+})
+
+describe('uploadComposerAttachment remote read failures', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('turns the raw 16MB IPC cap error into a friendly remote-gateway message', async () => {
+    // electron/hardening.ts rejects the readFileDataUrl IPC with this exact
+    // shape when a file exceeds the configured data-URL read cap.
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: {
+        readFileDataUrl: vi.fn(async () => {
+          throw new Error('File preview failed: file is too large (20971520 bytes; limit 16777216 bytes).')
+        })
+      }
+    })
+
+    const requestGateway = vi.fn(async () => ({}) as never)
+
+    await expect(
+      uploadComposerAttachment(
+        { id: 'file:big', kind: 'file', label: 'huge.csv', path: '/abs/huge.csv' },
+        { remote: true, requestGateway, sessionId: RUNTIME_SESSION_ID }
+      )
+    ).rejects.toThrow('huge.csv is too large to upload to the remote gateway (max 16 MB).')
+
+    // The cap is hit before any gateway round-trip.
+    expect(requestGateway).not.toHaveBeenCalled()
+  })
+
+  it('passes non-cap read errors through unchanged', async () => {
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: {
+        readFileDataUrl: vi.fn(async () => {
+          throw new Error('ENOENT: no such file')
+        })
+      }
+    })
+
+    await expect(
+      uploadComposerAttachment(
+        { id: 'file:gone', kind: 'file', label: 'gone.csv', path: '/abs/gone.csv' },
+        { remote: true, requestGateway: vi.fn(async () => ({}) as never), sessionId: RUNTIME_SESSION_ID }
+      )
+    ).rejects.toThrow('ENOENT: no such file')
+  })
+})
+
+describe('uploadComposerAttachment browser-selected files', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('uploads exact browser-file bytes even when connection mode is not the upload signal', async () => {
+    const readFileDataUrlForAttach = vi.fn(async () => 'data:application/pdf;base64,AAECA/7/')
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { readFileDataUrlForAttach }
+    })
+    const calls: { method: string; params?: Record<string, unknown> }[] = []
+
+    const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      calls.push({ method, params })
+
+      return method === 'file.attach'
+        ? ({ attached: true, ref_text: '@file:.hermes/desktop-attachments/report.pdf', uploaded: true } as never)
+        : ({} as never)
+    })
+
+    const path = 'browser-file://selected/report.pdf'
+
+    await expect(
+      uploadComposerAttachment(
+        { id: `file:${path}`, kind: 'file', label: 'report.pdf', path, refText: `@file:${path}` },
+        { remote: false, requestGateway, sessionId: RUNTIME_SESSION_ID }
+      )
+    ).resolves.toMatchObject({ refText: '@file:.hermes/desktop-attachments/report.pdf' })
+
+    expect(readFileDataUrlForAttach).toHaveBeenCalledWith(path)
+    expect(calls).toEqual([
+      {
+        method: 'file.attach',
+        params: {
+          data_url: 'data:application/pdf;base64,AAECA/7/',
+          name: 'report.pdf',
+          path,
+          session_id: RUNTIME_SESSION_ID
+        }
+      }
+    ])
+  })
+})
+
+describe('uploadComposerAttachment image cache contract', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('always re-reads the image from disk, even when a stale previewUrl is cached', async () => {
+    // attachImagePath drops `previewUrl` as soon as a thumbnail exists, so a
+    // populated `previewUrl` here does not mean it holds full-resolution
+    // bytes (#93324) — the upload must never trust it and must always read
+    // the on-disk file for the bytes the model receives.
+    const readFileDataUrl = vi.fn(async () => 'data:image/png;base64,ZnJvbS1kaXNr')
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { readFileDataUrl }
+    })
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'image.attach_bytes') {
+        return { attached: true, path: '/gw/images/shot.png' } as never
+      }
+
+      return {} as never
+    })
+
+    const uploaded = await uploadComposerAttachment(
+      {
+        id: 'image:shot.png',
+        kind: 'image',
+        label: 'shot.png',
+        path: '/local/shot.png',
+        previewUrl: 'data:image/png;base64,c3RhbGUtY2FjaGVk'
+      },
+      { remote: true, requestGateway, sessionId: RUNTIME_SESSION_ID }
+    )
+
+    expect(readFileDataUrl).toHaveBeenCalledWith('/local/shot.png')
+    expect(requestGateway).toHaveBeenCalledWith('image.attach_bytes', {
+      content_base64: 'ZnJvbS1kaXNr',
+      filename: 'shot.png',
+      session_id: RUNTIME_SESSION_ID
+    })
+    expect(uploaded.path).toBe('/gw/images/shot.png')
   })
 })
 

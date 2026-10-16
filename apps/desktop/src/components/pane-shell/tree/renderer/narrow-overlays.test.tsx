@@ -3,11 +3,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { PANE_TOGGLE_REVEAL_EVENT } from '@/components/pane-shell'
 import { registry } from '@/contrib/registry'
+import { toggleFileBrowserOpen } from '@/store/layout'
 import { $paneStates, setPaneWidthOverride } from '@/store/panes'
 import { $connection } from '@/store/session'
 import { stubResizeObserver } from '@/test/jsdom'
 
-import { group, split } from '../model'
+import { allPaneIds, group, split } from '../model'
 import { $hiddenTreePanes, $layoutTree, $narrowViewport, declareDefaultTree } from '../store'
 
 import { NarrowOverlays, narrowOverlayWidth } from './narrow-overlays'
@@ -82,6 +83,15 @@ describe('narrow overlay of a stacked zone', () => {
     fireEvent.pointerDown(overlayTab('bots')!, { button: 0 })
     expect(getByTestId('bots-body')).toBeTruthy()
     expect(queryByTestId('sessions-body')).toBeNull()
+
+    // Touch has no hover or reliable mouse-leave. The always-visible close
+    // affordance must dismiss the overlay without removing either pane.
+    const close = overlayTab('bots')!.querySelector<HTMLButtonElement>('button')
+
+    expect(close).toBeTruthy()
+    fireEvent.click(close!)
+    expect(queryByTestId('bots-body')).toBeNull()
+    expect(allPaneIds($layoutTree.get()!)).toEqual(expect.arrayContaining(['sessions', 'bots']))
   })
 
   it('keeps the stripless form for a zone with a single collapsible', () => {
@@ -170,5 +180,43 @@ describe('narrow overlay of a stacked zone', () => {
     expect(narrowOverlayWidth({ paneFor: () => undefined, paneGone: () => false, overrides: {} }, null, bots)).toBe(
       '260px'
     )
+  })
+
+  it('reveals an absent-from-tree collapsible as a narrow overlay without adopting it back', () => {
+    const originalMatchMedia = window.matchMedia
+
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: true }))
+    })
+
+    try {
+      registerPane(
+        'files',
+        'files',
+        {
+          collapsible: true,
+          dock: { pane: 'workspace', pos: 'right' },
+          placement: 'right',
+          revealAliases: ['file-browser'],
+          width: '237px'
+        },
+        'file browser'
+      )
+      $layoutTree.set(group(['workspace']))
+
+      expect(allPaneIds($layoutTree.get()!)).not.toContain('files')
+
+      const { getByTestId, queryByTestId } = render(<NarrowOverlays />)
+      expect(queryByTestId('files-body')).toBeNull()
+
+      act(() => toggleFileBrowserOpen())
+      expect(getByTestId('files-body')).toBeTruthy()
+
+      act(() => toggleFileBrowserOpen())
+      expect(queryByTestId('files-body')).toBeNull()
+    } finally {
+      Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia })
+    }
   })
 })

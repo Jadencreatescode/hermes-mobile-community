@@ -2,7 +2,7 @@ import { GatewayReauthRequiredError } from '@hermes/shared'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { $notifications } from '@/store/notifications'
+import { $notifications, clearNotifications } from '@/store/notifications'
 import { deferred } from '@/test/deferred'
 
 // Collect the component graph before the behavioral test deadline starts.
@@ -57,6 +57,7 @@ const localConnection = {
 }
 
 beforeEach(() => {
+  clearNotifications()
   getConnectionConfig.mockResolvedValue(localConnection)
   saveConnectionConfig.mockResolvedValue(localConnection)
   cloudStatus.mockResolvedValue({ portalBaseUrl: 'https://portal.nousresearch.com', signedIn: true })
@@ -76,6 +77,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  // Emptying the store directly leaves auto-dismiss callbacks alive after
+  // jsdom teardown. Clear through the store API so it cancels those timers.
+  clearNotifications()
   vi.clearAllMocks()
 })
 
@@ -579,7 +583,7 @@ describe('GatewaySettings', () => {
       )
       expect($notifications.get().some((n: { message?: string }) => n.message === 'SSH connection failed.')).toBe(false)
     } finally {
-      $notifications.set([])
+      clearNotifications()
     }
   })
 

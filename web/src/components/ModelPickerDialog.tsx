@@ -87,6 +87,13 @@ interface Props {
    * "Set Auxiliary: Vision" shows `current: glm-5.3` while Vision is Qwen.
    */
   currentAssignment?: { model?: string; provider?: string } | null;
+  /**
+   * If true, the picker is scoped to the current chat: the "Persist globally"
+   * checkbox is hidden and the switch never carries `--global`, so it applies
+   * to this session only and never touches the profile default. Used by the
+   * dashboard chat sidebar, where the profile default is set from Settings.
+   */
+  sessionScoped?: boolean;
 }
 
 export function ModelPickerDialog(props: Props) {
@@ -100,8 +107,10 @@ export function ModelPickerDialog(props: Props) {
     title = "Switch Model",
     alwaysGlobal = false,
     currentAssignment,
+    sessionScoped = false,
   } = props;
   const standalone = !!loader && !!onApply;
+  const usesLoader = !!loader;
 
   const [providers, setProviders] = useState<ModelOptionProvider[]>([]);
   const [currentModel, setCurrentModel] = useState("");
@@ -111,7 +120,12 @@ export function ModelPickerDialog(props: Props) {
   const [selectedSlug, setSelectedSlug] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   const [query, setQuery] = useState("");
-  const [persistGlobal, setPersistGlobal] = useState(alwaysGlobal);
+  // A session-scoped picker is per-chat only: pin persistGlobal off so the
+  // emitted switch never carries `--global` and never writes the profile
+  // default. `alwaysGlobal` (standalone config paths) still pins it on.
+  const [persistGlobal, setPersistGlobal] = useState(
+    sessionScoped ? false : alwaysGlobal,
+  );
   const [applying, setApplying] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [pendingConfirm, setPendingConfirm] =
@@ -132,7 +146,7 @@ export function ModelPickerDialog(props: Props) {
   };
 
   const requestOptions = (refresh = false) =>
-    standalone
+    usesLoader
       ? (loader as (options?: { refresh?: boolean }) => Promise<ModelOptionsResult>)({
           refresh,
         })
@@ -435,9 +449,11 @@ export function ModelPickerDialog(props: Props) {
         </div>
 
         <footer className="border-t border-border p-3 flex items-center justify-between gap-3 flex-wrap">
-          {alwaysGlobal ? (
+          {alwaysGlobal || sessionScoped ? (
             <span className="text-xs text-muted-foreground">
-              Saves to config.yaml — applies to new sessions.
+              {sessionScoped
+                ? "Applies to this chat only."
+                : "Saves to config.yaml — applies to new sessions."}
             </span>
           ) : (
             <div className="flex items-center gap-2">

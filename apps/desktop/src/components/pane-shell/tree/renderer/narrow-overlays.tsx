@@ -82,15 +82,17 @@ export function NarrowOverlays() {
 
   const inTree = useMemo(() => new Set(tree ? allPaneIds(tree) : []), [tree])
 
-  const collapsibles = useMemo(
+  const revealables = useMemo(
     // Solo adopts sidebar panes without their surrounding sidebar chrome.
     // Suppress every reveal path while those panes are intentionally hidden.
-    () => (solo ? [] : panes.filter(p => paneChrome(p).collapsible && inTree.has(p.id) && !hiddenPanes.has(p.id))),
-    [solo, panes, inTree, hiddenPanes]
+    () => (solo ? [] : panes.filter(p => paneChrome(p).collapsible && !hiddenPanes.has(p.id))),
+    [solo, panes, hiddenPanes]
   )
 
-  const collapsiblesRef = useRef(collapsibles)
-  collapsiblesRef.current = collapsibles
+  const collapsibles = useMemo(() => revealables.filter(p => inTree.has(p.id)), [revealables, inTree])
+
+  const revealablesRef = useRef(revealables)
+  revealablesRef.current = revealables
 
   // ⌘B / ⌘G's narrow branch dispatches the app's toggle-reveal event with the
   // REAL pane id — accept those via each contribution's revealAliases.
@@ -109,7 +111,7 @@ export function NarrowOverlays() {
         return
       }
 
-      const match = collapsiblesRef.current.find(p => p.id === id || paneChrome(p).revealAliases?.includes(id))
+      const match = revealablesRef.current.find(p => p.id === id || paneChrome(p).revealAliases?.includes(id))
 
       if (!match) {
         return
@@ -149,12 +151,13 @@ export function NarrowOverlays() {
     }
   }, [narrow, solo])
 
-  if (!narrow || solo || collapsibles.length === 0) {
+  const revealed = reveal ? revealables.find(p => p.id === reveal.id) : undefined
+
+  if (!narrow || solo || (collapsibles.length === 0 && !revealed)) {
     return null
   }
 
   const sideOf = (c: Contribution) => (paneChrome(c).placement === 'left' ? 'left' : 'right')
-  const revealed = reveal ? collapsibles.find(p => p.id === reveal.id) : undefined
   const sides = [...new Set(collapsibles.map(sideOf))]
 
   // Size the overlay the way the pane's zone is sized while docked: declared
@@ -241,9 +244,11 @@ export function NarrowOverlays() {
               {zonePanes.map(pane => (
                 <PaneTab
                   active={pane.id === revealed.id}
+                  alwaysClose
                   aria-selected={pane.id === revealed.id}
                   data-narrow-overlay-tab={pane.id}
                   key={pane.id}
+                  onClose={() => setReveal(null)}
                   onPointerDown={event => {
                     if (event.button === 0) {
                       event.preventDefault()
@@ -251,7 +256,7 @@ export function NarrowOverlays() {
                     }
                   }}
                 >
-                  <PaneTabLabel>{pane.title ?? pane.id}</PaneTabLabel>
+                  <PaneTabLabel reserveClose>{pane.title ?? pane.id}</PaneTabLabel>
                 </PaneTab>
               ))}
             </PaneTabStrip>

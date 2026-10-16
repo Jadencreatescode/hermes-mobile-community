@@ -1276,7 +1276,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
         style={
           {
             '--titlebar-controls-left': `${controlsPos.left}px`,
-            '--titlebar-controls-top': `${controlsPos.top}px`,
+            '--titlebar-controls-top': `calc(${controlsPos.top}px + env(safe-area-inset-top, 0px))`,
             '--titlebar-controls-width': leftToolsWidth,
             '--titlebar-controls-y-nudge': titlebarControlsYNudge(titlebarChrome),
             '--titlebar-tools-right': titlebarToolsRight,

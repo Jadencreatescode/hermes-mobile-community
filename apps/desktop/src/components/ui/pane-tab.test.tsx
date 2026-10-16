@@ -135,3 +135,74 @@ describe('PaneTab hover close button', () => {
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
   })
 })
+
+describe('PaneTab always-visible close (narrow / touch viewport)', () => {
+  it('shows the ✕ without hovering when alwaysClose is set', () => {
+    const onClose = vi.fn()
+    render(
+      <PaneTab alwaysClose onClose={onClose}>
+        <PaneTabLabel>tab</PaneTabLabel>
+      </PaneTab>
+    )
+
+    expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy()
+  })
+
+  it('tapping the always-visible ✕ closes the tab', () => {
+    const onClose = vi.fn()
+    render(
+      <PaneTab alwaysClose onClose={onClose}>
+        <PaneTabLabel>tab</PaneTabLabel>
+      </PaneTab>
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the ✕ hidden without a pointer when alwaysClose is not set', () => {
+    const onClose = vi.fn()
+    render(
+      <PaneTab onClose={onClose}>
+        <PaneTabLabel>tab</PaneTabLabel>
+      </PaneTab>
+    )
+
+    // The ✕ is always in the DOM — the desktop reveal is a CSS opacity toggle,
+    // so it sits at opacity-0 (hidden) until the tab is hovered.
+    const close = screen.getByRole('button', { name: 'Close' })
+    const wrap = close.closest('span')!
+    expect(wrap.className).toContain('opacity-0')
+    expect(wrap.className).toContain('group-hover/tab:pointer-events-auto')
+  })
+
+  it('shows the ✕ at full opacity without a pointer when alwaysClose is set', () => {
+    const onClose = vi.fn()
+    render(
+      <PaneTab alwaysClose onClose={onClose}>
+        <PaneTabLabel>tab</PaneTabLabel>
+      </PaneTab>
+    )
+
+    const close = screen.getByRole('button', { name: 'Close' })
+    const wrap = close.closest('span')!
+    expect(wrap.className).toContain('opacity-100')
+    expect(wrap.className).not.toContain('opacity-0')
+    expect(wrap.className).not.toContain('group-hover/tab')
+  })
+})
+
+describe('PaneTabLabel reserveClose padding', () => {
+  it('does not pad the right edge by default (hover-revealed ✕ keeps full label width)', () => {
+    const { container } = render(<PaneTabLabel>long-filename</PaneTabLabel>)
+
+    // The outer Comp is the first span in the tree.
+    expect(container.querySelector('span')!.className).not.toContain('pr-6')
+  })
+
+  it('pads the right edge to reserve room for the always-visible ✕', () => {
+    const { container } = render(<PaneTabLabel reserveClose>long-filename</PaneTabLabel>)
+
+    expect(container.querySelector('span')!.className).toContain('pr-6')
+  })
+})

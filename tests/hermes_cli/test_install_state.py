@@ -149,14 +149,18 @@ def test_claiming_marks_the_machine_and_the_next_probe_sees_it(machine):
 
 
 def test_gateway_service_definitions_name_their_homes(tmp_path, monkeypatch):
+    from hermes_cli import gateway_windows
+    from hermes_platform.resolver import known_dirs
+
     home = tmp_path / "gw-home"
     unit = tmp_path / "hermes-gateway.service"
     unit.write_text(f'[Service]\nEnvironment="HERMES_HOME={home}"\n', encoding="utf-8")
     vbs = tmp_path / "Hermes_Gateway.vbs"
     vbs.write_text(f'env.Item("HERMES_HOME") = "{home}-win"\r\n', encoding="utf-8")
-    from hermes_platform.resolver import known_dirs
     monkeypatch.setattr(known_dirs, "gateway_service_definition_globs", lambda: (str(tmp_path / "*Gateway*"),
                                                                                 str(tmp_path / "*gateway*")))
+    monkeypatch.setattr(known_dirs, "system_gateway_service_definition_globs", lambda: ())
+    monkeypatch.setattr(gateway_windows, "registered_task_launchers", list)
 
     assert set(install_state._service_homes()) == {home, Path(f"{home}-win")}
 

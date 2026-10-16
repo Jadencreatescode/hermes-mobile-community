@@ -225,6 +225,13 @@ def message_agent_tool(target: str = "", message: str = "", task_id: Optional[st
     roster = list(roster_homes)
     peers = _peers(root)
     teammates = [_handle(n) for n in roster if n != me]
+    try:
+        from tools.connected_agent_bot_integration import BotRoster
+        for entry in BotRoster(hermes_home=root).list_entries(root, me):
+            if entry.provider != "local" and entry.handle not in teammates:
+                teammates.append(entry.handle)
+    except Exception:
+        logger.exception("Connected-agent roster extension failed")
 
     def _roster_err(msg: str) -> str:
         return _err(msg, roster=teammates, peers=peers)
@@ -244,6 +251,19 @@ def message_agent_tool(target: str = "", message: str = "", task_id: Optional[st
     delivery = dict(task_id=task_id, agent=agent)
     # Attribution for the recipient's memory hooks; the text prefix above stays the human-facing signature.
     author = {"id": f"bot:{me}", "name": _handle(me), "is_bot": True}
+
+    # Connected-agent providers own their transport and canonical chat; local
+    # profiles continue through the native Bot Mode and relay paths below.
+    try:
+        from tools.connected_agent_bot_integration import BotRoster, ConnectedAgentMessenger
+        entry = BotRoster(hermes_home=root).get_entry(raw_target, root, me)
+        if entry and entry.provider != "local":
+            return json.dumps(
+                ConnectedAgentMessenger(hermes_home=root).send_message(
+                    entry, body, _handle(me)))
+    except Exception as exc:
+        logger.error("Connected agent dispatch failed: %s", exc, exc_info=True)
+        return _err(f"Connected agent dispatch failed: {exc}")
 
     # Peer target: '<peer>/<agent>' or a bare registered peer name.
     peer_match = _PEER_TARGET_RE.match(raw_target)

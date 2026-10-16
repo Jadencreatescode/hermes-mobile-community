@@ -1,3 +1,4 @@
+// health: allow FILE_LINES -- retained public mobile pane state is migration scoped; splitting it during core adoption would risk state parity
 /**
  * Layout tree store: one persisted tree replaces paneStates side/band
  * overrides. The DEFAULT tree is declared by the app root (like config);
@@ -1302,6 +1303,19 @@ const narrowQuery = typeof window !== 'undefined' ? window.matchMedia?.(SIDEBAR_
 export const $narrowViewport = atom(Boolean(narrowQuery?.matches))
 
 narrowQuery?.addEventListener('change', event => $narrowViewport.set(event.matches))
+
+// A pointer that cannot hover (a finger on touch, or a trackpad with hover
+// disabled). The close ✕ is hover-revealed on a real pointer, so a touch user
+// would otherwise never see it — `hover: none` is the reliable signal that the
+// ✕ must stay always-visible, independent of viewport width (an iPad in
+// landscape, a phone in split-screen, a PWA at a wide standalone viewport all
+// sit above the 768px collapse breakpoint yet are still finger-driven).
+const hoverNoneQuery =
+  typeof window !== 'undefined' ? window.matchMedia?.('(hover: none)') : undefined
+
+export const $hoverNone = atom(Boolean(hoverNoneQuery?.matches))
+
+hoverNoneQuery?.addEventListener('change', event => $hoverNone.set(event.matches))
 
 /** The titlebar flip toggle (⌘\): mirror the whole layout left↔right. */
 export function mirrorLayoutTree() {

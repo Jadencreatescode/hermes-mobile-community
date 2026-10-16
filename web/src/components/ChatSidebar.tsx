@@ -7,13 +7,12 @@
  *   1. **JSON-RPC sidecar** (`GatewayClient` → /api/ws) — a lightweight
  *      session used only for connection state (the "live" badge) and
  *      credential warnings. Independent of the PTY pane's session by
- *      design. The model badge does NOT come from here: it prefers the
- *      PTY chat session's runtime identity (`session.info` over the events
- *      feed — the model actually answering, which changes when a provider
- *      fallback replaces the configured primary mid-turn, #54509), falls
- *      back to the effective config model over REST (`/api/model/info`),
- *      and the model picker writes config over REST (`/api/model/set`)
- *      then offers a dashboard reload so the running chat adopts it.
+ *      design. The model badge prefers the PTY chat session's runtime identity
+ *      (`session.info` over the events feed — the model actually answering,
+ *      including provider fallbacks, #54509), then falls back to the effective
+ *      config model over REST (`/api/model/info`). A picker switch is delivered
+ *      into the running PTY chat through `onModelSwitch`, so it remains scoped
+ *      to that chat and does not rewrite the profile default.
  *
  *   2. **Event subscriber** (/api/events?channel=…) — passive, receives
  *      every dispatcher emit from the PTY-side `tui_gateway.entry` that
@@ -33,7 +32,6 @@ import { Badge } from '@nous-research/ui/ui/components/badge'
 import { Card } from '@nous-research/ui/ui/components/card'
 
 import { ModelPickerDialog } from '@/components/ModelPickerDialog'
-import { ModelReloadConfirm } from '@/components/ModelReloadConfirm'
 import { ReasoningPicker } from '@/components/ReasoningPicker'
 import { GatewayClient, type ConnectionState } from '@/lib/gatewayClient'
 import { EventsFeedClient } from '@/lib/eventsFeedClient'
@@ -114,6 +112,8 @@ interface ChatSidebarProps {
   className?: string
   onDashboardNewSessionRequest?: () => void
   onSessionTitleChange?: (title: string | null) => void
+  /** Emit a `/model …` switch into the running PTY chat. */
+  onModelSwitch?: (switchCommand: string) => void
 }
 
 /** Build the ``session.create`` params for the sidecar session.
@@ -136,7 +136,8 @@ export function ChatSidebar({
   profile,
   className,
   onDashboardNewSessionRequest,
-  onSessionTitleChange
+  onSessionTitleChange,
+  onModelSwitch
 }: ChatSidebarProps) {
   const navigate = useNavigate()
   // `version` bumps on reconnect (manual button, profile/channel switch) and
@@ -184,12 +185,8 @@ export function ChatSidebar({
   // Bumped on model change/save so ReasoningPicker re-reads the saved effort
   // (config is profile-scoped the same way the model badge is).
   const [modelRefreshKey, setModelRefreshKey] = useState(0)
-  // Set after the picker saves a model and the user declines the reload: config
-  // is updated but the running session keeps its model until rebuilt.
+  // Set after a picker/model change so the sidebar can surface a short note.
   const [modelNotice, setModelNotice] = useState<string | null>(null)
-  // Short name of a just-saved model awaiting confirm to reload (a fresh chat
-  // session is how the running chat adopts it; we confirm before discarding it).
-  const [pendingReloadModel, setPendingReloadModel] = useState<string | null>(null)
 
   const refreshEffectiveModel = useCallback(() => {
     void api
@@ -204,6 +201,23 @@ export function ChatSidebar({
         // Best-effort: keep the last known label rather than blanking it.
       })
   }, [profile])
+
+  // The dashboard chat rides a PTY, so a per-chat model change is delivered as
+  // the same slash command the TUI uses. Reflect the choice immediately while
+  // `session.info` remains the runtime authority after the next turn.
+  const handleModelSwitch = useCallback(
+    (switchCommand: string) => {
+      const match = /^\/model\s+(.+?)\s+--provider\s+(\S+)$/i.exec(switchCommand)
+      if (match) {
+        setEffectiveModel(match[1].trim())
+        setRuntimeModel(match[1].trim())
+        setModelRefreshKey((k: number) => k + 1)
+        setModelNotice(`Model switched to ${match[1].trim()} for this chat.`)
+      }
+      onModelSwitch?.(switchCommand)
+    },
+    [onModelSwitch]
+  )
 
   // Profile or PTY channel change tears down both WebSockets. Bump `version`
   // (same path as the manual Reconnect button) so the gateway client is
@@ -338,8 +352,8 @@ export function ChatSidebar({
 
     // Create the sidecar session so the gateway surfaces session-scoped
     // signals (connection state, credential warnings). It's independent of the
-    // PTY pane's session by design. The model picker no longer rides this
-    // session — it writes config.yaml over REST — so we don't track its id.
+    // PTY pane's session by design. The model picker sends its slash command
+    // through the PTY owner, so this sidecar does not track a model session id.
     gw.connect()
       .then(() => {
         if (cancelled) {
@@ -525,7 +539,6 @@ export function ChatSidebar({
   const reconnect = useCallback(() => {
     setError(null)
     setModelNotice(null)
-    setPendingReloadModel(null)
     setVersion(v => v + 1)
   }, [])
 
@@ -645,47 +658,14 @@ export function ChatSidebar({
 
       {modelOpen && (
         <ModelPickerDialog
-          // Same path the Models page uses (REST /api/model/set), not the
-          // sidecar config.set RPC, which didn't reliably land in the
-          // config.yaml the agent boots from. Always persisted (alwaysGlobal).
+          // Session-scoped: deliver the switch into the running PTY chat and
+          // never rewrite the profile default configured from Settings.
           loader={() => api.getModelOptions(profile)}
-          alwaysGlobal
-          onApply={async ({ provider, model, confirmExpensiveModel }) => {
-            setModelNotice(null)
-            setPendingReloadModel(null)
-            const result = await api.setModelAssignment(
-              {
-                confirm_expensive_model: confirmExpensiveModel,
-                scope: 'main',
-                provider,
-                model
-              },
-              profile
-            )
-            // confirm_required => the dialog shows the expensive-model prompt
-            // and calls back; don't announce until the user confirms.
-            if (!result.confirm_required) {
-              refreshEffectiveModel()
-              // Ask before reloading: applying the model starts a fresh chat.
-              setPendingReloadModel(model.split('/').slice(-1)[0])
-            }
-            return result
-          }}
-          onClose={() => {
-            setModelOpen(false)
-            refreshEffectiveModel()
-          }}
+          sessionScoped
+          onSubmit={handleModelSwitch}
+          onClose={() => setModelOpen(false)}
         />
       )}
-
-      <ModelReloadConfirm
-        model={pendingReloadModel}
-        onCancel={() => {
-          const m = pendingReloadModel
-          setPendingReloadModel(null)
-          setModelNotice(`Model set to ${m}. Run /new or refresh the page to apply it to this chat.`)
-        }}
-      />
     </aside>
   )
 }

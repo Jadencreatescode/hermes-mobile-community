@@ -76,6 +76,7 @@ foreach ($asset in @(@('Square44x44Logo.png',44,44), @('Square150x150Logo.png',1
 `)
   checked('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', iconsScript, '-Dir', path.join(desktop, 'assets/appx')])
   fs.symlinkSync(path.join(repo, 'node_modules'), path.join(work, 'node_modules'), 'junction')
+  fs.symlinkSync(path.join(repo, 'apps/desktop/node_modules'), path.join(desktop, 'node_modules'), 'junction')
   const env = { ...process.env, HERMES_HOME: path.join(root, 'home'), HERMES_RUNTIME_DIR: path.join(root, 'runtime') }
   for (const key of ['_HERMES_CHANNEL_REQUEST_JSON', 'HERMES_BUILD_COMMIT', 'HERMES_PAYLOAD_TAG', 'HERMES_PAYLOAD_VERSION', 'HERMES_DESKTOP_VARIANT', 'BUILD_NUMBER']) delete env[key]
   const gitEnv = { ...env, GIT_AUTHOR_NAME: 'Native fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Native fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid', GIT_AUTHOR_DATE: '2026-09-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-09-01T00:00:00Z' }
@@ -131,7 +132,7 @@ foreach ($asset in @(@('Square44x44Logo.png',44,44), @('Square150x150Logo.png',1
       import config from ${JSON.stringify(moduleUrl('apps/desktop/electron-builder.config.cjs'))};
       import { appIdentity } from ${JSON.stringify(moduleUrl('scripts/msix-shared.mjs'))};
       import { stageDesktopLaunchers } from ${JSON.stringify(moduleUrl('apps/desktop/scripts/write-build-stamp.mjs'))};
-      import { AppInfo } from ${JSON.stringify(moduleUrl('node_modules/app-builder-lib/dist/appInfo.js'))};
+      import { AppInfo } from ${JSON.stringify(moduleUrl('apps/desktop/node_modules/app-builder-lib/dist/appInfo.js'))};
       import fs from 'node:fs';
       const metadata = { ...JSON.parse(fs.readFileSync(${JSON.stringify(path.join(desktop, 'package.json'))}, 'utf8')), ...config.extraMetadata };
       const executable = new AppInfo({ config, metadata }, null, config.win).productFilename + '.exe';

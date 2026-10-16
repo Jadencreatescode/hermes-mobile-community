@@ -51,8 +51,11 @@ beforeEach(() => {
   getGlobalModelOptions.mockResolvedValue({ providers: MOCK_PROVIDERS })
 })
 
-afterEach(() => {
+afterEach(async () => {
   cleanup()
+  // Radix FocusScope schedules its unmount event on the next macrotask.
+  // Drain it while this test's jsdom Event realm is still active.
+  await new Promise<void>(resolve => window.setTimeout(resolve, 0))
   vi.clearAllMocks()
 })
 

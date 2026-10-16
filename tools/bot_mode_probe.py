@@ -12,10 +12,13 @@ helpers shared by ``bot_mode_dm`` and ``bot_relay``.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _PROTOCOL_HEADING = "## Messaging other agents"
 # The legacy section through the next H2 heading (or EOF), plus the blank lines before it.
@@ -272,6 +275,15 @@ def _build_section(home: Path) -> str:
         return ""
 
     roster_lines = [_bullet(f"@{_handle(name)}", _profile_role(d)) for name, d in _roster(root) if name != me]
+    try:
+        from tools.connected_agent_bot_integration import BotRoster
+        roster_lines.extend(
+            _bullet(f"@{entry.handle}", f"({entry.provider})" if entry.provider else "", entry.role)
+            for entry in BotRoster(hermes_home=root).list_entries(root, me)
+            if entry.provider != "local"
+        )
+    except Exception:
+        logger.exception("Connected-agent prompt roster extension failed")
     roster_block = "\n".join(roster_lines) or "- (no teammates yet)"
 
     return (
@@ -368,6 +380,16 @@ def capability_fingerprint(home: str | os.PathLike | None = None) -> str:
     resolved = _resolve_home(home)
     root = _hermes_root(resolved)
     surface: dict = {}
+    try:
+        from tools.connected_agent_bot_integration import BotRoster
+        surface["connected_agents"] = sorted(
+            f"{e.agent_id}:{e.handle}:{e.provider}:{e.role}"
+            for e in BotRoster(hermes_home=root).list_entries(root, "default")
+            if e.provider != "local"
+        )
+    except Exception:
+        logger.exception("Connected-agent capability fingerprint failed")
+        surface["connected_agents"] = []
     try:
         # Canonical loader (managed overlay + env expansion + normalization),
         # scoped to the bot's home via the override the loaders already honor.

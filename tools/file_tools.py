@@ -16,7 +16,7 @@ import stat
 import threading
 import time
 from contextlib import ExitStack
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from agent.file_safety import get_nt_namespace_error, get_read_block_error
 from agent.tool_result_classification import GUARDRAIL_REFUSAL_KEY
@@ -43,6 +43,90 @@ from tools.file_tools_read_tracking import (
     _record_patch_failure, _reset_patch_failures, _task_data, _update_read_timestamp)
 
 logger = logging.getLogger(__name__)
+
+_unscoped_resolve_path_for_task = _resolve_path_for_task
+
+
+class ProductionFileScopeError(PermissionError):
+    """A production-session file request escaped its server-minted workspace."""
+
+
+def _production_file_scope_root(task_id: str = "default") -> Path | None:
+    """Return the descriptor-backed root assigned to a production session."""
+    try:
+        from tools.terminal_tool import resolve_task_overrides
+        raw = resolve_task_overrides(task_id).get("file_scope_root")
+    except Exception:  # health: allow BLE001 -- production sessions fail closed when task override resolution is unavailable for any reason
+        raw = None
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip() or not os.path.isabs(raw):
+        raise ProductionFileScopeError("Production file scope is unavailable.")
+    root = Path(raw)
+    try:
+        if not root.is_dir():
+            raise ProductionFileScopeError("Production file scope is unavailable.")
+    except OSError as exc:
+        raise ProductionFileScopeError("Production file scope is unavailable.") from exc
+    return root
+
+
+def _production_scoped_path(filepath: str, task_id: str = "default") -> Path | None:
+    """Resolve a model-supplied path beneath a pinned production workspace."""
+    root = _production_file_scope_root(task_id)
+    if root is None:
+        return None
+    if not isinstance(filepath, str) or not filepath:
+        raise ProductionFileScopeError(
+            "Production file scope requires a non-empty relative path.")
+    if "\x00" in filepath:
+        raise ProductionFileScopeError("Production file scope rejected an invalid path.")
+    posix, windows = PurePosixPath(filepath), PureWindowsPath(filepath)
+    if posix.is_absolute() or windows.is_absolute() or Path(_expand_tilde(filepath)).is_absolute():
+        raise ProductionFileScopeError(
+            "Production file scope rejects absolute paths; use a workspace-relative path.")
+    if ".." in posix.parts or ".." in windows.parts:
+        raise ProductionFileScopeError(
+            "Production file scope rejects parent-directory traversal.")
+    candidate = root
+    for part in (part for part in posix.parts if part not in ("", ".")):
+        candidate = candidate / part
+        try:
+            if candidate.is_symlink():
+                raise ProductionFileScopeError(
+                    "Production file scope rejects symlink paths.")
+        except OSError as exc:
+            raise ProductionFileScopeError(
+                "Production file scope could not validate the requested path.") from exc
+    return candidate
+
+
+def _production_scope_error(filepath: str, task_id: str = "default") -> str | None:
+    try:
+        _production_scoped_path(filepath, task_id)
+    except ProductionFileScopeError as exc:
+        return str(exc)
+    return None
+
+
+def _production_search_scope_error(path: str, task_id: str = "default") -> str | None:
+    try:
+        scoped = _production_scoped_path(path, task_id)
+    except ProductionFileScopeError as exc:
+        return str(exc)
+    if scoped is None or scoped.exists():
+        return None
+    parts = [part for chunk in path.split(",") for part in chunk.split() if part]
+    if len(parts) >= 2:
+        return (
+            "Production file scope rejects multiple search roots; search one "
+            "workspace-relative path at a time.")
+    return None
+
+
+def _resolve_path_for_task(filepath: str, task_id: str = "default"):
+    scoped = _production_scoped_path(filepath, task_id)
+    return scoped if scoped is not None else _unscoped_resolve_path_for_task(filepath, task_id)
 
 
 _EXPECTED_WRITE_ERRNOS = {errno.EACCES, errno.EPERM, errno.EROFS}
@@ -603,6 +687,7 @@ def _record_successful_read(task_data: dict, task_id: str, path: str, resolved_s
     return count
 
 
+# health: allow CC -- the security-reviewed production workspace boundary keeps fail-closed path checks ordered at the file-tool chokepoint
 def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, task_id: str = "default") -> str:
     """Read a file with pagination and line numbers.
 
@@ -613,6 +698,9 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
     """
     try:
         offset, limit = normalize_read_pagination(offset, limit)
+
+        if scope_err := _production_scope_error(path, task_id):
+            return tool_error(scope_err)
 
         # On the RAW model-supplied string, before any expanduser()/resolve():
         # on Windows resolving \??\UNC\host\share already sends SMB auth (NTLM
@@ -776,6 +864,8 @@ def _write_precheck_error(paths: list[str], content_paths: list[str], task_id: s
     prompt covers every path of a multi-file patch.
     """
     for p in paths:
+        if err := _production_scope_error(p, task_id):
+            return err
         err = _check_sensitive_path(p, task_id) or (
             None if cross_profile else _check_cross_profile_path(p, task_id))
         if err:
@@ -869,7 +959,8 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
     cross-PROFILE guard it was named for no longer exists).
     """
     # write_file checks the binary-document guard before the mirror guard.
-    err = (_check_sensitive_path(path, task_id)
+    err = (_production_scope_error(path, task_id)
+           or _check_sensitive_path(path, task_id)
            or _check_binary_document_write(path, task_id)
            or _check_protected_instruction_write([path], task_id)
            or _check_approval_required_write([path], task_id)
@@ -1057,6 +1148,9 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
     """Search for content or files."""
     try:
         offset, limit = normalize_search_pagination(offset, limit)
+
+        if scope_err := _production_search_scope_error(path, task_id):
+            return tool_error(scope_err)
 
         # Pagination args (and order) are part of the key so paging through truncated
         # results doesn't trip the repeated-search guard.

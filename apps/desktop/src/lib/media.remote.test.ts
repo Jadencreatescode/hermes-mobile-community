@@ -192,6 +192,24 @@ describe('resolveMediaPlaybackSrc', () => {
     )
   })
 
+  it('uses the authenticated same-origin browser stream capability for gateway audio', async () => {
+    const gatewayMediaStreamUrl = vi.fn(() =>
+      'https://mobile.example.test/api/files/stream?path=%2Froot%2Foutputs%2Fvoice.m4a&profile=voice'
+    )
+
+    vi.stubGlobal('window', { hermesDesktop: { gatewayMediaStreamUrl } })
+    $connection.set({ connectionId: 'phone', mode: 'remote', profile: 'voice' } as never)
+
+    await expect(resolveMediaPlaybackSrc('/root/outputs/voice.m4a')).resolves.toBe(
+      'https://mobile.example.test/api/files/stream?path=%2Froot%2Foutputs%2Fvoice.m4a&profile=voice'
+    )
+    expect(gatewayMediaStreamUrl).toHaveBeenCalledWith({
+      connectionId: 'phone',
+      path: '/root/outputs/voice.m4a',
+      profile: 'voice'
+    })
+  })
+
   it('uses the Electron streaming protocol for local desktop video', async () => {
     vi.stubGlobal('window', { hermesDesktop: { api: vi.fn() } })
     $connection.set({ mode: 'local' } as never)

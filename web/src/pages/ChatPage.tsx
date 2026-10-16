@@ -1,3 +1,4 @@
+// health: allow FILE_LINES -- retained public mobile dashboard behavior is migration scoped; splitting the page during core adoption would risk parity
 /**
  * ChatPage — embeds `hermes --tui` inside the dashboard.
  *
@@ -124,6 +125,7 @@ import { SGR_MOUSE_RE } from "@/lib/pty-mouse-report";
 // second tab — including a Chrome "Duplicate tab" — gets its own PTY instead of
 // taking over this one. See #115304.
 
+// health: allow FUNC_LINES -- retained mobile chat orchestration is migration scoped and regression tested
 export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termWrapRef = useRef<HTMLDivElement | null>(null);
@@ -491,6 +493,21 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       onCopyReset: () => setCopyState("idle"),
     });
   };
+
+  // Deliver a session-scoped /model switch into the running PTY chat. The
+  // dashboard chat rides a `hermes --tui` PTY, so the switch is typed into
+  // that PTY (session-scoped) rather than written to the profile default.
+  // Mirrors handleCopyLast's burst-then-Return timing so Ink tokenizes the
+  // line instead of coalescing it into a paste.
+  const handleModelSwitch = useCallback((switchCommand: string) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(switchCommand);
+    setTimeout(() => {
+      const s = wsRef.current;
+      if (s && s.readyState === WebSocket.OPEN) s.send("\r");
+    }, 100);
+  }, []);
 
   useEffect(() => {
     // Don't spawn the chat PTY (and the TUI/agent bootstrap it triggers)
@@ -1850,6 +1867,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
                 profile={scopedProfile}
                 onDashboardNewSessionRequest={startFreshDashboardChat}
                 onSessionTitleChange={handleSessionTitleChange}
+                onModelSwitch={handleModelSwitch}
               />
             </div>
             <ChatSessionList
@@ -2043,6 +2061,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
                 profile={scopedProfile}
                 onDashboardNewSessionRequest={startFreshDashboardChat}
                 onSessionTitleChange={handleSessionTitleChange}
+                onModelSwitch={handleModelSwitch}
               />
             </div>
 

@@ -77,6 +77,29 @@ describe('statusbar item visibility', () => {
 
     expect(screen.getByText('Plugin thing')).toBeTruthy()
   })
+
+  it('shows context usage by default while keeping the per-turn timers optional', async () => {
+    const statusbar = bar([
+      item('running-timer', 'Turn timer', { variant: 'text' }),
+      item('context-usage', 'Context meter', { variant: 'menu' }),
+      item('session-timer', 'Session timer', { variant: 'text' }),
+      item('gateway-health', 'Gateway')
+    ])
+
+    expect(within(statusbar).getByText('Context meter')).toBeTruthy()
+
+    for (const label of ['Turn timer', 'Session timer']) {
+      expect(screen.queryByText(label)).toBeNull()
+    }
+
+    openContextMenu(statusbar)
+
+    const row = await screen.findByRole('menuitemcheckbox', { name: 'Session timer' })
+    fireEvent.click(row)
+
+    expect($statusbarHiddenIds.get()).not.toContain('session-timer')
+    expect(within(statusbar).getByText('Session timer')).toBeTruthy()
+  })
 })
 
 describe('reset to defaults', () => {

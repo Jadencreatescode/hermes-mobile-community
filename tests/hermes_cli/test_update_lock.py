@@ -267,6 +267,9 @@ def test_delegate_keeps_the_claim_live_after_the_partner_dies(marker, monkeypatc
     _claim_v2(marker, other_pid)
     base = marker.read_bytes()
     monkeypatch.setenv(HANDOFF_PID_ENV, str(other_pid))
+    monkeypatch.setattr(
+        "hermes_cli.update_lock._runtime_host_below", lambda _pid: False
+    )
 
     lock = UpdateLock(path=marker)
     assert lock.acquire() is True and lock.acquired is False
@@ -635,6 +638,9 @@ class TestHandoffFromOrchestratingUpdater:
         # other_pid stands in for the live parent updater.
         _claim(marker, other_pid)
         monkeypatch.setenv(HANDOFF_PID_ENV, str(other_pid))
+        monkeypatch.setattr(
+            "hermes_cli.update_lock._runtime_host_below", lambda _pid: False
+        )
 
         lock = UpdateLock(path=marker)
         assert lock.acquire() is True

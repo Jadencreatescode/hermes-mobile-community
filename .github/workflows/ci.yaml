@@ -450,21 +450,89 @@ jobs:
     outputs:
       needs-json: ${{ steps.evaluate.outputs.needs-json }}
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - name: Checkout fail-closed aggregate evaluator
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
           ref: ${{ inputs.commit || github.sha }}
       - name: Evaluate job results
         id: evaluate
-        # Shared with the stable orchestrator (scripts/ci/required_results.py
-        # is imported there). NEEDS is the toJSON(needs) context; RELEASE
-        # switches the gate into strict mode for release runs.
+        # Enumerate the complete current dependency graph explicitly. Missing,
+        # cancelled, invalid, or failed entries fail; only classifier/event-
+        # proven skips are accepted.
         env:
           NEEDS: ${{ toJSON(needs) }}
-          RELEASE: ${{ inputs.release }}
         run: |
-          args=()
-          if [ "$RELEASE" = true ]; then args+=(--release); fi
-          printf '%s' "$NEEDS" | python3 scripts/ci/required_results.py "${args[@]}"
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          needs = json.loads(os.environ["NEEDS"])
+          detect = needs.get("detect")
+          outputs = detect.get("outputs", {}) if isinstance(detect, dict) else {}
+          if not isinstance(outputs, dict):
+              outputs = {}
+
+          required = {
+              "detect",
+              "infographic-check",
+              "case-collision-check",
+              "blob-size-check",
+              "lazy-deps-guard",
+              "profile-artifact-check",
+              "icons-freshness-check",
+          }
+
+          def require_unless_all_false(job, *lanes):
+              if not all(outputs.get(lane) == "false" for lane in lanes):
+                  required.add(job)
+
+          require_unless_all_false("tests", "python", "e2e", "e2e_upgrade")
+          require_unless_all_false(
+              "tests-os", "python", "desktop_updater", "e2e", "e2e_upgrade"
+          )
+          require_unless_all_false("lint", "python", "frontend")
+          require_unless_all_false("js-tests", "frontend")
+          require_unless_all_false("rust-tests", "rust")
+          require_unless_all_false("remote-backends", "remote_backends")
+          require_unless_all_false("bootstrap-installer", "bootstrap")
+          require_unless_all_false("e2e-desktop-core", "e2e_desktop_core")
+          require_unless_all_false("e2e-desktop-update", "e2e_desktop_update")
+          require_unless_all_false("docs-site", "site")
+          require_unless_all_false("contributor-check", "python")
+          require_unless_all_false("uv-lockfile", "uv_lock")
+          require_unless_all_false("docker-lint", "docker_meta")
+
+          event = outputs.get("event_name")
+          event_known = event in {"pull_request", "push", "workflow_dispatch", "workflow_call"}
+          if event == "pull_request" or not event_known:
+              required.add("history-check")
+              require_unless_all_false("lockfile-diff", "npm_lock")
+              require_unless_all_false("prompt-surface-diff", "python")
+              require_unless_all_false("supply-chain", "scan", "deps")
+
+          # e2e-desktop is deliberately disabled with a bare `if: false`; it is
+          # the one dependency omitted even when its classifier lanes are true.
+          filtered = {name: needs.get(name) for name in sorted(required)}
+          temp = Path(os.environ["RUNNER_TEMP"])
+          (temp / "required-needs.json").write_text(
+              json.dumps(filtered, separators=(",", ":")), encoding="utf-8"
+          )
+          (temp / "required-jobs.txt").write_text(
+              "".join(f"{name}\n" for name in sorted(required)), encoding="utf-8"
+          )
+          PY
+
+          args=(
+            --strict
+            --needs-json "$(cat "$RUNNER_TEMP/required-needs.json")"
+            --github-output "$GITHUB_OUTPUT"
+          )
+          while IFS= read -r job; do
+            args+=(--required-job "$job")
+          done < "$RUNNER_TEMP/required-jobs.txt"
+          python3 scripts/ci/evaluate_required_jobs.py "${args[@]}"
 
   # ─────────────────────────────────────────────────────────────────────
   # CI timing report: collect per-job/step durations from the GitHub API,

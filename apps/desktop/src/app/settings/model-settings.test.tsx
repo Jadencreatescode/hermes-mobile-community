@@ -946,6 +946,12 @@ describe('ModelSettings MoA preset editor', () => {
       vi.useRealTimers()
     }
   })
+
+  it('keeps every stacked reference switch visibly labelled', async () => {
+    await openReferenceEditor()
+
+    expect(screen.getAllByText('Enabled')).toHaveLength(3)
+  })
 })
 
 describe('ModelSettings stale-aux banner dismissal', () => {

@@ -227,6 +227,7 @@ def _maybe_reap_docker_orphans(container_config: dict[str, Any]) -> None:
 # envs and ACP register a custom image / cwd for a task_id BEFORE the agent
 # loop; sandbox creation consults this first, then the TERMINAL_* env vars.
 _task_env_overrides: dict[str, dict[str, Any]] = {}
+_task_env_overrides_lock = threading.Lock()
 
 # Per-session cwd records: the durable source of truth for "which directory
 # is THIS session in". Keyed by the raw session/task key, NOT the collapsed
@@ -323,7 +324,8 @@ def register_task_env_overrides(task_id: str, overrides: dict[str, Any]):
     Keyed like ``_session_cwd`` — routed-profile qualified (:func:`_qualify_task_key`) — so two
     profiles registering the same task id never read each other's image/cwd (#123989).
     """
-    _task_env_overrides[_qualify_task_key(task_id)] = overrides
+    with _task_env_overrides_lock:
+        _task_env_overrides[_qualify_task_key(task_id)] = overrides
 
     new_cwd = overrides.get("cwd")
     if isinstance(new_cwd, str) and new_cwd.strip():
@@ -340,12 +342,30 @@ def register_task_env_overrides(task_id: str, overrides: dict[str, Any]):
                 env.cwd = sanitized
 
 
-def clear_task_env_overrides(task_id: str):
-    """Drop a task's overrides, cwd record and container alias (rollout cleanup)."""
-    _task_env_overrides.pop(_qualify_task_key(task_id), None)
-    clear_session_cwd(task_id)
+def clear_task_env_overrides(
+    task_id: str, expected: Optional[dict[str, Any]] = None
+) -> bool:
+    """Drop task state, optionally only when the current override still matches.
+
+    The ownership check prevents teardown of an old runtime from clearing a
+    replacement runtime's workspace capability under the same session key.
+    """
+    qualified = _qualify_task_key(task_id)
+    with _task_env_overrides_lock:
+        current = _task_env_overrides.get(qualified)
+        if expected is not None and (
+            current is None
+            or any(current.get(key) != value for key, value in expected.items())
+        ):
+            return False
+        removed = _task_env_overrides.pop(qualified, None)
+    expected_cwd = expected.get("cwd") if expected else None
+    with _session_cwd_lock:
+        if expected_cwd is None or _session_cwd.get(qualified) == expected_cwd:
+            _session_cwd.pop(qualified, None)
     with _container_alias_lock:
         _container_aliases.pop(task_id, None)
+    return removed is not None
 
 
 def register_container_alias(child_task_id: str, parent_task_id: Optional[str]) -> None:
@@ -378,8 +398,11 @@ def _has_isolation_overrides(task_id: Optional[str]) -> bool:
     """True when *task_id* registered image/env_type overrides — the single
     "isolated RL/benchmark rollout" predicate shared by key resolution and
     container creation so the two can't drift."""
-    overrides = _task_env_overrides.get(_qualify_task_key(task_id)) if task_id else None
-    return bool(overrides and set(overrides) & _ISOLATION_OVERRIDE_KEYS)
+    if not task_id:
+        return False
+    with _task_env_overrides_lock:
+        overrides = _task_env_overrides.get(_qualify_task_key(task_id))
+        return bool(overrides and set(overrides) & _ISOLATION_OVERRIDE_KEYS)
 
 
 @dataclass(frozen=True)
@@ -536,11 +559,13 @@ def resolve_task_overrides(task_id: Optional[str]) -> dict[str, Any]:
     the terminal and file layers can't drift apart.
     """
     raw = task_id or "default"
-    return (
-        _task_env_overrides.get(_qualify_task_key(raw))
-        or _task_env_overrides.get(_resolve_container_task_id(raw))
-        or {}
-    )
+    container_id = _resolve_container_task_id(raw)
+    with _task_env_overrides_lock:
+        return dict(
+            _task_env_overrides.get(_qualify_task_key(raw))
+            or _task_env_overrides.get(container_id)
+            or {}
+        )
 
 
 # Backends that take an image, keyed to the override/config key carrying it.

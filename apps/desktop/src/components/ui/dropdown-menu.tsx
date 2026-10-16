@@ -293,7 +293,7 @@ function DropdownMenuItem({
         menuItemClass,
         menuItemFocusClass,
         searchHoverClass,
-        "data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-7 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 [&_svg:not([class*='text-'])]:text-(--ui-text-tertiary) data-[variant=destructive]:*:[svg]:text-destructive!",
+        "data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-7 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 [&_svg:not([class*='text-'])]:text-(--ui-text-tertiary) data-[variant=destructive]:*:[svg]:text-destructive! max-sm:min-h-11",
         className
       )}
       data-inset={inset}
@@ -320,7 +320,7 @@ function DropdownMenuCheckboxItem({
         menuItemClass,
         menuItemFocusClass,
         searchHoverClass,
-        'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+        'data-[disabled]:pointer-events-none data-[disabled]:opacity-50 max-sm:min-h-11',
         className
       )}
       data-slot="dropdown-menu-checkbox-item"
@@ -352,7 +352,7 @@ function DropdownMenuRadioItem({
         menuItemClass,
         menuItemFocusClass,
         searchHoverClass,
-        'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+        'data-[disabled]:pointer-events-none data-[disabled]:opacity-50 max-sm:min-h-11',
         className
       )}
       data-slot="dropdown-menu-radio-item"

@@ -95,6 +95,82 @@ method("tools.configure", params=ToolsConfigureParams, result=ToolsConfigureResu
        doc="Persist a toolset / MCP enable-disable change and rebuild the session agent so it takes effect now.")
 
 
+# ── kanban ────────────────────────────────────────────────────────────────────────────────────
+
+
+class KanbanBoardParams(ProfileParams):
+    board: str | None = None
+    tenant: str | None = None
+    assignee: str | None = None
+    include_archived: bool = False
+
+
+class KanbanBoardTask(Result):
+    id: str
+    title: str
+    status: str
+    assignee: str | None
+    priority: int
+    latest_summary: str | None
+
+
+class KanbanBoardResult(Result):
+    tasks: list[KanbanBoardTask]
+    count: int
+
+
+method("kanban.board", params=KanbanBoardParams, result=KanbanBoardResult,
+       doc="Read the Kanban board, optionally filtered by board, tenant, assignee, or archive state.")
+
+
+class KanbanDiagnosticSeverity(WireEnum):
+    warning = "warning"
+    error = "error"
+    critical = "critical"
+
+
+class KanbanDiagnosticsParams(ProfileParams):
+    board: str | None = None
+    severity: KanbanDiagnosticSeverity | None = None
+
+
+class KanbanDiagnosticAction(Result):
+    kind: str
+    label: str
+    payload: dict[str, JsonValue]
+    suggested: bool
+
+
+class KanbanDiagnostic(Result):
+    kind: str
+    severity: KanbanDiagnosticSeverity
+    title: str
+    detail: str
+    actions: list[KanbanDiagnosticAction]
+    first_seen_at: int
+    last_seen_at: int
+    count: int
+    run_id: int | None
+    data: dict[str, JsonValue]
+
+
+class KanbanTaskDiagnostics(Result):
+    task_id: str
+    task_title: str
+    task_status: str
+    task_assignee: str | None
+    diagnostics: list[KanbanDiagnostic]
+
+
+class KanbanDiagnosticsResult(Result):
+    diagnostics: list[KanbanTaskDiagnostics]
+    count: int
+
+
+method("kanban.diagnostics", params=KanbanDiagnosticsParams, result=KanbanDiagnosticsResult,
+       doc="Return active task diagnostics, optionally filtered by board and minimum severity.")
+
+
 # ── reload ────────────────────────────────────────────────────────────────────────────────────
 
 

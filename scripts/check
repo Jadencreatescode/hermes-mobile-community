@@ -116,6 +116,10 @@ _GUARDS = {
 # (blob-size-check.yml).
 _DIFF_GUARDS = {"blob-size": ["scripts/ci/check_blob_size.py"]}
 _CHECKS = (*_GUARDS, *_DIFF_GUARDS, "ruff", "health")
+_MIGRATION_HEALTH_MARKER = ".github/code-health-migration-base"
+_APPROVED_MIGRATION_HEALTH_BASES = frozenset({
+    "d923a5eb487a17c0a68801bba9ef0f56c81040a8",  # exact official v0.22.2
+})
 
 
 @dataclass
@@ -123,12 +127,13 @@ class _Job:
     argv: list[str]
     cwd: Path = REPO
     env: dict[str, str] | None = None
+    timeout_seconds: int = 900
 
 
 def _run(job: _Job) -> tuple[int, str]:
     proc = subprocess.run(
         job.argv, cwd=job.cwd, env=job.env, capture_output=True, text=True, encoding="utf-8",
-        errors="replace", stdin=subprocess.DEVNULL, timeout=900, check=False,
+        errors="replace", stdin=subprocess.DEVNULL, timeout=job.timeout_seconds, check=False,
     )
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
@@ -164,6 +169,7 @@ def _tree_snapshot(tree: str) -> Iterator[tuple[Path, dict[str, str]]]:
 
 
 def _jobs(names: list[str], base: str | None, head: str | None,
+          health_base: str | None = None,
           root: Path = REPO, env: dict[str, str] | None = None) -> dict[str, _Job]:
     jobs: dict[str, _Job] = {}
     for name in names:  # built only when selected: `--only shebangs` needs no ruff
@@ -181,9 +187,11 @@ def _jobs(names: list[str], base: str | None, head: str | None,
             # in a snapshot its engine, rules and policy files (profile_scope_patterns.json, the
             # ruff pin) are the judged artifact's own, never unstaged working-tree bytes.
             health = [sys.executable, "-m", "scripts.code_health"]
-            health += ["--base", base] if base else []
+            health += ["--base", health_base] if health_base else []
             health += ["--head", head] if head else []
-            jobs[name] = _Job(health, root, env)
+            # Large upstream migrations legitimately make the whole-tree ratchet exceed the
+            # ordinary guard budget even on an otherwise idle runner.
+            jobs[name] = _Job(health, root, env, timeout_seconds=1800)
     return jobs
 
 
@@ -192,9 +200,40 @@ def _run_jobs(jobs: dict[str, _Job]) -> dict[str, tuple[int, str]]:
         return dict(zip(jobs, pool.map(_run, jobs.values()), strict=True))
 
 
+def _health_base(root: Path, requested_base: str) -> str:
+    """Use the exact upstream parent only for the PR that introduces an approved migration.
+
+    The marker is inert once it exists on the requested base, so later PRs ratchet against the
+    public main branch normally. The exact allowlist prevents a candidate from choosing a lax base.
+    """
+    marker = root / _MIGRATION_HEALTH_MARKER
+    if not marker.is_file():
+        return requested_base
+    value = marker.read_text(encoding="utf-8-sig").strip()
+    if value not in _APPROVED_MIGRATION_HEALTH_BASES:
+        raise RuntimeError(f"unapproved migration health base: {value or '<empty>'}")
+    inherited = subprocess.run(
+        ["git", "cat-file", "-e", f"{requested_base}:{_MIGRATION_HEALTH_MARKER}"],
+        cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL, timeout=30, check=False,
+    )
+    if inherited.returncode == 0:
+        return requested_base
+    target = subprocess.run(
+        ["git", "cat-file", "-e", f"{value}^{{commit}}"],
+        cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL, timeout=30, check=False,
+    )
+    if target.returncode != 0:
+        raise RuntimeError(f"approved migration health base is unavailable: {value}")
+    return value
+
+
 def _run_all(args: argparse.Namespace) -> dict[str, tuple[int, str]]:
+    requested_health_base = args.base or gitio.default_base(REPO, "HEAD")
     if not (args.staged or args.commit):
-        return _run_jobs(_jobs(args.only, args.base, None))
+        health_base = _health_base(REPO, requested_health_base)
+        return _run_jobs(_jobs(args.only, args.base, None, health_base=health_base))
     # Hooks judge the bytes being committed or pushed, never the working tree. Without --base the
     # ratchet derives the base from the head (a commit's own merge-base) and the switch from main.
     if args.staged:
@@ -203,7 +242,8 @@ def _run_all(args: argparse.Namespace) -> dict[str, tuple[int, str]]:
         head = gitio.resolve_rev(REPO, args.commit)
         tree = gitio.resolve_tree(REPO, head)
     with _tree_snapshot(tree) as (root, env):
-        return _run_jobs(_jobs(args.only, args.base, head, root, env))
+        health_base = _health_base(root, requested_health_base)
+        return _run_jobs(_jobs(args.only, args.base, head, health_base, root, env))
 
 
 def _hooks_dir() -> Path:

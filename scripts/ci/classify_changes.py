@@ -87,6 +87,14 @@ import sys
 _FRONTEND = ("ui-tui/", "web/", "apps/")  # TS typecheck-matrix packages
 # Shipped page outside those packages, exercised by the desktop Electron suite.
 _FRONTEND_FILES = {"scripts/desktop-update/ui.html"}
+# Public release-security policies and their JS tests are part of the frontend
+# gate even though they live outside the TypeScript workspace directories.
+_FRONTEND_POLICY_PATHS = ("scripts/release-security/",)
+_PUBLIC_FRONTEND_ONLY_FILES = {
+    "tests-js/npm-audit-policy.test.ts",
+    "tests-js/website-audit-policy.test.ts",
+    "tests-js/whatsapp-audit-policy.test.ts",
+}
 _ROOT_NPM = {"package.json", "package-lock.json"}  # shifts every package's tree
 _DOCKER_META = ("docker/", ".hadolint.yaml", "Dockerfile", ".dockerignore") # docker setup
 _NIX_PATHS = ("nix/",) # nix files
@@ -511,6 +519,8 @@ def _is_nix(p: str) -> bool:
 def _py_irrelevant(p: str) -> bool:
     if p.startswith(_PY_RELEVANT_SITE) or p in _PY_RELEVANT_CONTRACT_FILES:
         return False
+    if p in _PUBLIC_FRONTEND_ONLY_FILES:
+        return True
     return (
         _is_docs(p)
         or p in _ROOT_NPM
@@ -578,6 +588,7 @@ def classify(files: list[str], run_e2e: bool = False) -> dict[str, bool]:
     frontend = any(
         f.startswith(_FRONTEND) or f in _ROOT_NPM or f in _FRONTEND_FILES
         or f.startswith("tests-js/")
+        or f.startswith(_FRONTEND_POLICY_PATHS)
         or (f.startswith("scripts/build/") and f.endswith((".mjs", ".js", ".ts")))
         for f in files
     )

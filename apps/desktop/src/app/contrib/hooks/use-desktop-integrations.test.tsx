@@ -21,6 +21,7 @@ import type * as WindowsStore from '@/store/windows'
 import type { SessionInfo } from '@/types/hermes'
 
 import { makeSessionInfo } from '../../../test/session-info'
+import { requestComposerInsert } from '../../chat/composer/focus'
 import { sessionRoute } from '../../routes'
 
 import { useDesktopIntegrations } from './use-desktop-integrations'
@@ -47,6 +48,11 @@ vi.mock('@/store/plugin-catalog-install', () => ({
 
 vi.mock('@/store/plugin-install-request', () => ({
   openPluginInstallRequest: vi.fn()
+}))
+
+vi.mock('../../chat/composer/focus', () => ({
+  requestComposerFocus: vi.fn(),
+  requestComposerInsert: vi.fn()
 }))
 
 vi.mock('@/store/windows', async importOriginal => {
@@ -80,6 +86,7 @@ describe('useDesktopIntegrations', () => {
     vi.mocked(requestMcpInstallFromDeepLink).mockClear()
     vi.mocked(requestPluginCatalogInstallFromDeepLink).mockClear()
     vi.mocked(openPluginInstallRequest).mockClear()
+    vi.mocked(requestComposerInsert).mockClear()
     navigate = vi.fn()
     // Every test starts as a main window; only the HUD describe flips this.
     hudWindowMock.mockReturnValue(false)
@@ -883,6 +890,28 @@ describe('useDesktopIntegrations', () => {
       expect(requestPluginCatalogInstallFromDeepLink).toHaveBeenCalledWith('weather')
       expect(openPluginInstallRequest).not.toHaveBeenCalled()
       expect(navigate).not.toHaveBeenCalled()
+    })
+
+    it('serializes blueprint slot values without leaving backslash escape holes', () => {
+      let deepLink: ((payload: { kind: string; name: string; params: Record<string, string> }) => void) | undefined
+      desktopWindow.hermesDesktop = {
+        ...desktopWindow.hermesDesktop,
+        onDeepLink: (cb: (payload: { kind: string; name: string; params: Record<string, string> }) => void) => {
+          deepLink = cb
+
+          return () => undefined
+        },
+        signalDeepLinkReady: vi.fn()
+      } as unknown as Window['hermesDesktop']
+      const value = 'C:\\models\\"quoted name"'
+
+      render({ profileReady: true, sessions: [] })
+      deepLink?.({ kind: 'blueprint', name: 'daily', params: { path: value } })
+
+      expect(requestComposerInsert).toHaveBeenCalledWith(`/blueprint daily path=${JSON.stringify(value)}`, {
+        mode: 'block',
+        target: 'main'
+      })
     })
   })
 

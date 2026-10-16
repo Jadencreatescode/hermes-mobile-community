@@ -2721,6 +2721,7 @@ export interface PromptSubmitParams {
   session_id: string
   profile?: string | null
   text?: unknown
+  idempotency_key?: string | null
   display_kind?: string | null
   interrupted?: boolean | null
   queued?: boolean | null
@@ -2744,6 +2745,7 @@ export interface PromptSubmitResult {
   survivor_user_row_ids?: (number | null)[] | null
   survivor_row_id_map?: Record<string, number | null> | null
   turn_isolation?: boolean | null
+  idempotent_replay?: boolean | null
 }
 export type PromptSubmitStatus = 'streaming' | 'queued' | 'steered' | 'redirected'
 export interface ClipboardPasteParams {
@@ -3048,6 +3050,11 @@ export interface SessionCreateParams {
   cols?: number | null
   source?: string | null
   cwd?: string | null
+  cwd_identity?: CwdIdentity | null
+  enabled_toolsets?: string[] | null
+  skip_background_review?: boolean
+  skip_context_files?: boolean
+  skip_memory?: boolean
   cwd_explicit?: boolean | null
   messages?: SeedMessage[] | null
   parent_session_id?: string | null
@@ -3062,6 +3069,13 @@ export interface SessionCreateParams {
   room_plumbing?: boolean
   follow_profile_config?: boolean
   idempotency_key?: string | null
+}
+/** Filesystem identity values are decimal strings so JavaScript clients preserve full-width inode IDs. */
+export interface CwdIdentity {
+  device: string
+  inode: string
+  output_device: string
+  output_inode: string
 }
 /** One create-time transcript row (``session_history._coerce_seed_history``); ``text`` is the legacy alias of ``content``; only ``display_kind: "hidden"`` is accepted from the wire. Clients forward stored rows verbatim (``_row_id``, ``timestamp``, …) and the coercer drops what it does not use, so the row stays open. */
 export interface SeedMessage {
@@ -3128,6 +3142,12 @@ export interface SessionResumeParams {
   profile?: string | null
   cols?: number | null
   source?: string | null
+  cwd?: string | null
+  cwd_identity?: CwdIdentity | null
+  enabled_toolsets?: string[] | null
+  skip_background_review?: boolean
+  skip_context_files?: boolean
+  skip_memory?: boolean
   lazy?: boolean
   defer_history?: boolean
   omit_messages?: boolean
@@ -4021,6 +4041,60 @@ export interface ToolsConfigureResult {
   missing_servers: string[]
   reset: boolean
   unknown: string[]
+}
+export interface KanbanBoardParams {
+  profile?: string | null
+  board?: string | null
+  tenant?: string | null
+  assignee?: string | null
+  include_archived?: boolean
+}
+export interface KanbanBoardResult {
+  tasks: KanbanBoardTask[]
+  count: number
+}
+export interface KanbanBoardTask {
+  id: string
+  title: string
+  status: string
+  assignee: string | null
+  priority: number
+  latest_summary: string | null
+}
+export interface KanbanDiagnosticsParams {
+  profile?: string | null
+  board?: string | null
+  severity?: KanbanDiagnosticSeverity | null
+}
+export type KanbanDiagnosticSeverity = 'warning' | 'error' | 'critical'
+export interface KanbanDiagnosticsResult {
+  diagnostics: KanbanTaskDiagnostics[]
+  count: number
+}
+export interface KanbanTaskDiagnostics {
+  task_id: string
+  task_title: string
+  task_status: string
+  task_assignee: string | null
+  diagnostics: KanbanDiagnostic[]
+}
+export interface KanbanDiagnostic {
+  kind: string
+  severity: KanbanDiagnosticSeverity
+  title: string
+  detail: string
+  actions: KanbanDiagnosticAction[]
+  first_seen_at: number
+  last_seen_at: number
+  count: number
+  run_id: number | null
+  data: Record<string, unknown>
+}
+export interface KanbanDiagnosticAction {
+  kind: string
+  label: string
+  payload: Record<string, unknown>
+  suggested: boolean
 }
 export type ReloadEnvParams = Record<string, never>
 export interface ReloadEnvResult {
@@ -5301,6 +5375,10 @@ export interface RpcMethods {
   'input.detect_drop': { params: InputDetectDropParams; result: InputDetectDropResult }
   /** Session/message counts over the last ``days`` for the (optionally scoped) profile store. */
   'insights.get': { params: InsightsGetParams; result: InsightsGetResult }
+  /** Read the Kanban board, optionally filtered by board, tenant, assignee, or archive state. */
+  'kanban.board': { params: KanbanBoardParams; result: KanbanBoardResult }
+  /** Return active task diagnostics, optionally filtered by board and minimum severity. */
+  'kanban.diagnostics': { params: KanbanDiagnosticsParams; result: KanbanDiagnosticsResult }
   /** Archive a skill (restorable via curator) or remove a memory chunk. */
   'learning.delete': { params: LearningNodeParams; result: LearningMutationResult }
   /** Node content (SKILL.md or memory chunk) for an edit prefill. */
@@ -5727,6 +5805,8 @@ export const RPC_METHODS = [
   'image.generate',
   'input.detect_drop',
   'insights.get',
+  'kanban.board',
+  'kanban.diagnostics',
   'learning.delete',
   'learning.detail',
   'learning.edit',

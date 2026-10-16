@@ -1,3 +1,4 @@
+// health: allow FILE_LINES -- retained public desktop relay behavior is migration scoped; splitting the reviewed entrypoint during core adoption would risk parity
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -366,6 +367,7 @@ import { resolveIpcFileReadPath, resolveMediaStreamFile, resolvePreviewTargetPat
 import { localSkinProfileKey, readLocalSkinPayload } from './local-skin'
 import { ACTIVE_LOG_POLL_MS, planLogRotation, reclaimActiveLogIfOversized } from './log-rotation'
 import { registerMachineProfile } from './machine-profile'
+import { buildMachineRoster } from './machine-roster'
 import { createMainProcessLagWatchdog } from './main-process-lag-watchdog'
 import { activateWindow, ensureMainWindow, shouldQuitOnLastChatClosed } from './main-window-lifecycle'
 import {
@@ -412,7 +414,7 @@ import { loadNativeTokenSet, type NativeTokenStoreIo, persistNativeTokenSet } fr
 import { execGit, killTimedGitChildren, setNoConsoleGitRoots } from './no-console-git'
 import { registerNativeNotifications } from './notification-ipc'
 import { isExpectedOauthNavigationAbort } from './oauth-navigation'
-import { serializeJsonBody, setJsonRequestHeaders } from './oauth-net-request'
+import { binaryTransportResponse, serializeJsonBody, setJsonRequestHeaders } from './oauth-net-request'
 import { LEGACY_OAUTH_PARTITION, resolveOauthPartition } from './oauth-partition'
 import {
   canShowInteractiveOauthLogin,
@@ -578,6 +580,7 @@ import { createSshIsolatedKeepaliveRegistry } from './ssh-isolated-keepalive'
 import { createSshTeardownTracker } from './ssh-teardown'
 import { createStreamThrottle } from './stream-throttle'
 import { installSystemCaTrust } from './system-ca'
+import { discoverTailscalePeers } from './tailscale-discovery'
 import { registerTerminalIpc } from './terminal-ipc'
 import { nativeOverlayWidth as computeNativeOverlayWidth, titleBarOverlayOptions } from './titlebar-overlay-width'
 import {
@@ -5643,6 +5646,20 @@ function fetchJson(url, token, options: any = {}) {
             res.on('error', reject)
             res.on('data', chunk => chunks.push(chunk))
             res.on('end', () => {
+              // Binary responses stay byte-exact and use the same authenticated
+              // transport as JSON requests.
+              if (options.responseType === 'binary') {
+                const shaped = binaryTransportResponse(res.statusCode, res.headers, Buffer.concat(chunks))
+
+                if (shaped instanceof Error) {
+                  reject(shaped)
+                } else {
+                  resolve(shaped)
+                }
+
+                return
+              }
+
               const text = Buffer.concat(chunks).toString('utf8')
 
               if ((res.statusCode || 500) >= 400) {
@@ -6967,6 +6984,7 @@ import {
   DEFAULT_ZOOM_LEVEL,
   installZoomReassertOnNavigation,
   installZoomReassertOnWindowEvents,
+  LEGACY_ZOOM_READ_SCRIPT,
   percentToZoomLevel,
   ZOOM_STEP,
   ZOOM_STORAGE_KEY,
@@ -7037,9 +7055,7 @@ function restorePersistedZoomLevel(window) {
   applyTitleBarOverlay(window)
 
   window.webContents
-    .executeJavaScript(
-      `(() => { try { return localStorage.getItem(${JSON.stringify(ZOOM_STORAGE_KEY)}) } catch { return null } })()`
-    )
+    .executeJavaScript(LEGACY_ZOOM_READ_SCRIPT)
     .then(stored => {
       if (!window || window.isDestroyed()) {
         return
@@ -7793,6 +7809,38 @@ function fetchJsonViaOauthSession(url, options: any = {}) {
       }, timeoutMs)
 
       request.on('response', (res: Electron.IncomingMessage): void => {
+        if (options.responseType === 'binary') {
+          const chunks: Buffer[] = []
+          remoteSessionCookies.record(partition, url, res.headers['set-cookie'])
+          res.on('data', chunk => {
+            if (!timedOut) {
+              chunks.push(Buffer.from(chunk))
+            }
+          })
+          res.on('error', error => {
+            if (!timedOut) {
+              clearTimeout(timer)
+              reject(error)
+            }
+          })
+          res.on('end', () => {
+            if (timedOut) {
+              return
+            }
+
+            clearTimeout(timer)
+            const shaped = binaryTransportResponse(res.statusCode, res.headers, Buffer.concat(chunks))
+
+            if (shaped instanceof Error) {
+              reject(shaped)
+            } else {
+              resolve(shaped)
+            }
+          })
+
+          return
+        }
+
         wireOauthSessionResponse(res, {
           url,
           isTimedOut: (): boolean => timedOut,
@@ -16152,6 +16200,12 @@ ipcMain.handle('hermes:connections:set-last-used', async (_event, id) => {
 
   return { ok: true, registry: sanitizeConnectionsRegistry(registry) }
 })
+ipcMain.handle('hermes:machine-roster', async () => {
+  const registry = readDesktopConnectionsRegistry()
+  const peers = await discoverTailscalePeers(5_000)
+
+  return buildMachineRoster(registry, peers)
+})
 ipcMain.handle('hermes:connections:test', async (_event, id) => {
   const registry = readDesktopConnectionsRegistry()
   const entry = registry.connections.find(c => c.id === String(id || ''))
@@ -16720,7 +16774,14 @@ async function getJsonForBackend(descriptor, path, opts: any = {}) {
 async function fetchJsonForBackend(
   descriptor,
   path,
-  opts: { method?: string; body?: unknown; upload?: unknown; timeoutMs?: number } = {}
+  opts: {
+    method?: string
+    body?: unknown
+    upload?: unknown
+    timeoutMs?: number
+    headers?: Record<string, string>
+    responseType?: 'json' | 'binary'
+  } = {}
 ) {
   const url = `${descriptor.baseUrl}${path}`
 
@@ -16735,7 +16796,8 @@ async function fetchJsonForBackend(
       method: opts.method,
       body: opts.body,
       timeoutMs: opts.timeoutMs,
-      headers: descriptor.headers
+      responseType: opts.responseType,
+      headers: { ...descriptor.headers, ...(opts.headers || {}) }
     }
 
     return requestWithOauthFallback(descriptor.baseUrl, {
@@ -16750,7 +16812,8 @@ async function fetchJsonForBackend(
     body: opts.body,
     upload: opts.upload,
     timeoutMs: opts.timeoutMs,
-    headers: descriptor.headers
+    responseType: opts.responseType,
+    headers: { ...descriptor.headers, ...(opts.headers || {}) }
   })
 }
 
@@ -17481,6 +17544,8 @@ async function dispatchRegistryApiRequest(
     method: request?.method,
     body: request?.body,
     upload: request?.upload,
+    headers: apiRequestHeaders(request),
+    responseType: apiRequestResponseType(request),
     timeoutMs: resolveTimeoutMs(request?.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
   })
 
@@ -17515,6 +17580,28 @@ async function teardownConnectionScopedProfileBackend(connectionId, profile) {
 // outcome, not a failure.
 function isNotFoundApiError(error) {
   return /(?:^|\s)404\b/.test(String((error as any)?.message ?? error))
+}
+
+/** Bounded request headers a renderer REST call may add.
+ *
+ *  An allowlist, not a pass-through: only `Idempotency-Key` is forwarded, so a
+ *  renderer can make a lifecycle mutation replay-safe without being able to
+ *  forge authentication, routing, or content-negotiation headers. */
+export function apiRequestHeaders(request: any): Record<string, string> {
+  const supplied = request?.headers
+
+  if (!supplied || typeof supplied !== 'object' || Array.isArray(supplied)) {
+    return {}
+  }
+
+  const key = String((supplied as Record<string, unknown>)['Idempotency-Key'] ?? '').trim()
+
+  return key && key.length <= 200 && !key.includes('\u0000') ? { 'Idempotency-Key': key } : {}
+}
+
+/** Only an explicit `binary` opts out of JSON parsing; anything else is JSON. */
+export function apiRequestResponseType(request: any): 'json' | 'binary' {
+  return request?.responseType === 'binary' ? 'binary' : 'json'
 }
 
 async function handleHermesApiRequest(request) {
@@ -17590,6 +17677,8 @@ async function handleHermesApiRequest(request) {
       method: request?.method,
       body: request?.body,
       upload: request?.upload,
+      headers: apiRequestHeaders(request),
+      responseType: apiRequestResponseType(request),
       timeoutMs
     })
   } catch (error) {

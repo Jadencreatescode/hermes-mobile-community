@@ -97,6 +97,13 @@ interface HandoffResult {
   error?: string
 }
 
+/** Browser-selected files are in-memory handles, never backend-visible paths.
+ * Keep that browser-only addition layered over the centralized upload policy
+ * used by the main composer and drop-time routing. */
+function composerAttachmentNeedsUpload(path: string, backendCwd?: null | string, terminalBackend?: string): boolean {
+  return path.startsWith('browser-file://') || attachmentPathNeedsUpload(path, backendCwd, terminalBackend)
+}
+
 /**
  * Stage one file/image attachment into the session workspace and return the
  * attachment rewritten with the gateway-side ref. Attachments upload their
@@ -124,7 +131,7 @@ export async function uploadComposerAttachment(
   const { backendCwd, remote, requestGateway, storedSessionId, onRecovered, onSessionRecovered, terminalBackend } = opts
   const path = attachment.path ?? ''
   const label = attachment.label || pathLabel(path)
-  const uploadBytes = remote || attachmentPathNeedsUpload(path, backendCwd, terminalBackend)
+  const uploadBytes = remote || composerAttachmentNeedsUpload(path, backendCwd, terminalBackend)
 
   // Read bytes/paths ONCE, outside the retry. Only the session-scoped RPC is
   // replayed on recovery — re-reading a multi-MB file to retry a dead session

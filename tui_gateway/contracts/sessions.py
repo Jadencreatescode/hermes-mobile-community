@@ -115,10 +115,24 @@ class SeedMessage(Params):
     display_kind: str | None = None
 
 
+class CwdIdentity(Params):
+    """Filesystem identity values are decimal strings so JavaScript clients preserve full-width inode IDs."""
+
+    device: str
+    inode: str
+    output_device: str
+    output_inode: str
+
+
 class SessionCreateParams(ProfileParams):
     cols: int | None = None
     source: str | None = None
     cwd: str | None = None
+    cwd_identity: CwdIdentity | None = None
+    enabled_toolsets: list[str] | None = None
+    skip_background_review: bool = False
+    skip_context_files: bool = False
+    skip_memory: bool = False
     # #52589: provenance for ``cwd`` — true only for a deliberate workspace pick;
     # an inherited app-global workspace must yield to a named profile's terminal.cwd.
     cwd_explicit: bool | None = None
@@ -184,6 +198,12 @@ class SessionResumeParams(SessionParams):
 
     cols: int | None = None
     source: str | None = None
+    cwd: str | None = None
+    cwd_identity: CwdIdentity | None = None
+    enabled_toolsets: list[str] | None = None
+    skip_background_review: bool = False
+    skip_context_files: bool = False
+    skip_memory: bool = False
     lazy: bool = False
     defer_history: bool = False
     omit_messages: bool = False

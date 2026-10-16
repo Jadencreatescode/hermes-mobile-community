@@ -598,6 +598,18 @@
     --backdrop-invert-mul: 1;
   }
 
+  @media (max-width: 639px) {
+    :root {
+      --titlebar-control-size: 44px;
+      --titlebar-control-height: 44px;
+      --titlebar-icon-size: 18px;
+    }
+
+    body:has([data-slot='composer-attachments']) [data-slot='floating-pet'] {
+      display: none;
+    }
+  }
+
   :root.dark {
     /* Per-mode mix knobs — overridden inline by `applyTheme()` per skin. */
     --theme-mix-chrome: 74%;

@@ -2,6 +2,49 @@
   <img src="assets/banner.png" alt="Hermes Agent" width="100%">
 </p>
 
+## Hermes Mobile Control Center
+
+The Hermes desktop experience is available as an installable phone interface. It preserves conversations, models, voice, memory, notifications, plugins, agents, files, and the wider control surface in layouts designed for phones and foldable devices. The images below use sanitized test data.
+
+### Public contribution boundary
+
+This public repository contains the shareable Hermes Mobile renderer, relay, tests, and Strix Halo installer. It is intentionally separate from the private Hermes Owner application.
+
+The private owner source, Android message access, private node addresses, credentials, deployment state, release branches, and history are not present here. Changes pushed to this repository do not deploy to or modify the private owner application. Owner releases can adopt public changes only through a separate review and manual import.
+
+### iPhone and iPad edition
+
+The public Apple edition is the installable Hermes Mobile web app, not a separate App Store binary. Open the private Hermes Mobile URL in Safari, choose **Add to Home Screen**, and launch it from the new icon.
+
+It uses upstream Hermes for conversations, Messaging, Bot Mode, Operations, Training Mode, models, voice, files, browser features, profiles, cron, and updates. The public Operations Pack adds a coordinated view of Bots, delegated workers, source health, Kanban assignments, and routines; a durable Mailroom with bounded urgency and exact expiring Critical policies; bounded structured meetings with immutable contributions and duplicate-safe Kanban actions; and exact Agent Workspace navigation through existing Hermes sessions. Training Mode includes an optional renderer-only coaching session that cannot call Hermes tools or the backend. It submits only bounded semantic task details, converts raw-value actions and private browser data into fresh human-input gates, displays the exact deterministic SKILL.md and full-hash approval phrase, then saves through the canonical Hermes skill manager only after the server regenerates the draft and verifies the literal installed bytes. It exposes no browser execution, task execution, or scheduling route. The public shell includes the phone and tablet layouts, iOS safe areas, full-height dynamic viewport handling, authenticated audio and video playback, service-worker updates, and the 64 MB upload boundary. Private Owner node policy, private nodes, Android bridges, SMS access, privileged screen takeover, private browser capture and replay, and the phone-brokered Watch implementation are deliberately excluded.
+
+For full feature parity, the Hermes backend and mobile renderer must come from the same public Hermes Mobile release. Training Mode depends on the public release's authenticated backend plugin until that capability lands upstream, so a generic older or newer upstream backend alone is not sufficient. A tester should update this public repository and restart its gateway before testing the latest mobile renderer. They do not need the private Owner edition.
+
+See [iPhone and iPad testing](docs/iphone-ipad-testing.md) for installation, update, compatibility, and acceptance steps.
+
+Dependency findings and the Electron compatibility exceptions are documented in [the NPM security policy](docs/npm-security-policy.md). The exact shipped archive boundary and release gates are documented in [the mobile release security scope](docs/security/mobile-release-scope.md).
+
+### About the creator
+
+Jaden Gibson grew up in Las Vegas, a city whose constant reinvention helped shape his curiosity about how systems work. He immersed himself in coding out of genuine interest and learned by building practical tools that connect artificial intelligence, personal knowledge, and the devices people use every day.
+
+His current work includes the Hermes Mobile Control Center, which brings the Hermes desktop experience to phones and foldable devices, and [My Journal for Hermes](https://github.com/Jadencreatescode/my-journal), which turns approved conversations into private, evidence backed daily progress notes. Both projects reflect a focus on useful software, user ownership, privacy, access across devices, and open collaboration.
+
+<p align="center">
+  <img src="docs/mobile-screenshots/01-chat.png" alt="Hermes mobile chat" width="18%">
+  <img src="docs/mobile-screenshots/02-appearance.png" alt="Appearance settings" width="18%">
+  <img src="docs/mobile-screenshots/03-voice.png" alt="Voice settings" width="18%">
+  <img src="docs/mobile-screenshots/04-memory.png" alt="Memory settings" width="18%">
+  <img src="docs/mobile-screenshots/05-notifications.png" alt="Notification settings" width="18%">
+</p>
+<p align="center">
+  <img src="docs/mobile-screenshots/06-keyboard-shortcuts.png" alt="Keyboard shortcuts" width="18%">
+  <img src="docs/mobile-screenshots/07-plugins.png" alt="Plugin management" width="18%">
+  <img src="docs/mobile-screenshots/08-about.png" alt="About and updates" width="18%">
+  <img src="docs/mobile-screenshots/09-agents.png" alt="Live agents" width="18%">
+  <img src="docs/mobile-screenshots/10-starmap.png" alt="Memory starmap" width="18%">
+</p>
+
 # Hermes Agent ☤
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/">Hermes Agent</a> | <a href="https://hermes-agent.nousresearch.com/">Hermes Desktop</a>

@@ -36,7 +36,7 @@ import { type PluginSettingsPage, settingsPageContribution } from './settings-pa
 export type { PluginSettingsPage, PluginSettingsSubpage } from './settings-pages'
 import type { Contribution } from './types'
 
-export type { PluginRestOptions } from '@/hermes'
+export type { PluginBinaryResponse, PluginRestOptions } from '@/hermes'
 export type { HermesOpenTarget } from '@/lib/hermes-open-target'
 export type { PluginAppActionId, PluginAppActionInfo, PluginRunActionResult } from '@/lib/keybinds/plugin-actions'
 export type { PluginNativeNotificationInput, PluginNotificationAction } from '@/store/native-notifications'

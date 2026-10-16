@@ -85,6 +85,18 @@
     "kind": "bare_which"
   },
   {
+    "path": "deploy/strix-halo/installer.py",
+    "symbol": "FriendInstaller._validate_prerequisites",
+    "kind": "bare_which",
+    "reason": "standalone installer validates user supplied host commands and intentionally has no dependency on the managed Hermes runtime"
+  },
+  {
+    "path": "deploy/strix-halo/installer.py",
+    "symbol": "_resolve_hermes",
+    "kind": "bare_which",
+    "reason": "standalone installer discovers the existing user facing Hermes command before any managed application runtime is available"
+  },
+  {
     "path": "gateway/platforms/base.py",
     "symbol": "transcode_to_ogg_opus",
     "kind": "bare_which"
@@ -422,6 +434,12 @@
     "path": "hermes_cli/web_routers/audio.py",
     "symbol": "_ffmpeg_s16le_mono",
     "kind": "bare_which"
+  },
+  {
+    "path": "hermes_cli/web_routers/bots.py",
+    "symbol": "_detect_native_harnesses",
+    "kind": "bare_which",
+    "reason": "dashboard catalog deliberately detects optional user installed harness CLIs on the ambient PATH rather than resolving Hermes managed runtimes"
   },
   {
     "path": "hermes_cli/web_routers/git.py",

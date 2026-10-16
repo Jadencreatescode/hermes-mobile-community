@@ -11,17 +11,27 @@
  */
 
 import { useStore } from '@nanostores/react'
+import type * as React from 'react'
 
 import { findGroup } from '@/components/pane-shell/tree/model'
 import {
   $activeTreeGroup,
   $layoutTree,
+  closeAllTreeTabs,
+  closeOtherTreeTabs,
   closeTabPane,
+  closeTreeTabsToRight,
   revealTreePane,
-  treePanesWithPrefix
+  treePanesWithPrefix,
+  treeTabCloseTargets
 } from '@/components/pane-shell/tree/store'
-import { type MenuKit, renderActionItem } from '@/components/ui/actions-menu'
+import {
+  ActionsContextMenu,
+  type MenuKit,
+  renderActionItem
+} from '@/components/ui/actions-menu'
 import { FileTypeIcon } from '@/components/ui/file-type-icon'
+import { paneTabCloseItems } from '@/components/ui/pane-tab'
 import { ToolIcon } from '@/components/ui/tool-icon'
 import { translateNow } from '@/i18n'
 import { openExternalLink } from '@/lib/external-link'
@@ -230,6 +240,30 @@ function existingPreviewAnchor(tabId: string): string | undefined {
   return head && head.id !== tabId ? previewPaneId(head.id) : undefined
 }
 
+/** A preview tab's context menu: Close / Close Others / Close to Right / Close
+ *  All — the same verbs every other tab offers. Session tiles get the full
+ *  session verb set through `SessionTabMenu`; preview tabs (files, URLs,
+ *  artifacts) get the generic close verbs so a long-press on touch (or
+ *  right-click on desktop) can close them without aiming for the ✕. */
+function PreviewTabMenu({ paneId, children }: { paneId: string; children: React.ReactElement }) {
+  const counts = treeTabCloseTargets(paneId)
+
+  const items = (kit: MenuKit) =>
+    paneTabCloseItems(kit, {
+      counts,
+      onClose: () => closeTabPane(paneId),
+      onCloseAll: () => closeAllTreeTabs(paneId),
+      onCloseOthers: () => closeOtherTreeTabs(paneId),
+      onCloseToRight: () => closeTreeTabsToRight(paneId)
+    })
+
+  return (
+    <ActionsContextMenu ariaLabel={translateNow('common.close')} contentClassName="w-44" items={items}>
+      {children}
+    </ActionsContextMenu>
+  )
+}
+
 /** Keep pane contributions mirroring `$previewTabs`, keep the store's selection
  *  and the tree's active pane agreeing, and front a tile when its tab is
  *  selected. Call once from the root. */
@@ -368,6 +402,13 @@ const watchPreviewTileMirror = paneMirror<{ id: string }>({
   lifecycleKeepAlive: keepsLiveBody,
   // The body's own Close (an error state's way out) is the tab's ✕, verbatim.
   render: tabId => <PreviewTilePane onClose={() => closeTabPane(previewPaneId(tabId))} tabId={tabId} />,
+  tabWrap: (tabId, tab) => {
+    const paneId = `${PREVIEW_TILE_PREFIX}:${tabId}`
+
+    return (
+      <PreviewTabMenu paneId={paneId}>{tab}</PreviewTabMenu>
+    )
+  },
   close: tabId => {
     forgetBrowserPage(tabId)
     forgetPreviewConsole(tabId)

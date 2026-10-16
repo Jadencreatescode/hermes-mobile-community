@@ -51,6 +51,10 @@ const TAB_SELECTED =
 interface PaneTabProps extends React.ComponentProps<'div'> {
   active?: boolean
   dirty?: boolean
+  /** Keeps the horizontal close button visible without hover for touch
+   *  pointers. The button still requires `onClose`, so uncloseable and
+   *  hide-only tabs continue to show no close control. */
+  alwaysClose?: boolean
   /** Close verb. Horizontal tabs reveal a hover ✕ over the label's masked
    *  right edge; middle-click and ⌘-click always work,
    *  and stay the only gestures on vertical rails (no room for a chip ✕).
@@ -78,6 +82,7 @@ export const PaneTab = React.forwardRef<HTMLDivElement, PaneTabProps>(function P
   {
     active = false,
     dirty = false,
+    alwaysClose = false,
     onClose,
     onMouseDown,
     onPointerDown,
@@ -172,7 +177,14 @@ export const PaneTab = React.forwardRef<HTMLDivElement, PaneTabProps>(function P
       {onClose && !vertical && (
         // Mask the content beneath the close button instead of painting over it.
         // Geometry stays fixed; the same fade works on solid and glass surfaces.
-        <span className="pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity group-hover/tab:pointer-events-auto group-hover/tab:opacity-100">
+        <span
+          className={cn(
+            'pointer-events-none absolute inset-y-0 right-0 flex items-stretch',
+            alwaysClose
+              ? 'pointer-events-auto opacity-100'
+              : 'opacity-0 transition-opacity group-hover/tab:pointer-events-auto group-hover/tab:opacity-100'
+          )}
+        >
           <button
             aria-label={translateNow('common.close')}
             className="grid w-(--pane-tab-close-width) cursor-pointer place-items-center bg-transparent text-(--ui-text-tertiary) outline-none hover:text-foreground"
@@ -204,20 +216,27 @@ interface PaneTabLabelProps extends React.ComponentProps<'button'> {
   /** `button` when the label is the activation target (preview rail);
    *  default `span` defers to the shell (zone drag/activate). */
   as?: 'button' | 'span'
+  /** The ✕ is always visible (touch / narrow), so pad the right edge to
+   *  reserve room for it — otherwise a long filename runs under the close
+   *  glyph. No-op on a hover-revealed ✕, where the label keeps full width. */
+  reserveClose?: boolean
 }
 
 /** Truncating label inside a `PaneTab`. `className` merges into the text span
  *  (e.g. `normal-case tracking-normal` for filenames). On a closeable tab the
  *  text clips instead of ellipsizing, so the hover mask can fade its right edge. */
 export const PaneTabLabel = React.forwardRef<HTMLElement, PaneTabLabelProps>(function PaneTabLabel(
-  { as = 'span', className, children, ...props },
+  { as = 'span', className, reserveClose = false, children, ...props },
   ref
 ) {
   const Comp = as as React.ElementType
 
   return (
     <Comp
-      className="flex h-full min-w-0 max-w-full items-center overflow-hidden px-2 text-left outline-none group-data-[vertical]/tab:h-auto group-data-[vertical]/tab:w-full group-data-[vertical]/tab:justify-center group-data-[vertical]/tab:py-2"
+      className={cn(
+        'flex h-full min-w-0 max-w-full items-center overflow-hidden px-2 text-left outline-none group-data-[vertical]/tab:h-auto group-data-[vertical]/tab:w-full group-data-[vertical]/tab:justify-center group-data-[vertical]/tab:py-2',
+        reserveClose && 'pr-6'
+      )}
       ref={ref}
       {...props}
     >

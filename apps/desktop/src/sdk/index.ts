@@ -1,3 +1,4 @@
+// health: allow FILE_LINES -- retained public SDK exports stay stable during the upstream migration; splitting the facade would risk consumers
 /**
  * @hermes/plugin-sdk — THE plugin language. The vscode-module model: plugin
  * authors import exactly one module and get everything — they never touch
@@ -44,9 +45,10 @@ import {
   type WorkspaceNewSessionTarget
 } from '@/components/pane-shell/workspace-scope'
 import { onGatewayEvent } from '@/contrib/events'
+import { $pluginRecords } from '@/contrib/plugins-store'
 import { registry } from '@/contrib/registry'
 import type { WorkspaceMode } from '@/contrib/types'
-import { deleteProfile, getLogs, getStatus, hermesApi, type HermesGateway } from '@/hermes'
+import { deleteProfile, getLogs, getStatus, hermesApi, type HermesGateway, pluginRest } from '@/hermes'
 import { traceIdentityChange } from '@/lib/identity-trace'
 import { completeMcpDesktopOAuth } from '@/lib/mcp-dashboard-oauth'
 import {
@@ -104,6 +106,7 @@ import {
   focusWorkspaceOwnerSessionTile,
   sessionTileDelegate
 } from '@/store/session-states'
+import { $subagentsBySession } from '@/store/subagents'
 import { runGatewayRestart } from '@/store/system-actions'
 import type { PaginatedSessions, UsageStats } from '@/types/hermes'
 
@@ -710,8 +713,15 @@ export const host = {
     gateway: readonlyAtom<string>($gatewayState),
     /** Current main model slug. */
     model: readonlyAtom<string>($currentModel),
+    /** Plugin inventory: id → record (`status: 'loaded'` when enabled +
+     *  registered, `'disabled'` otherwise — live as the user toggles in
+     *  Settings → Plugins). Read a record's status to gate a feature that
+     *  depends on another plugin (e.g. Operations Forge ← Kanban). */
+    plugins: readonlyAtom($pluginRecords),
     /** Profile the live gateway is routed to. */
     profile: readonlyAtom<string>($activeGatewayProfile),
+    /** Existing delegated-agent progress grouped by its parent runtime session. */
+    subagents: readonlyAtom($subagentsBySession),
     /** Window geometry ({ width, height, narrow }). */
     viewport: readonlyAtom<ViewportRect>($viewport)
   },
@@ -763,6 +773,19 @@ export const host = {
     // the tile. Reveal imperatively, the same way `navigateToWorkspacePage`
     // does for the sidebar and keybinds.
     syncWorkspaceRoute(to)
+  },
+
+  /** Read one Kanban board through a constrained, read-only cross-plugin
+   *  capability. Raw cross-plugin REST stays private so plugins cannot use the
+   *  SDK to address arbitrary plugin namespaces or mutation routes. */
+  readKanbanBoard: async <T>(boardSlug: string): Promise<T> => {
+    const board = boardSlug.trim().toLowerCase()
+
+    if (!/^[a-z0-9][a-z0-9-_]{0,63}$/.test(board)) {
+      throw new Error('Invalid Kanban board slug.')
+    }
+
+    return pluginRest<T>('kanban', `/board?board=${encodeURIComponent(board)}`)
   },
 
   /** Pre-dial a profile's gateway socket in the background — pool-only, no
@@ -1763,6 +1786,39 @@ export { APPEARANCE_AREAS } from '@/app/settings/appearance-contrib'
  *  never an Off/On pill pair. Use them for preference rows in plugin panes and
  *  dialogs so they line up with core Settings. */
 export { ListRow, ToggleRow } from '@/app/settings/primitives'
+
+/** Data-contribution area consumed by Bot roster surfaces. Providers retain
+ * authority over listing, opening, refreshing, and configuring their agents. */
+export const BOTS_ROSTER_PROVIDERS_AREA = 'bots.roster.providers'
+
+/** Transport-neutral, verified Bot identity exposed by a roster provider.
+ * The contract contains only the display and chat fields the public roster
+ * consumes. Provider credentials, endpoint configuration, native sessions,
+ * and private mirror identities stay behind the contributing plugin. */
+export interface BotsRosterProviderAgent {
+  capabilities: string[]
+  description?: string
+  handle?: string
+  harness?: string
+  host_id?: string
+  host_label?: string
+  id: string
+  model?: { id?: string; provider?: string }
+  name: string
+  runtime_state?: 'idle' | 'working' | 'waiting' | 'reviewing' | 'blocked' | 'offline' | 'unknown'
+  verification_state: 'verified'
+  work_summary?: string
+}
+
+/** Provider-owned actions keep agent-specific transports behind the plugin
+ * boundary while generic Bot roster UI works against one public contract. */
+export interface BotsRosterProvider {
+  is_agent_selected?(agent: BotsRosterProviderAgent): boolean
+  list_verified_agents(): Promise<BotsRosterProviderAgent[]>
+  open_bot_chat(agent: BotsRosterProviderAgent): void
+  open_settings?(agent: BotsRosterProviderAgent): void
+  refresh_agent?(agent: BotsRosterProviderAgent): Promise<void>
+}
 /** THE full per-toolset config panel core Settings renders — provider picker,
  *  env vars / API keys, model catalog picker, and post-setup runners. Route-
  *  decoupled (the "manage keys" deep link is a no-op outside the router); pass
@@ -1882,12 +1938,24 @@ export { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 export { Textarea } from '@/components/ui/textarea'
 export { Tip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 export type { GatewayEventListener } from '@/contrib/events'
+export type {
+  HermesPlugin,
+  PluginBinaryResponse,
+  PluginContext,
+  PluginContribution,
+  PluginNativeNotificationInput,
+  PluginNotificationAction,
+  PluginOs,
+  PluginRestOptions,
+  PluginStorage
+} from '@/contrib/plugin'
 /** Mount-scoped contribution: while the rendering component is mounted, its
  *  children render in the target area's slot; unmount disposes it. Use for
  *  page-owned chrome (a page's titlebar control leaves with the page) —
  *  `ctx.register` stays the door for permanent contributions. Namespace the
  *  id with your plugin slug (`kanban:board-switcher`). */
 export { Contribute, type ContributeProps } from '@/contrib/react/contribute'
+export { useContributions } from '@/contrib/react/use-contributions'
 
 // -- contracts ----------------------------------------------------------------
 

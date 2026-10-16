@@ -30,6 +30,7 @@ class PromptSubmitParams(SessionParams):
     ``truncate_before_message_id``, or the legacy ``truncate_before_user_ordinal``)."""
 
     text: JsonValue = ""
+    idempotency_key: str | None = None
     display_kind: str | None = None  # only "hidden" is honoured; anything else renders as a user row
     interrupted: bool | None = None  # client-side barge-in: the turn's model message carries the note
     queued: bool | None = None  # client queue drain — the busy path must hold it, never redirect/steer
@@ -73,6 +74,7 @@ class PromptSubmitResult(Result):
     survivor_user_row_ids: list[int | None] | None = None
     survivor_row_id_map: dict[str, int | None] | None = None
     turn_isolation: bool | None = None
+    idempotent_replay: bool | None = None
 
 
 method("prompt.submit", params=PromptSubmitParams, result=PromptSubmitResult,

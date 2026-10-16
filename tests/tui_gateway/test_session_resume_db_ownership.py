@@ -28,6 +28,7 @@ Pinned here, in both directions:
 
 from __future__ import annotations
 
+import os
 import threading
 import types
 
@@ -369,6 +370,73 @@ def test_resume_drops_half_built_session_when_init_session_raises(
     assert resp["error"]["code"] == 5000
     assert profile_dbs[0].closed == 1
     assert captured["sid"] not in server._sessions
+
+
+def test_repeated_pinned_eager_resume_init_failures_close_every_workspace_descriptor(
+    profile_dbs, monkeypatch, tmp_path
+):
+    workspace = tmp_path / "run"
+    output = workspace / "output"
+    output.mkdir(parents=True)
+    workspace_stat = workspace.stat()
+    output_stat = output.stat()
+    opened_descriptors = []
+    registered_sids = []
+    real_pin = server._pinned_workspace_cwd
+
+    def _factory(db_path=None, **kwargs):
+        db = _RecordingDB(db_path=db_path, **kwargs)
+        db.rows["s1"] = {"id": "s1", "cwd": str(workspace)}
+        profile_dbs.append(db)
+        return db
+
+    def _track_pin(params):
+        pinned = real_pin(params)
+        opened_descriptors.append(pinned["descriptor"])
+        return pinned
+
+    def _fail_after_register(sid, key, agent, history, session_db=None, **_kwargs):
+        with server._sessions_lock:
+            server._sessions[sid] = {"agent": agent, "session_key": key}
+        registered_sids.append(sid)
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr("hermes_state_registry.acquire", _factory)
+    monkeypatch.setattr(server, "_pinned_workspace_cwd", _track_pin)
+    monkeypatch.setattr(
+        server, "_make_agent", lambda *a, **k: types.SimpleNamespace(model="test")
+    )
+    monkeypatch.setattr(server, "_init_session", _fail_after_register)
+    monkeypatch.setattr(server, "_set_session_context", lambda _target: [])
+    monkeypatch.setattr(server, "_clear_session_context", lambda _tokens: None)
+    monkeypatch.setattr(server, "_stored_session_runtime_overrides", lambda _found: {})
+    params = {
+        "session_id": "s1",
+        "profile": "work",
+        "eager_build": True,
+        "cwd": str(workspace),
+        "cwd_identity": {
+            "device": str(workspace_stat.st_dev),
+            "inode": str(workspace_stat.st_ino),
+            "output_device": str(output_stat.st_dev),
+            "output_inode": str(output_stat.st_ino),
+        },
+    }
+
+    for _ in range(20):
+        opened_before = len(profile_dbs)
+        response = _resume(**params)
+        assert response["error"]["code"] == 5000
+        assert len(profile_dbs) == opened_before + 1
+        assert profile_dbs[-1].closed == 1
+        assert registered_sids[-1] not in server._sessions
+
+    assert len(profile_dbs) == 20
+    assert len(registered_sids) == 20
+    assert len(opened_descriptors) == 20
+    for descriptor in opened_descriptors:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
 
 
 def test_resume_never_closes_shared_launch_db(profile_dbs, monkeypatch):

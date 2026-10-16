@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   acceptsTriggerCompletion,
+  composerStacksAtWidth,
   implicitSlashAcceptIndex,
   isPendingDraftPersistCurrent,
   liveComposerDraft,
@@ -14,6 +15,13 @@ import {
   type TriggerAcceptInput
 } from './composer-utils'
 import { normalizeComposerEditorDom, RICH_INPUT_SLOT } from './rich-editor'
+
+describe('composerStacksAtWidth', () => {
+  it('stacks a Fold outer composer before controls overlap the input', () => {
+    expect(composerStacksAtWidth(322)).toBe(true)
+    expect(composerStacksAtWidth(340)).toBe(false)
+  })
+})
 
 const item = (group: string): Unstable_TriggerItem =>
   ({ id: 'x', type: 'slash', label: 'x', metadata: { group } }) as unknown as Unstable_TriggerItem

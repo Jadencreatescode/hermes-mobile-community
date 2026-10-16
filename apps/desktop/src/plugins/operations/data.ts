@@ -1,0 +1,612 @@
+import { operationsApi } from './api'
+import { normalizeBotName } from './bot-name'
+import { record } from './contracts'
+import { mapOperationsAgentState, type OperationsAgentState, type OperationsAssignmentEvidence } from './state'
+
+interface RosterAgent {
+  connectionId: string
+  connectionKind: string
+  connectionLabel: string
+  handle: string
+  profile: string
+}
+
+interface ConnectedAgent {
+  agent_id: string | null
+  capabilities: string[]
+  display_name: string
+  handle: string
+  provider: string
+  role: string
+  stale: boolean
+  verified: boolean
+}
+
+interface RosterSource {
+  connectionId: string
+  error?: string
+  kind: string
+  label: string
+  reachable: boolean
+}
+
+interface OperationsHost {
+  agents(): Promise<{ agents: RosterAgent[]; sources: RosterSource[] }>
+  request<T>(method: string, params?: Record<string, unknown>): Promise<T>
+  requestProfile<T>(
+    route: { connectionId: string; mode: 'local' | 'remote'; profile: string; targetProfile: string },
+    method: string,
+    params?: Record<string, unknown>
+  ): Promise<T>
+  status(): Promise<unknown>
+}
+
+interface SessionSummary {
+  id?: string
+  preview?: string
+  resolved_id?: string
+  title?: string
+}
+
+interface ProfileSummary {
+  canonical_session?: SessionSummary | null
+  display_name?: string
+  last_session?: SessionSummary | null
+  name?: string
+  ui_meta?: Record<string, { title?: string }>
+  worker_session?: { last_active?: number } | null
+}
+
+interface LiveSession {
+  id?: string
+  preview?: string
+  session_key?: string
+  status?: string
+  title?: string
+}
+
+interface DelegatedAgentEvidence {
+  status?: string
+}
+
+interface CliResult {
+  blocked?: boolean
+  code?: number
+  output?: string
+}
+
+interface KanbanTask {
+  assignee?: string
+  diagnostics?: Array<{ resolved?: boolean; severity?: string }>
+  id?: string
+  latest_summary?: string
+  status?: string
+  title?: string
+}
+
+export interface OperationsSourceModel {
+  error?: string
+  id: string
+  kind: string
+  label: string
+  reachable: boolean
+  status: 'degraded' | 'offline' | 'online'
+}
+
+export interface OperationsAgentModel {
+  assignments: Array<{ id: string; status: string; summary: string; title: string }>
+  displayName: string
+  id: string
+  openSessionId?: string
+  openSessionKind?: 'bot-chat' | 'session'
+  profile: string
+  sourceId: string
+  sourceKind: string
+  sourceLabel: string
+  state: OperationsAgentState
+  workSummary: string
+  verified?: boolean
+}
+
+export interface OperationsSnapshot {
+  agents: OperationsAgentModel[]
+  partialFailures: string[]
+  sources: OperationsSourceModel[]
+}
+
+function parseCliList<T>(value: unknown): T[] {
+  const result = value as CliResult | undefined
+
+  if (!result || result.blocked || result.code !== 0) {
+    throw new Error(result?.output || 'Kanban read failed')
+  }
+
+  const parsed = JSON.parse(result.output || '[]')
+
+  return Array.isArray(parsed) ? parsed : []
+}
+
+function displayName(profile: ProfileSummary | undefined, agent: RosterAgent): string {
+  const botTitle = profile?.ui_meta?.['hermes-bots']?.title?.trim()
+  const named = botTitle || profile?.display_name?.trim()
+
+  if (named) {return named}
+
+  if (agent.profile === 'default') {return agent.connectionLabel || 'Hermes'}
+
+  return agent.profile.replace(/[-_]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase())
+}
+
+function routeFor(agent: RosterAgent) {
+  return {
+    connectionId: agent.connectionId,
+    mode: (agent.connectionKind === 'local' ? 'local' : 'remote') as 'local' | 'remote',
+    profile: agent.profile,
+    targetProfile: agent.profile
+  }
+}
+
+export async function loadConnectedAgents(): Promise<ConnectedAgent[]> {
+  try {
+    const result = await operationsApi()<{ agents?: ConnectedAgent[] }>('/connected-agents')
+
+    return result.agents ?? []
+  } catch {
+    return []
+  }
+}
+
+function connectedAgentToModel(agent: ConnectedAgent): OperationsAgentModel {
+  const provider = agent.provider || 'unknown'
+
+  return {
+    assignments: [],
+    displayName: agent.display_name || agent.handle,
+    id: `connected::${agent.handle}`,
+    profile: agent.handle,
+    sourceId: provider,
+    sourceKind: 'connected',
+    sourceLabel: provider.charAt(0).toUpperCase() + provider.slice(1),
+    state: agent.stale ? 'unknown' : 'idle',
+    workSummary: agent.role || 'Connected agent'
+  }
+}
+
+function harnessAgentToModel(agent: HarnessAgent): OperationsAgentModel {
+  return {
+    assignments: [],
+    displayName: agent.name || agent.agentId,
+    id: `a2a::${agent.agentId}`,
+    profile: agent.agentId,
+    sourceId: 'a2a',
+    sourceKind: 'a2a',
+    sourceLabel: 'A2A Harness',
+    state: agent.status === 'verified' && agent.runtimeState !== 'offline'
+      ? (agent.runtimeState ?? 'unknown')
+      : 'unknown',
+    verified: agent.status === 'verified',
+    workSummary: agent.workSummary || agent.capabilities.slice(0, 3).join(', ') || 'A2A connected agent'
+  }
+}
+
+export async function loadOperationsSnapshot(
+  host: OperationsHost,
+  options: {
+    connectedAgents?: ConnectedAgent[]
+    a2aAgents?: HarnessAgent[]
+    delegatedBySession?: Record<string, DelegatedAgentEvidence[]>
+    nowMs?: number
+  } = {}
+): Promise<OperationsSnapshot> {
+  const [rosterResult, statusResult] = await Promise.allSettled([host.agents(), host.status()])
+
+  if (rosterResult.status === 'rejected') {
+    throw rosterResult.reason instanceof Error ? rosterResult.reason : new Error('Agent roster unavailable')
+  }
+
+  const roster = rosterResult.value
+
+  const partialFailures = roster.sources
+    .filter(source => !source.reachable || source.error)
+    .map(source => `${source.label}: ${source.error || 'unreachable'}`)
+
+  if (statusResult.status === 'rejected') {partialFailures.push('Hermes status unavailable')}
+
+  const degraded = new Set<string>()
+
+  const agents = await Promise.all(
+// health: allow CC -- retained public Operations wire normalization is migration scoped and contract tested
+    roster.agents.map(async agent => {
+      const route = routeFor(agent)
+      let profile: ProfileSummary | undefined
+      let live: LiveSession[] = []
+      let tasks: KanbanTask[] = []
+      let detailsReachable = true
+
+      try {
+        const [profilesResult, sessionsResult, tasksResult, diagnosticsResult] = await Promise.all([
+          host.requestProfile<{ profiles?: ProfileSummary[] }>(route, 'profiles.list', { include_sessions: true }),
+          host.requestProfile<{ sessions?: LiveSession[] }>(route, 'session.active_list', {}),
+          host.requestProfile<{ tasks?: KanbanTask[]; count?: number }>(route, 'kanban.board', { assignee: agent.profile }),
+          host.requestProfile<{ diagnostics?: Array<{ task_id?: string; diagnostics?: Array<{ resolved?: boolean; severity?: string }> }>; count?: number }>(route, 'kanban.diagnostics', {})
+        ])
+
+        profile = profilesResult.profiles?.find(row => row.name === agent.profile)
+        live = sessionsResult.sessions ?? []
+        tasks = (tasksResult.tasks ?? []).filter(task => task.assignee === agent.profile)
+
+        const diagnosticsRows = diagnosticsResult.diagnostics ?? []
+
+        const byTask = new Map(diagnosticsRows.map(row => [row.task_id, row.diagnostics ?? []]))
+        tasks = tasks.map(task => ({ ...task, diagnostics: byTask.get(task.id) ?? task.diagnostics }))
+      } catch (error) {
+        detailsReachable = false
+        degraded.add(agent.connectionId)
+        partialFailures.push(`${agent.connectionLabel} / ${agent.profile}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+
+      const canonical = profile?.canonical_session || undefined
+      const related = live.find(session => session.status === 'waiting' || session.status === 'working')
+      const fallback = profile?.last_session || undefined
+
+      const ownerSessionIds = new Set(
+        [
+          canonical?.id,
+          canonical?.resolved_id,
+          fallback?.id,
+          ...live.flatMap(session => [session.id, session.session_key])
+        ].filter((id): id is string => Boolean(id))
+      )
+
+      const activeDelegation = [...ownerSessionIds].some(sessionId =>
+        options.delegatedBySession?.[sessionId]?.some(item => item.status === 'queued' || item.status === 'running')
+      )
+
+      const assignments: OperationsAssignmentEvidence[] = tasks.map(task => ({
+        diagnostics: task.diagnostics,
+        status: task.status
+      }))
+
+      const state = mapOperationsAgentState({
+        activeDelegation,
+        activeSession: related?.status === 'working',
+        assignments,
+        nowMs: options.nowMs,
+        pendingInput: related?.status === 'waiting',
+        sourceReachable: detailsReachable,
+        workerHeartbeatAt: profile?.worker_session?.last_active
+      })
+
+      const assignment = tasks.find(task => task.status === 'blocked') || tasks.find(task => task.status === 'review') || tasks[0]
+      const openSessionId = canonical?.resolved_id || canonical?.id || related?.session_key || fallback?.id
+
+      return {
+        assignments: tasks.map(task => ({
+          id: task.id || `${agent.connectionId}:${agent.profile}:${task.title || 'task'}`,
+          status: task.status || 'unknown',
+          summary: task.latest_summary || '',
+          title: task.title || 'Untitled task'
+        })),
+        displayName: displayName(profile, agent),
+        id: `${agent.connectionId}::${agent.profile}`,
+        ...(openSessionId ? { openSessionId } : {}),
+        ...(openSessionId ? { openSessionKind: canonical ? ('bot-chat' as const) : ('session' as const) } : {}),
+        profile: agent.profile,
+        sourceId: agent.connectionId,
+        sourceKind: agent.connectionKind,
+        sourceLabel: agent.connectionLabel,
+        state,
+        workSummary:
+          canonical?.preview || related?.preview || assignment?.latest_summary || assignment?.title || fallback?.preview || 'No active work'
+      }
+    })
+  )
+
+  const connectedModels = (options.connectedAgents ?? []).map(connectedAgentToModel)
+  const a2aModels = (options.a2aAgents ?? []).map(harnessAgentToModel)
+
+  const sources = roster.sources.map(source => ({
+    error: source.error,
+    id: source.connectionId,
+    kind: source.kind,
+    label: source.label,
+    reachable: source.reachable,
+    status: (!source.reachable ? 'offline' : degraded.has(source.connectionId) ? 'degraded' : 'online') as
+      | 'degraded'
+      | 'offline'
+      | 'online'
+  }))
+
+  return {
+    agents: [...agents, ...connectedModels, ...a2aModels],
+    partialFailures: [...new Set(partialFailures)],
+    sources
+  }
+}
+
+// ── A2A harness agent types ─────────────────────────────────────────────────
+
+export type A2AConnectionStatus = 'pending' | 'verified' | 'degraded'
+export type A2ARuntimeState = OperationsAgentState | 'offline'
+
+export interface HarnessAgent {
+  agentId: string
+  name: string
+  status: A2AConnectionStatus
+  capabilities: string[]
+  runtimeState?: A2ARuntimeState
+  supportedOperations?: string[]
+  workSummary?: string
+}
+
+export interface AgentCard {
+  url: string
+  name: string
+  description?: string
+}
+
+// ── A2A harness agent reads ─────────────────────────────────────────────────
+
+export async function listA2AAgents(): Promise<HarnessAgent[]> {
+  const response = await operationsApi()<{ agents?: unknown[] }>('/agents/a2a')
+
+  return (response.agents ?? []).map(normalizeHarnessAgent)
+}
+
+export async function getA2AAgentStatus(agentId: string): Promise<HarnessAgent> {
+  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/status`)
+
+  return normalizeHarnessAgent(response)
+}
+
+// ── A2A harness agent writes ────────────────────────────────────────────────
+
+export async function registerA2AAgent(url: string, confirm = false): Promise<HarnessAgent> {
+  const normalized = url.trim()
+
+  if (!normalized || normalized.length > 2048) {
+    throw new Error('A2A URL is invalid')
+  }
+
+  try {
+    const parsed = new URL(normalized)
+
+    if (parsed.protocol !== 'https:') {
+      throw new Error('A2A URL is invalid')
+    }
+  } catch {
+    throw new Error('A2A URL is invalid')
+  }
+
+  const response = await operationsApi()<unknown>('/agents/a2a/register', {
+    method: 'POST',
+    body: { url: normalized, confirm }
+  })
+
+  return normalizeHarnessAgent(response)
+}
+
+export async function removeA2AAgent(agentId: string): Promise<{ agentId: string; deleted: boolean }> {
+  const response = await operationsApi()<{ agent_id?: unknown; deleted?: unknown }>(
+    `/agents/a2a/${encodeURIComponent(agentId)}`,
+    { method: 'DELETE' }
+  )
+
+  return {
+    agentId: typeof response.agent_id === 'string' ? response.agent_id : agentId,
+    deleted: response.deleted === true
+  }
+}
+
+export interface RenameA2AAgentResult {
+  agent: HarnessAgent
+  warnings: string[]
+}
+
+/** Rename one connected Bot. Only the display name moves; the id and handle stay. */
+export async function renameA2AAgent(agentId: string, name: string): Promise<RenameA2AAgentResult> {
+  const trimmed = normalizeBotName(name)
+
+  if (!trimmed) {
+    throw new Error('Enter a name for this Bot.')
+  }
+
+  try {
+    const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}`, {
+      method: 'PATCH',
+      body: { name: trimmed }
+    })
+
+    const row = record(response)
+    const rawWarnings = Array.isArray(row.warnings) ? row.warnings : []
+
+    return {
+      agent: normalizeHarnessAgent(response),
+      warnings: rawWarnings.filter((warning: unknown): warning is string => typeof warning === 'string')
+    }
+  } catch (cause) {
+    if (cause instanceof Error) {
+      const match = cause.message.match(/^\d+:\s*(.+)$/)
+
+      if (match) {
+        let parsed: unknown
+
+        try {
+          parsed = JSON.parse(match[1])
+        } catch {
+          // Not structured JSON — surface the raw body as a fallback.
+        }
+
+        if (parsed && typeof parsed === 'object' && parsed !== null && 'detail' in parsed) {
+          const detail = (parsed as Record<string, unknown>).detail
+
+          if (detail && typeof detail === 'object' && detail !== null && (detail as Record<string, unknown>).reason) {
+            throw new Error(String((detail as Record<string, unknown>).reason))
+          }
+
+          if (typeof detail === 'string') {
+            throw new Error(detail)
+          }
+        }
+
+        throw new Error(match[1])
+      }
+    }
+
+    throw cause
+  }
+}
+
+// ── A2A harness agent chat ──────────────────────────────────────────────────
+
+export interface A2AChatMessage {
+  content: string
+  role: 'assistant' | 'user'
+}
+
+export interface A2AChatHistory {
+  messages: A2AChatMessage[]
+  mirror_session_id?: string
+  pending_message?: string
+  request_status?: string | null
+}
+
+export interface A2AChatSendResult {
+  reply: string
+  state: string
+  request_status: string
+  native_session_id: string
+  connector_event_id: string
+}
+
+export async function getA2AChatHistory(agentId: string, requestId = ''): Promise<A2AChatHistory> {
+  const query = requestId ? `?request_id=${encodeURIComponent(requestId)}` : ''
+  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/chat${query}`)
+
+  const row = record(response)
+  const rawMessages = Array.isArray(row.messages) ? row.messages : []
+
+  const messages = rawMessages.flatMap<A2AChatMessage>((msg: unknown) => {
+    const m = record(msg)
+    const role = m.role === 'user' || m.role === 'assistant' ? m.role : null
+    const content = typeof m.content === 'string' ? m.content : ''
+
+    if (!role || !content) {
+      return []
+    }
+
+    return [{ role, content }]
+  })
+
+  return {
+    messages,
+    mirror_session_id: typeof row.mirror_session_id === 'string' ? row.mirror_session_id : undefined,
+    pending_message: typeof row.pending_message === 'string' ? row.pending_message : undefined,
+    request_status: row.request_status === null ? null : typeof row.request_status === 'string' ? row.request_status : null
+  }
+}
+
+export async function sendA2AChatMessage(
+  agentId: string,
+  message: string,
+  requestId = ''
+): Promise<A2AChatSendResult> {
+  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/chat`, {
+    method: 'POST',
+    body: { message: message.trim(), request_id: requestId }
+  })
+
+  const row = record(response)
+
+  return {
+    reply: typeof row.reply === 'string' ? row.reply : '',
+    state: typeof row.state === 'string' ? row.state : 'unknown',
+    request_status: typeof row.request_status === 'string' ? row.request_status : 'unknown',
+    native_session_id: typeof row.native_session_id === 'string' ? row.native_session_id : '',
+    connector_event_id: typeof row.connector_event_id === 'string' ? row.connector_event_id : ''
+  }
+}
+
+export interface A2AControlResult {
+  nativeSessionId: string
+  operation: string
+  state: A2ARuntimeState
+  supported: boolean
+}
+
+function normalizeControlResult(value: unknown): A2AControlResult {
+  const row = record(value)
+  const rawState = typeof row.state === 'string' ? row.state : 'unknown'
+
+  const state = ['idle', 'working', 'waiting', 'reviewing', 'blocked', 'offline'].includes(rawState)
+    ? rawState as A2ARuntimeState
+    : 'unknown'
+
+  return {
+    nativeSessionId: typeof row.native_session_id === 'string' ? row.native_session_id : '',
+    operation: typeof row.operation === 'string' ? row.operation : '',
+    state,
+    supported: row.supported === true
+  }
+}
+
+export async function refreshA2AAgent(agentId: string): Promise<HarnessAgent> {
+  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/refresh`, { method: 'POST' })
+
+  return normalizeHarnessAgent(response)
+}
+
+export async function getA2ALiveState(agentId: string): Promise<A2AControlResult> {
+  return normalizeControlResult(await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/state`))
+}
+
+export async function startOrResumeA2AAgent(agentId: string, prompt: string): Promise<A2AControlResult> {
+  return normalizeControlResult(await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/start-or-resume`, {
+    method: 'POST', body: { prompt: prompt.trim() }
+  }))
+}
+
+export async function steerA2AAgent(agentId: string, message: string): Promise<A2AControlResult> {
+  return normalizeControlResult(await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/steer`, {
+    method: 'POST', body: { message: message.trim() }
+  }))
+}
+
+export async function interruptA2AAgent(agentId: string): Promise<A2AControlResult> {
+  return normalizeControlResult(await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/interrupt`, {
+    method: 'POST', body: { confirm: true }
+  }))
+}
+
+// ── normalization ───────────────────────────────────────────────────────────
+
+function normalizeHarnessAgent(value: unknown): HarnessAgent {
+  const row = record(value)
+  const agentId = typeof row.agent_id === 'string' ? row.agent_id : ''
+  const name = typeof row.name === 'string' ? row.name : ''
+  const rawStatus = typeof row.status === 'string' ? row.status : ''
+
+  const status: A2AConnectionStatus = ['pending', 'verified', 'degraded'].includes(rawStatus)
+    ? (rawStatus as A2AConnectionStatus)
+    : 'degraded'
+
+  const rawCapabilities = Array.isArray(row.capabilities) ? row.capabilities : []
+  const capabilities = rawCapabilities.filter((c: unknown): c is string => typeof c === 'string')
+  const rawOperations = Array.isArray(row.supported_operations) ? row.supported_operations : []
+  const supportedOperations = rawOperations.filter((operation: unknown): operation is string => typeof operation === 'string')
+  const rawRuntimeState = typeof row.runtime_state === 'string' ? row.runtime_state : 'unknown'
+
+  const runtimeState = ['idle', 'working', 'waiting', 'reviewing', 'blocked', 'offline'].includes(rawRuntimeState)
+    ? rawRuntimeState as A2ARuntimeState
+    : 'unknown'
+
+  return {
+    agentId,
+    name,
+    status,
+    capabilities,
+    runtimeState,
+    supportedOperations,
+    workSummary: typeof row.work_summary === 'string' ? row.work_summary : ''
+  }
+}

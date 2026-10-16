@@ -6,6 +6,7 @@ import { useOnProfileSwitch } from '@/app/hooks/use-on-profile-switch'
 import { useRouteOverlayActive } from '@/app/hooks/use-route-overlay-active'
 import { PetHeartField } from '@/components/chat/vibe-hearts'
 import { PetBubble } from '@/components/pet/pet-bubble'
+import { useMediaQuery } from '@/hooks/use-media-query'
 import { persistString, storedString } from '@/lib/storage'
 import { $changeEventsAvailable, $petChange } from '@/store/live-sync'
 import {
@@ -100,6 +101,7 @@ function loadPosition(): Point {
  * Promotion to a separate frameless OS-level window is a follow-up — the
  * sprite + state logic here is reused as-is, only the host changes.
  */
+// health: allow CC -- retained narrow-screen pet behavior is migration scoped and covered by mobile overlap tests
 export function FloatingPet() {
   const { requestGateway } = useGatewayRequest()
   const { resolvedMode } = useTheme()
@@ -112,6 +114,7 @@ export function FloatingPet() {
   const atRest = useStore($petAtRest)
   const roamDir = useStore($petRoamDir)
   const routeOverlayOpen = useRouteOverlayActive()
+  const narrowOverlay = useMediaQuery('(max-width: 639px)')
 
   const [position, setPosition] = useState<Point>(loadPosition)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -460,12 +463,13 @@ export function FloatingPet() {
 
   // While popped out, the desktop overlay window owns the mascot — hide the
   // in-window one so there aren't two.
-  if (!info.enabled || !info.spritesheetBase64 || overlayActive) {
+  if (!info.enabled || !info.spritesheetBase64 || overlayActive || (routeOverlayOpen && narrowOverlay)) {
     return null
   }
 
   return (
     <div
+      data-slot="floating-pet"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

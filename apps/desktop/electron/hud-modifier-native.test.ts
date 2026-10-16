@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
@@ -12,7 +12,13 @@ import { macosSysroot, xcrunClangArgv } from '../scripts/macos-sysroot.mjs'
 // Linux XI2 (-x11.c) helpers both include. Compile its C contract and run it
 // wherever a C toolchain ships with the runner: Linux (the JS CI lane) and
 // macOS. Windows uses the separate C# port.
-test.skipIf(process.platform === 'win32')(
+const compilerProbe = process.platform === 'darwin'
+  ? spawnSync('xcrun', ['--find', 'clang'], { stdio: 'ignore' })
+  : spawnSync('cc', ['--version'], { stdio: 'ignore' })
+
+const hasNativeCompiler = process.platform !== 'win32' && compilerProbe.status === 0
+
+test.skipIf(!hasNativeCompiler)(
   'native modifier gesture state machine only summons on a clean, bounded two-modifier tap',
   () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'hermes-hud-gesture-'))

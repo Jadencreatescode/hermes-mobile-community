@@ -34,6 +34,7 @@ def _build_rig(monkeypatch, tmp_path, request, surface_a, mode):
     monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", hermes_state._IMPORT_DEFAULT_DB_PATH)
     import gateway.run as gw
     monkeypatch.setattr(gw, "_hermes_home", tmp_path)
+    monkeypatch.setattr(GatewayRunner, "_VOICE_MODE_PATH", tmp_path / "gateway_voice_mode.json")
     registry = ProcessRegistry()
     monkeypatch.setattr(pr_module, "process_registry", registry)
     runner = GatewayRunner(GatewayConfig(multiplex_profiles=True, sessions_dir=tmp_path / "sessions"))

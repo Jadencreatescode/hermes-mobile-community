@@ -47,6 +47,18 @@ export interface PluginRestOptions {
   /** Single-file multipart upload (see HermesApiRequest.upload). */
   upload?: { filename: string; contentType?: string; bytes: ArrayBuffer }
   timeoutMs?: number
+  /** Bounded extra headers. Main forwards an allowlist (`Idempotency-Key`). */
+  headers?: Record<string, string>
+  /** `binary` returns raw bytes + response headers instead of parsed JSON. */
+  responseType?: 'json' | 'binary'
+}
+
+/** A raw binary REST response: bytes plus the headers needed to verify them. */
+export interface PluginBinaryResponse {
+  bytes: ArrayBuffer
+  mediaType: string
+  status: number
+  headers: Record<string, string>
 }
 
 // Normalize `path` to a leading-slash suffix relative to `/api/plugins/<id>`.
@@ -82,6 +94,8 @@ export async function pluginRest<T>(pluginId: string, path: string, opts: Plugin
     body: opts.body,
     upload: opts.upload,
     timeoutMs: opts.timeoutMs,
+    ...(opts.headers ? { headers: opts.headers } : {}),
+    ...(opts.responseType ? { responseType: opts.responseType } : {}),
     ...profileScoped()
   })
 }

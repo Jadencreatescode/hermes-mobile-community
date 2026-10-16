@@ -1,4 +1,4 @@
-import { host, useI18n, useValue } from '@hermes/plugin-sdk'
+import { BOTS_ROSTER_PROVIDERS_AREA, host, useContributions, useI18n, useQuery, useValue } from '@hermes/plugin-sdk'
 import { useEffect, useRef, useState } from 'react'
 
 import { BotRow } from './bot-row'
@@ -39,6 +39,7 @@ import { $groupMainTabsRev, shouldRenderGroupChatInPane } from './group-panes'
 import { $activeGroupMemberKeys } from './group-presence'
 import { $showHiddenBots, isBotHidden } from './hidden-bots'
 import { useBots } from './i18n'
+import { loadProviderRoster, providerBotMatches, ProviderBotRow } from './provider-roster-ui'
 import { $activityToasts } from './roster-actions'
 import { renderRosterContent } from './roster-pane-content'
 import { deriveRosterPresentation, deriveRosterRows, sortRosterBots } from './roster-pane-derivation'
@@ -232,6 +233,24 @@ export function BotsPane() {
   const { t } = useI18n()
   const b = useBots()
   const { data, error, isLoading, refetch } = useRoster()
+  const providerContributions = useContributions(BOTS_ROSTER_PROVIDERS_AREA)
+
+  const providerQueryKey = providerContributions
+    .map(contribution => `${contribution.source || 'core'}:${contribution.id}`)
+    .join('|')
+
+  const {
+    data: providerRoster = [],
+    error: providerError,
+    isLoading: providerLoading,
+    refetch: refetchProviderRoster
+  } = useQuery({
+    queryKey: ['hermes-bots', 'provider-roster', providerQueryKey],
+    queryFn: () => loadProviderRoster(providerContributions),
+    refetchInterval: 5000,
+    staleTime: 5000
+  })
+
   const gatewayState = useValue(host.state.gateway)
   const gatewayUp = gatewayState === 'open'
 
@@ -280,8 +299,9 @@ export function BotsPane() {
   useEffect(() => {
     if (gatewayUp) {
       void refetch()
+      void refetchProviderRoster()
     }
-  }, [gatewayUp, refetch])
+  }, [gatewayUp, refetch, refetchProviderRoster])
   const allMeta = useValue($botMeta)
 
   // Resilience (@wesleysimplicio, #13): a failed refresh must not erase a
@@ -328,6 +348,7 @@ export function BotsPane() {
     }
   }, [gatewayFilterExists])
   const hiddenExpanded = useValue($showHiddenBots)
+  const providerRows = providerRoster.filter(row => providerBotMatches(row, query))
 
   const {
     activeSourceRoster,
@@ -479,7 +500,7 @@ export function BotsPane() {
         setGroupCreateOpen,
         setSectionDialog,
         showRosterTools,
-        showRosterSearch,
+        showRosterSearch: showRosterSearch || providerRoster.length > 0,
         showRosterFilters,
         query,
         setQuery,
@@ -499,8 +520,13 @@ export function BotsPane() {
         initialRosterLoading,
         roster,
         error,
+        providerError,
+        providerLoading,
+        providerRoster,
+        providerRows,
         gatewayUp,
         refetch,
+        refetchProviderRoster,
         allBotsHidden,
         hiddenExpanded,
         rosterRows,
@@ -517,6 +543,13 @@ export function BotsPane() {
         showHiddenRows,
         hiddenGatewaySections,
         renderBotRow,
+        renderProviderRow: row => (
+          <ProviderBotRow
+            key={`provider:${row.providerKey || 'core'}:${row.agent.id}`}
+            onRefresh={refetchProviderRoster}
+            row={row}
+          />
+        ),
         renderGroupChatSection,
         renderGatewaySection,
         renderUserSections,

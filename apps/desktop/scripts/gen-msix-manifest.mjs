@@ -26,7 +26,7 @@ import {
   resourceLanguageTag,
   splashScreenTag,
   substituteManifestMacros,
-} from "../../../node_modules/app-builder-lib/dist/targets/win/winAppUtil.js"
+} from "../node_modules/app-builder-lib/dist/targets/win/winAppUtil.js"
 import { appIdentity } from "../../../scripts/msix-shared.mjs"
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
@@ -47,7 +47,7 @@ const pkg = require(path.join(desktop, "package.json"))
 const options = config.msix
 // The main application launches Electron. CLI aliases have separate payload
 // entrypoints; use the same AppInfo derivation as MsixTarget and signing hooks.
-const { AppInfo } = require('../../../node_modules/app-builder-lib/dist/appInfo.js')
+const { AppInfo } = require('../node_modules/app-builder-lib/dist/appInfo.js')
 const appInfo = new AppInfo({ config, metadata: { ...pkg, ...config.extraMetadata } }, null, config.win)
 const executable = `app\\${appInfo.productFilename}.exe`
 const displayName = options.displayName || config.productName
@@ -77,7 +77,7 @@ const extensions = await buildExtensionsXml({
 const template = await readFile(
   options.customManifestPath
     ? path.resolve(desktop, options.customManifestPath)
-    : path.join(repoRoot, "node_modules", "app-builder-lib", "templates", "msix", "appxmanifest.xml"),
+    : path.join(desktop, "node_modules", "app-builder-lib", "templates", "msix", "appxmanifest.xml"),
   "utf8"
 )
 

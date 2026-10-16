@@ -2,7 +2,7 @@
 
 Before launching an MCP server via npx/uvx, queries Google's free public OSV API for
 known malware advisories (MAL-* IDs). Regular CVEs are ignored — only confirmed malware
-is blocked. Fail-open: network errors allow the package to proceed (~300ms typical).
+is blocked. Fail-closed: a package is not launched without an OSV verdict (~300ms typical).
 Inspired by Block/goose's extension malware check.
 """
 import json
@@ -23,7 +23,7 @@ _TIMEOUT = 10  # seconds
 # ladders, parked-server self-probes and repeated `hermes mcp test` runs re-run the preflight
 # for the SAME package on every spawn; uncached, a flapping server becomes a sustained OSV/DNS
 # query stream. Clean AND blocked verdicts are reusable; network failures are NOT cached
-# (fail-open covers them and caching one could mask a real advisory later).
+# (the attempt fails closed, then retries once OSV is reachable again).
 # The cache is also persisted under the Hermes home so separate processes and gateway
 # restarts reuse warm verdicts; expiry is absolute wall-clock time so it survives restarts.
 # Trade-off: a MAL advisory published right after a clean verdict is noticed at TTL expiry
@@ -165,7 +165,7 @@ def _cache_put(key, result: Optional[str]) -> None:
 
 def check_package_for_malware(command: str, args: list) -> Optional[str]:
     """Check an MCP server package (inferred from ``command``/``args``) for MAL-* advisories.
-    Returns a BLOCKED message, else None — also on network errors/unknown commands (fail-open)."""
+    Returns a BLOCKED message for malware or an unavailable verdict; unknown commands are skipped."""
     ecosystem = _infer_ecosystem(command)
     if not ecosystem:
         return None  # not npx/uvx — skip
@@ -179,9 +179,13 @@ def check_package_for_malware(command: str, args: list) -> Optional[str]:
     try:
         malware = _query_osv(package, ecosystem, version)
     except Exception as exc:
-        # Fail-open; deliberately NOT cached — see _CACHE_TTL_S comment.
-        logger.debug("OSV check failed for %s/%s (allowing): %s", ecosystem, package, exc)
-        return None
+        # Do not cache this refusal: a restored OSV service must be retried on
+        # the next launch. Exception details stay in logs, not user output.
+        logger.warning("OSV check failed for %s/%s (blocking): %s", ecosystem, package, exc)
+        return (
+            f"BLOCKED: Package '{package}' ({ecosystem}) could not be verified "
+            "against the OSV malware database. Retry when OSV is reachable."
+        )
     result = None
     if malware:
         ids = ", ".join(m["id"] for m in malware[:3])

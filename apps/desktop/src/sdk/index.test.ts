@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ackComposerInsert } from '@/app/chat/composer/focus'
+import { useContributions as useInternalContributions } from '@/contrib/react/use-contributions'
 import { createClientSessionState } from '@/lib/chat-runtime'
-import { host } from '@/sdk'
+import {
+  BOTS_ROSTER_PROVIDERS_AREA,
+  type BotsRosterProvider,
+  type BotsRosterProviderAgent,
+  host,
+  useContributions
+} from '@/sdk'
 import { $selectedStoredSessionId, setActiveSessionId, setAwaitingResponse, setBusy } from '@/store/session'
 import { clearAllSessionStates, publishSessionState } from '@/store/session-states'
 
@@ -28,6 +35,36 @@ vi.mock('@/store/pool-limits', async () => {
   const { atom } = await import('nanostores')
 
   return { $poolLimits: atom({ idleMs: 600_000, maxBackends: 3 }) }
+})
+
+describe('Bots roster provider SDK contract', () => {
+  it('publishes the generic provider area and contribution hook', () => {
+    expect(BOTS_ROSTER_PROVIDERS_AREA).toBe('bots.roster.providers')
+    expect(useContributions).toBe(useInternalContributions)
+  })
+
+  it('accepts a verified agent provider without exposing transport credentials', async () => {
+    const agent = {
+      capabilities: ['chat.send'],
+      description: 'Verified A2A agent',
+      handle: 'a2a:reviewer',
+      harness: 'a2a',
+      host_id: 'operations',
+      host_label: 'Hermes Operations',
+      id: 'a2a:reviewer',
+      name: 'Reviewer',
+      verification_state: 'verified'
+    } satisfies BotsRosterProviderAgent
+
+    const provider = {
+      list_verified_agents: async () => [agent],
+      open_bot_chat: () => undefined,
+      open_settings: () => undefined,
+      refresh_agent: async () => undefined
+    } satisfies BotsRosterProvider
+
+    await expect(provider.list_verified_agents()).resolves.toEqual([agent])
+  })
 })
 
 describe('host.warmProfile pool-saturation contract', () => {

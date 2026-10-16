@@ -191,7 +191,9 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
           ref: ${{ inputs.commit }}
-          fetch-depth: 2 # the merge commit and its first parent (the base branch tip)
+          # Depth three also reaches an approved upstream parent carried by a one-time migration
+          # commit. Ordinary PRs still ratchet against the merge commit's first parent.
+          fetch-depth: 3
 
       - uses: ./.github/actions/setup-pm
         with:

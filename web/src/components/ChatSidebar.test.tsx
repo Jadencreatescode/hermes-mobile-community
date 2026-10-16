@@ -32,6 +32,10 @@ const gatewayMocks = vi.hoisted(() => {
   }
 })
 
+const pickerMocks = vi.hoisted(() => ({
+  submit: null as ((cmd: string) => void) | null
+}))
+
 const reloadMocks = vi.hoisted(() => ({
   maybeReloadForLoopbackWsAuthFailure: vi.fn(() => true)
 }))
@@ -63,10 +67,10 @@ vi.mock('@/lib/gatewayClient', () => ({
   }
 }))
 vi.mock('@/components/ModelPickerDialog', () => ({
-  ModelPickerDialog: () => null
-}))
-vi.mock('@/components/ModelReloadConfirm', () => ({
-  ModelReloadConfirm: () => null
+  ModelPickerDialog: ({ onSubmit }: { onSubmit?(cmd: string): void }) => {
+    pickerMocks.submit = onSubmit ?? null
+    return null
+  }
 }))
 vi.mock('@/components/ReasoningPicker', () => ({
   ReasoningPicker: () => null
@@ -159,6 +163,7 @@ beforeEach(() => {
   apiMocks.buildWsUrl.mockReset()
   apiMocks.buildWsUrl.mockResolvedValue('ws://localhost/api/events?channel=chat-1')
   reloadMocks.maybeReloadForLoopbackWsAuthFailure.mockReturnValue(true)
+  pickerMocks.submit = null
   vi.stubGlobal('WebSocket', FakeWebSocket)
 })
 
@@ -851,5 +856,31 @@ describe('ChatSidebar sidecar redial grace (#129393)', () => {
     })
     await advance(250)
     expect(gatewayMocks.connect).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('ChatSidebar model switch', () => {
+  it('delivers a session-scoped model command to the running PTY chat', async () => {
+    const { ChatSidebar } = await import('./ChatSidebar')
+
+    const onModelSwitch = vi.fn()
+    await render(<ChatSidebar channel="chat-1" onModelSwitch={onModelSwitch} />)
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1))
+
+    const modelButton = container.querySelector('button')
+    expect(modelButton).toBeTruthy()
+
+    await act(async () => {
+      modelButton!.click()
+    })
+    expect(pickerMocks.submit).not.toBeNull()
+
+    await act(async () => {
+      pickerMocks.submit!('/model new-model --provider openrouter')
+    })
+
+    expect(onModelSwitch).toHaveBeenCalledOnce()
+    expect(onModelSwitch).toHaveBeenCalledWith('/model new-model --provider openrouter')
+    expect(container.textContent).toContain('new-model')
   })
 })

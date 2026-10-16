@@ -39,16 +39,16 @@ env:
 jobs:
   # PR code: secret-free build + smoke per arch.
   build:
-    if: github.repository == 'NousResearch/hermes-agent'
+    if: github.repository == 'NousResearch/hermes-agent' || github.repository == 'Jadencreatescode/hermes-mobile-community'
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest-32-core
+            runner: ubuntu-24.04
             platform: linux/amd64
           - arch: arm64
-            runner: ubuntu-latest-32-arm-core
+            runner: ubuntu-24.04-arm
             platform: linux/arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -83,10 +83,10 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest-32-core
+            runner: ubuntu-24.04
             platform: linux/amd64
           - arch: arm64
-            runner: ubuntu-latest-32-arm-core
+            runner: ubuntu-24.04-arm
             platform: linux/arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30

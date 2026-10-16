@@ -342,6 +342,43 @@ describe('attachmentPreviewDataUrl', () => {
   })
 })
 
+describe('useComposerActions browser file cleanup', () => {
+  afterEach(() => {
+    Reflect.deleteProperty(window, 'hermesDesktop')
+    vi.clearAllMocks()
+  })
+
+  it('releases a synthetic selected file when its composer chip is removed', async () => {
+    const path = 'browser-file://selected/notes.txt'
+    const releaseBrowserFile = vi.fn(() => true)
+    const remove = vi.fn((): ComposerAttachment => ({ id: `file:${path}`, kind: 'file', label: 'notes.txt', path }))
+    Object.defineProperty(window, 'hermesDesktop', {
+      configurable: true,
+      value: { releaseBrowserFile }
+    })
+    const { result } = renderHook(() =>
+      useComposerActions({
+        activeSessionId: null,
+        currentCwd: '',
+        requestGateway: vi.fn(),
+        scope: {
+          add: vi.fn(),
+          remove,
+          target: 'test-composer',
+          update: vi.fn(() => true),
+          updateIfCurrent: vi.fn(() => true)
+        }
+      })
+    )
+
+    await act(async () => {
+      await result.current.removeAttachment(`file:${path}`)
+    })
+
+    expect(releaseBrowserFile).toHaveBeenCalledWith(path)
+  })
+})
+
 describe('useComposerActions native image drops', () => {
   afterEach(() => {
     Reflect.deleteProperty(window, 'hermesDesktop')

@@ -4,6 +4,10 @@ This document describes Hermes Agent's trust model, names the one
 security boundary the project treats as load-bearing, and defines the
 scope for vulnerability reports.
 
+## Public mobile repository reports
+
+Report suspected vulnerabilities in this public mobile repository through [GitHub private vulnerability reporting](https://github.com/Jadencreatescode/hermes-mobile-community/security/advisories/new). Do not open a public issue or include real credentials, private node details, or owner application data. If the issue also affects unmodified upstream Hermes Agent, use the upstream reporting channel below.
+
 ## 1. Reporting a Vulnerability
 
 Report privately via [GitHub Security Advisories](https://github.com/NousResearch/hermes-agent/security/advisories/new)

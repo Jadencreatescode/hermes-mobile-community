@@ -26,7 +26,6 @@ import pytest
 
 from tools import bot_mode_dm
 from tools import bot_relay
-import pytest
 
 
 ENV = {"id": "d" * 32, "target_handle": "researcher", "target_connection": "ssh-vps"}
@@ -51,6 +50,9 @@ def test_local_delivery_resolves_sibling_hermes(tmp_path, monkeypatch):
     sibling.touch()
     sibling.chmod(0o755)
     monkeypatch.setattr("sys.executable", str(bin_dir / "python"))
+    # Keep this checkout's published launcher from outranking the sibling
+    # whose fallback behavior this test isolates.
+    monkeypatch.setattr(bot_relay, "__file__", str(tmp_path / "source" / "bot_relay.py"))
 
     argv = bot_relay.local_delivery_command("ops", "query.json")
     assert argv[0] == str(sibling)

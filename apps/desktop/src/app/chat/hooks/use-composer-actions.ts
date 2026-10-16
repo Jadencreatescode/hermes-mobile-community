@@ -833,6 +833,10 @@ export function useComposerActions({
     async (id: string) => {
       const removed = scope.remove(id)
 
+      if (removed?.path?.startsWith('browser-file://')) {
+        window.hermesDesktop?.releaseBrowserFile?.(removed.path)
+      }
+
       if (
         removed?.kind === 'image' &&
         removed.path &&

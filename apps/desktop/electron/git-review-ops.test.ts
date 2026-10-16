@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import simpleGit from 'simple-git'
+import { simpleGit } from 'simple-git'
 import { afterEach, test, vi } from 'vitest'
 
 import {
@@ -13,8 +13,7 @@ import {
   resolveRenamePath,
   REVIEW_FILE_CAP,
   reviewCreatePr,
-  reviewList,
-  SIMPLE_GIT_UNSAFE_BINARY_WARN
+  reviewList
 } from './git-review-ops'
 import type * as NoConsoleGit from './no-console-git'
 
@@ -97,19 +96,30 @@ test('gitFor accepts a Windows no-console host tuple with restricted characters'
   }
 })
 
-test('gitFor suppresses only the known custom-binary warning and restores console.warn', () => {
+test('gitFor never replaces console.warn with the current safe custom-binary API', () => {
   const spacedBin = String.raw`C:\Program Files\Git\cmd\git.exe`
   // `windowsGitHost()` resolves nothing in this process (no configured roots, no
-  // HERMES_DESKTOP_PYTHON), so `gitBin` itself is what simple-git validates — the
-  // spaced `Program Files` path, which warns once per factory call.
+  // HERMES_DESKTOP_PYTHON), so `gitBin` itself is what simple-git validates. The
+  // spaced path exercises the explicit custom-binary escape hatch.
   const warnings: unknown[][] = []
-  const originalWarn = console.warn
+  const originalDescriptor = Object.getOwnPropertyDescriptor(console, 'warn')
+  let currentWarn: typeof console.warn
+  let assignments = 0
 
   const recordingWarn = (...args: unknown[]) => {
     warnings.push(args)
   }
 
-  console.warn = recordingWarn
+  currentWarn = recordingWarn
+  Object.defineProperty(console, 'warn', {
+    configurable: true,
+    enumerable: originalDescriptor?.enumerable ?? true,
+    get: () => currentWarn,
+    set: value => {
+      assignments += 1
+      currentWarn = value
+    }
+  })
 
   try {
     for (let i = 0; i < 5; i += 1) {
@@ -118,16 +128,20 @@ test('gitFor suppresses only the known custom-binary warning and restores consol
 
     assert.equal(console.warn, recordingWarn)
 
-    // The escape hatch used directly still warns: the message gitFor filters is a
-    // live emission of the installed simple-git, so the filter cannot go stale
-    // silently (an upgrade that rewords it fails this test, not production).
+    // simple-git 4 accepts the explicit unsafe escape hatch without warning.
+    // Keep one unrelated warning to prove gitFor restored the caller's handler.
     simpleGit({ baseDir: process.cwd(), binary: spacedBin, unsafe: { allowUnsafeCustomBinary: true } })
     console.warn('unrelated warning')
   } finally {
-    console.warn = originalWarn
+    if (originalDescriptor) {
+      Object.defineProperty(console, 'warn', originalDescriptor)
+    } else {
+      Reflect.deleteProperty(console, 'warn')
+    }
   }
 
-  assert.deepEqual(warnings, [[SIMPLE_GIT_UNSAFE_BINARY_WARN], ['unrelated warning']])
+  assert.equal(assignments, 0)
+  assert.deepEqual(warnings, [['unrelated warning']])
 })
 
 test('resolveRenamePath: simple rename resolves to the new path', () => {

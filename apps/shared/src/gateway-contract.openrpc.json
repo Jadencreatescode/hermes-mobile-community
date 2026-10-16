@@ -1645,6 +1645,42 @@
       }
     },
     {
+      "name": "kanban.board",
+      "summary": "Read the Kanban board, optionally filtered by board, tenant, assignee, or archive state.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/KanbanBoardParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/KanbanBoardResult"
+        }
+      }
+    },
+    {
+      "name": "kanban.diagnostics",
+      "summary": "Return active task diagnostics, optionally filtered by board and minimum severity.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/KanbanDiagnosticsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/KanbanDiagnosticsResult"
+        }
+      }
+    },
+    {
       "name": "learning.delete",
       "summary": "Archive a skill (restorable via curator) or remove a memory chunk.",
       "params": [
@@ -12529,6 +12565,36 @@
         "title": "CurrentSubscription",
         "type": "object"
       },
+      "CwdIdentity": {
+        "additionalProperties": false,
+        "description": "Filesystem identity values are decimal strings so JavaScript clients preserve full-width inode IDs.",
+        "properties": {
+          "device": {
+            "title": "Device",
+            "type": "string"
+          },
+          "inode": {
+            "title": "Inode",
+            "type": "string"
+          },
+          "output_device": {
+            "title": "Output Device",
+            "type": "string"
+          },
+          "output_inode": {
+            "title": "Output Inode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device",
+          "inode",
+          "output_device",
+          "output_inode"
+        ],
+        "title": "CwdIdentity",
+        "type": "object"
+      },
       "DelegationPauseParams": {
         "additionalProperties": false,
         "properties": {
@@ -17099,6 +17165,357 @@
         ],
         "title": "InterruptStatus",
         "type": "string"
+      },
+      "KanbanBoardParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "board": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Board"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tenant"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Assignee"
+          },
+          "include_archived": {
+            "default": false,
+            "title": "Include Archived",
+            "type": "boolean"
+          }
+        },
+        "title": "KanbanBoardParams",
+        "type": "object"
+      },
+      "KanbanBoardResult": {
+        "additionalProperties": false,
+        "properties": {
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/KanbanBoardTask"
+            },
+            "title": "Tasks",
+            "type": "array"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tasks",
+          "count"
+        ],
+        "title": "KanbanBoardResult",
+        "type": "object"
+      },
+      "KanbanBoardTask": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "latest_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Summary"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "assignee",
+          "priority",
+          "latest_summary"
+        ],
+        "title": "KanbanBoardTask",
+        "type": "object"
+      },
+      "KanbanDiagnostic": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/KanbanDiagnosticSeverity"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/KanbanDiagnosticAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "first_seen_at": {
+            "title": "First Seen At",
+            "type": "integer"
+          },
+          "last_seen_at": {
+            "title": "Last Seen At",
+            "type": "integer"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "data": {
+            "additionalProperties": true,
+            "title": "Data",
+            "type": "object"
+          }
+        },
+        "required": [
+          "kind",
+          "severity",
+          "title",
+          "detail",
+          "actions",
+          "first_seen_at",
+          "last_seen_at",
+          "count",
+          "run_id",
+          "data"
+        ],
+        "title": "KanbanDiagnostic",
+        "type": "object"
+      },
+      "KanbanDiagnosticAction": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "suggested": {
+            "title": "Suggested",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "label",
+          "payload",
+          "suggested"
+        ],
+        "title": "KanbanDiagnosticAction",
+        "type": "object"
+      },
+      "KanbanDiagnosticSeverity": {
+        "enum": [
+          "warning",
+          "error",
+          "critical"
+        ],
+        "title": "KanbanDiagnosticSeverity",
+        "type": "string"
+      },
+      "KanbanDiagnosticsParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "board": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Board"
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KanbanDiagnosticSeverity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "KanbanDiagnosticsParams",
+        "type": "object"
+      },
+      "KanbanDiagnosticsResult": {
+        "additionalProperties": false,
+        "properties": {
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/KanbanTaskDiagnostics"
+            },
+            "title": "Diagnostics",
+            "type": "array"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "diagnostics",
+          "count"
+        ],
+        "title": "KanbanDiagnosticsResult",
+        "type": "object"
+      },
+      "KanbanTaskDiagnostics": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "task_title": {
+            "title": "Task Title",
+            "type": "string"
+          },
+          "task_status": {
+            "title": "Task Status",
+            "type": "string"
+          },
+          "task_assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Assignee"
+          },
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/KanbanDiagnostic"
+            },
+            "title": "Diagnostics",
+            "type": "array"
+          }
+        },
+        "required": [
+          "task_id",
+          "task_title",
+          "task_status",
+          "task_assignee",
+          "diagnostics"
+        ],
+        "title": "KanbanTaskDiagnostics",
+        "type": "object"
       },
       "LanguageOption": {
         "additionalProperties": false,
@@ -27042,6 +27459,18 @@
             "default": "",
             "title": "Text"
           },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
           "display_kind": {
             "anyOf": [
               {
@@ -27314,6 +27743,18 @@
             ],
             "default": null,
             "title": "Turn Isolation"
+          },
+          "idempotent_replay": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotent Replay"
           }
         },
         "title": "PromptSubmitResult",
@@ -30722,6 +31163,47 @@
             "default": null,
             "title": "Cwd"
           },
+          "cwd_identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CwdIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "enabled_toolsets": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enabled Toolsets"
+          },
+          "skip_background_review": {
+            "default": false,
+            "title": "Skip Background Review",
+            "type": "boolean"
+          },
+          "skip_context_files": {
+            "default": false,
+            "title": "Skip Context Files",
+            "type": "boolean"
+          },
+          "skip_memory": {
+            "default": false,
+            "title": "Skip Memory",
+            "type": "boolean"
+          },
           "cwd_explicit": {
             "anyOf": [
               {
@@ -32246,6 +32728,59 @@
             ],
             "default": null,
             "title": "Source"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cwd"
+          },
+          "cwd_identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CwdIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "enabled_toolsets": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enabled Toolsets"
+          },
+          "skip_background_review": {
+            "default": false,
+            "title": "Skip Background Review",
+            "type": "boolean"
+          },
+          "skip_context_files": {
+            "default": false,
+            "title": "Skip Context Files",
+            "type": "boolean"
+          },
+          "skip_memory": {
+            "default": false,
+            "title": "Skip Memory",
+            "type": "boolean"
           },
           "lazy": {
             "default": false,

@@ -403,6 +403,7 @@ test('actual MSIX manifest writer consumes the channel quad across rollover inst
     }
 
     fs.symlinkSync(path.join(repo, 'node_modules'), path.join(root, 'node_modules'), 'junction')
+    fs.symlinkSync(path.join(repo, 'apps/desktop/node_modules'), path.join(app, 'node_modules'), 'junction')
     const assets: string = path.join(app, 'assets/appx')
     fs.mkdirSync(assets)
 
@@ -421,8 +422,8 @@ test('actual MSIX manifest writer consumes the channel quad across rollover inst
       const build: ChannelBuildRequest = request(sequence)
 
       const script: string = `
-        const { AppInfo } = require('./node_modules/app-builder-lib/dist/appInfo.js');
-        const Msix = require('./node_modules/app-builder-lib/dist/targets/win/MsixTarget.js').default;
+        const { AppInfo } = require('./apps/desktop/node_modules/app-builder-lib/dist/appInfo.js');
+        const Msix = require('./apps/desktop/node_modules/app-builder-lib/dist/targets/win/MsixTarget.js').default;
         const config = require('./apps/desktop/electron-builder.config.cjs');
         const pkg = require('./apps/desktop/package.json');
         const fs = require('node:fs');

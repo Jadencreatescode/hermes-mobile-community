@@ -8,7 +8,9 @@ import { setSessionPickerOpen } from '@/store/session'
 import { composerPlainText } from './rich-editor'
 import type { TriggerState } from './text-utils'
 
-export const COMPOSER_STACK_BREAKPOINT_PX = 320
+export const COMPOSER_STACK_BREAKPOINT_PX = 340
+
+export const composerStacksAtWidth = (width: number): boolean => width < COMPOSER_STACK_BREAKPOINT_PX
 
 // Above the stack breakpoint but still cramped: the model pill sheds its label
 // for its chevron icon so the controls stop crowding the input before the whole

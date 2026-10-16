@@ -1,0 +1,159 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+
+import { describe, test } from 'vitest'
+
+import {
+  evaluateProductionAuditReport,
+  validateWhatsAppLock
+} from '../scripts/release-security/whatsapp-audit-policy.mjs'
+
+const repositoryLock = JSON.parse(
+  fs.readFileSync(new URL('../scripts/whatsapp-bridge/package-lock.json', import.meta.url), 'utf8')
+) as Record<string, unknown>
+
+function cleanReport() {
+  return {
+    auditReportVersion: 2,
+    metadata: {
+      vulnerabilities: { critical: 0, high: 0, moderate: 0, low: 0, info: 0, total: 0 }
+    },
+    vulnerabilities: {}
+  }
+}
+
+describe('WhatsApp production npm audit policy', () => {
+  test('accepts a clean production report against the patched repository lock', () => {
+    assert.deepEqual(evaluateProductionAuditReport(cleanReport(), repositoryLock), {
+      errors: [],
+      passed: true
+    })
+  })
+
+  test('requires music-metadata 11.16.1 in the exact lock', () => {
+    const lock = structuredClone(repositoryLock) as {
+      packages: Record<string, { version?: string }>
+    }
+
+    lock.packages['node_modules/music-metadata'].version = '11.16.0'
+
+    assert.match(validateWhatsAppLock(lock).join('\n'), /music-metadata.*11\.16\.1/i)
+  })
+
+  test('rejects even a newer music-metadata version until it is reviewed exactly', () => {
+    const lock = structuredClone(repositoryLock) as {
+      packages: Record<string, { version?: string }>
+    }
+
+    lock.packages['node_modules/music-metadata'].version = '11.16.2'
+
+    assert.match(validateWhatsAppLock(lock).join('\n'), /music-metadata.*11\.16\.1/i)
+  })
+
+  test('requires patched sharp in the exact lock', () => {
+    const lock = structuredClone(repositoryLock) as {
+      packages: Record<string, { version?: string }>
+    }
+
+    lock.packages['node_modules/sharp'].version = '0.35.4'
+
+    assert.match(validateWhatsAppLock(lock).join('\n'), /sharp.*0\.35\.5/i)
+  })
+
+  test('fails closed on every production advisory severity', () => {
+    const report = cleanReport() as {
+      metadata: { vulnerabilities: Record<string, number> }
+      vulnerabilities: Record<string, unknown>
+    }
+
+    report.metadata.vulnerabilities.low = 1
+    report.metadata.vulnerabilities.total = 1
+    report.vulnerabilities.example = {
+      severity: 'low',
+      nodes: ['node_modules/example'],
+      via: [{ url: 'https://github.com/advisories/GHSA-example' }]
+    }
+
+    const result = evaluateProductionAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /production vulnerability: example/i)
+  })
+
+  test('rejects a structurally incomplete audit report', () => {
+    const result = evaluateProductionAuditReport({}, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /missing audit metadata/i)
+    assert.match(result.errors.join('\n'), /missing vulnerability map/i)
+  })
+
+  test.each([undefined, 1, 3, '2'])('rejects unsupported audit report version %j', version => {
+    const report: Record<string, unknown> = cleanReport()
+
+    if (version === undefined) {delete report.auditReportVersion}
+    else {report.auditReportVersion = version}
+
+    const result = evaluateProductionAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /unsupported audit report version/i)
+  })
+
+  test('rejects contradictory severity counts even when total and findings are zero', () => {
+    const report = cleanReport()
+    report.metadata.vulnerabilities.low = 1
+
+    const result = evaluateProductionAuditReport(report, repositoryLock)
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /low count 1 does not match findings 0/i)
+  })
+
+  test('rejects missing, extra, malformed, and non-additive metadata counts', () => {
+    const reports = [
+      (() => {
+        const report = cleanReport()
+        delete (report.metadata.vulnerabilities as Partial<Record<string, number>>).info
+
+        return report
+      })(),
+      (() => {
+        const report = cleanReport() as { metadata: { vulnerabilities: Record<string, unknown> } }
+        report.metadata.vulnerabilities.unknown = 0
+
+        return report
+      })(),
+      (() => {
+        const report = cleanReport() as { metadata: { vulnerabilities: Record<string, unknown> } }
+        report.metadata.vulnerabilities.high = '0'
+
+        return report
+      })(),
+      (() => {
+        const report = cleanReport()
+        report.metadata.vulnerabilities.total = 1
+
+        return report
+      })()
+    ]
+
+    for (const report of reports) {
+      assert.equal(evaluateProductionAuditReport(report, repositoryLock).passed, false)
+    }
+  })
+
+  test.each([null, [], '', 0])('rejects malformed or truncated report payload %j', report => {
+    assert.equal(
+      evaluateProductionAuditReport(report as unknown as Record<string, unknown>, repositoryLock).passed,
+      false
+    )
+  })
+
+  test('rejects a lockfile without a package map', () => {
+    const result = evaluateProductionAuditReport(cleanReport(), {})
+
+    assert.equal(result.passed, false)
+    assert.match(result.errors.join('\n'), /missing lockfile package map/i)
+  })
+})

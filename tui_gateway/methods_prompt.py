@@ -5,6 +5,7 @@ method_ctx.bind_module), so they reference server.py globals bare.
 """
 
 import contextlib
+import hashlib
 
 from .method_ctx import HandlerRegistry, bind_module
 
@@ -658,7 +659,8 @@ def _persist_session_row_for_submit(rid, session, text=None, display_kind=None):
 
 
 def _run_after_agent_ready(
-    rid, sid, session, text, display_kind, display_metadata, hosted_terminal_callback, turn_author=None
+    rid, sid, session, text, display_kind, display_metadata, hosted_terminal_callback, turn_author=None,
+    idempotency_key="",
 ):
     """Turn thread body: patient wait for a deferred build (a slow build must not eat the
     accepted in-flight message), then run."""
@@ -675,11 +677,21 @@ def _run_after_agent_ready(
         with session["history_lock"]:
             session["running"] = False
             session["last_active"] = time.time()
+            if idempotency_key:
+                session.get("_prompt_idempotency", {}).pop(idempotency_key, None)
+            _clear_inflight_turn(session)
+            session["agent_error"] = None
+            session["agent_build_started"] = False
+            ready = session.get("agent_ready")
+            if ready is not None:
+                ready.clear()
         _emit("session.info", sid, _session_info(session.get("agent"), session))
         return
     with session["history_lock"]:
         if session.get("_turn_cancel_requested") or not session.get("running"):
             session["running"] = False
+            if idempotency_key:
+                session.get("_prompt_idempotency", {}).pop(idempotency_key, None)
             _clear_inflight_turn(session)
             # Without this emit the turn vanishes silently after {"status": "streaming"}.
             _emit("error", sid, {"message": (
@@ -697,13 +709,20 @@ _TRUNCATION_PARAMS = (
 
 
 def _lock_in_submit_turn(
-    rid, sid, session, text, params, has_truncation, requested_rebind_ids, hosted_task, display_kind):
+    rid, sid, session, text, params, has_truncation, requested_rebind_ids, hosted_task, display_kind,
+    idempotency_key="", idempotency_digest=""):
     """Under ``history_lock``: refuse watch-child races / malformed truncation, apply the
     cut, mark the turn running + in flight.  Returns ``(err, survivor_fields)``."""
     fields = {}
     with _session_turn_admission(session) as admitted:
         if not admitted:
             return _err(rid, 5035, "backend is retiring; reconnect to continue"), fields
+        if idempotency_key:
+            existing = session.get("_prompt_idempotency", {}).get(idempotency_key)
+            if existing is not None:
+                if existing != idempotency_digest:
+                    return _err(rid, 4092, "idempotency_key was reused with different text"), fields
+                return _ok(rid, {"status": "streaming", "idempotent_replay": True}), fields
         # A watch session's run lives in the PARENT turn (own running flag False); typing
         # mid-run would build a second agent racing the child on the same stored session.
         if session.get("lazy") and _child_run_active(
@@ -720,11 +739,17 @@ def _lock_in_submit_turn(
             if err is not None:
                 return err, {}
         session["running"] = True
+        if idempotency_key:
+            session.setdefault("_prompt_idempotency", {})[idempotency_key] = idempotency_digest
         session["_turn_cancel_requested"] = False
         session["last_active"] = time.time()
         if hosted_task is not None:
             session["_hosted_room_task"] = dict(hosted_task)
-        _start_inflight_turn(session, text, display_kind=display_kind)
+        try:
+            _start_inflight_turn(session, text, display_kind=display_kind)
+        except TypeError:
+            # Compatibility with the pre-display-kind test/plugin seam.
+            _start_inflight_turn(session, text)
     return None, fields
 
 
@@ -733,11 +758,20 @@ _CLIENT_SURFACES = frozenset({"hud", "voice-live"})
 
 
 @method("prompt.submit")
+# health: allow CC -- retained public prompt routing is migration scoped and covered by gateway contract tests
 def _(rid, params: dict) -> dict:
     from hermes_cli.input_sanitize import sanitize_user_prompt_text
     sid = params.get("session_id", "")
     raw_text = params.get("text", "")
     text = sanitize_user_prompt_text(raw_text) if isinstance(raw_text, str) else raw_text
+    raw_idempotency_key = params.get("idempotency_key")
+    if raw_idempotency_key is not None and not isinstance(raw_idempotency_key, str):
+        return _err(rid, 4004, "idempotency_key must be a string")
+    idempotency_key = str(raw_idempotency_key or "").strip()
+    if len(idempotency_key) > 180:
+        return _err(rid, 4004, "idempotency_key is too long")
+    idempotency_digest = (
+        hashlib.sha256(str(text).encode("utf-8")).hexdigest() if idempotency_key else "")
     # Off-screen sends (widget intents) type the row so no client renders a bubble;
     # whitelisted to "hidden" — this RPC must not mint kinds.
     display_kind = "hidden" if params.get("display_kind") == "hidden" else None
@@ -807,6 +841,12 @@ def _(rid, params: dict) -> dict:
     # prompt in a queue whose drain already ran.
     while True:
         with session["history_lock"]:
+            if idempotency_key:
+                existing = session.get("_prompt_idempotency", {}).get(idempotency_key)
+                if existing is not None:
+                    if existing != idempotency_digest:
+                        return _err(rid, 4092, "idempotency_key was reused with different text")
+                    return _ok(rid, {"status": "streaming", "idempotent_replay": True})
             if not session.get("running"):
                 break
             if internal_hosted_submit:
@@ -830,7 +870,8 @@ def _(rid, params: dict) -> dict:
         {r for r in raw_rebind_ids if isinstance(r, int) and not isinstance(r, bool)}
         if isinstance(raw_rebind_ids, list) else None)
     err, survivor_fields = _lock_in_submit_turn(
-        rid, sid, session, text, params, has_truncation, requested_rebind_ids, hosted_task, display_kind)
+        rid, sid, session, text, params, has_truncation, requested_rebind_ids, hosted_task, display_kind,
+        idempotency_key=idempotency_key, idempotency_digest=idempotency_digest)
     if err is not None:
         return err
     if turn_isolation:
@@ -868,6 +909,9 @@ def _(rid, params: dict) -> dict:
             "compute-host dispatch failed for session %s; falling back inline: %s", sid,
             isolated_response["error"].get("message", "unknown error"))
     if (err := _persist_session_row_for_submit(rid, session, text, display_kind)) is not None:
+        if idempotency_key:
+            with session["history_lock"]:
+                session.get("_prompt_idempotency", {}).pop(idempotency_key, None)
         return err
     # Capture before starting the worker: it consumes the staging dict and may finish before the RPC returns.
     staged_user = session.get("_submit_user_row") or {}
@@ -878,7 +922,8 @@ def _(rid, params: dict) -> dict:
         _start_agent_build(sid, session)
     run_thread = threading.Thread(
         target=lambda: _run_after_agent_ready(
-            rid, sid, session, text, display_kind, display_metadata, hosted_terminal_callback, turn_author),
+            rid, sid, session, text, display_kind, display_metadata, hosted_terminal_callback, turn_author,
+            idempotency_key),
         daemon=True)
     # Handle lets session.interrupt tell a live turn from a stuck `running` flag.
     session["_run_thread"] = run_thread

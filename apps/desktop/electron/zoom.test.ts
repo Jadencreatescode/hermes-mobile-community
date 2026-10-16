@@ -15,6 +15,7 @@ import {
   installZoomReassertOnNavigation,
   installZoomReassertOnWindowEvents,
   isDebouncedReassertEvent,
+  LEGACY_ZOOM_READ_SCRIPT,
   percentToZoomLevel,
   ZOOM_REASSERT_MAX_SETTLE_CHECKS,
   ZOOM_REASSERT_SETTLE_DELAY_MS,
@@ -29,6 +30,10 @@ test('storage key stays stable so persisted zoom survives upgrades', () => {
   assert.equal(ZOOM_STORAGE_KEY, 'hermes:desktop:zoomLevel')
 })
 
+test('legacy zoom read script is fixed code rather than constructed input', () => {
+  assert.match(LEGACY_ZOOM_READ_SCRIPT, /localStorage\.getItem\('hermes:desktop:zoomLevel'\)/)
+  assert.equal(LEGACY_ZOOM_READ_SCRIPT.includes('${'), false)
+})
 test('clampZoomLevel rejects garbage and enforces bounds', () => {
   assert.equal(clampZoomLevel(NaN), DEFAULT_ZOOM_LEVEL)
   assert.equal(clampZoomLevel(Infinity), DEFAULT_ZOOM_LEVEL)

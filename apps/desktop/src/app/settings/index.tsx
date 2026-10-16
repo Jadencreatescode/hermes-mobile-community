@@ -487,7 +487,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
   const searchPill = (
     <button
       className={cn(
-        'flex h-(--titlebar-control-height) items-center gap-1.5 rounded-full border border-(--ui-stroke-secondary) bg-(--ui-chat-surface-background) px-2.5 text-(--ui-text-tertiary) shadow-sm transition-all duration-200 ease-out hover:text-foreground motion-reduce:transition-none',
+        'flex h-(--titlebar-control-height) items-center gap-1.5 rounded-full border border-(--ui-stroke-secondary) bg-(--ui-chat-surface-background) px-2.5 text-(--ui-text-tertiary) shadow-sm transition-all duration-200 ease-out hover:text-foreground motion-reduce:transition-none max-sm:size-11 max-sm:justify-center max-sm:px-0',
         paletteOpen && 'pointer-events-none scale-110 opacity-0'
       )}
       data-glass-opaque=""
@@ -498,9 +498,13 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
       tabIndex={paletteOpen ? -1 : undefined}
       type="button"
     >
-      <Search className="size-3" />
-      <span className="text-xs">{t.settings.search.pill}</span>
-      {searchCombo && <KbdCombo combo={searchCombo} size="sm" variant="ghost" />}
+      <Search className="size-3 max-sm:size-4" />
+      <span className="text-xs max-sm:hidden">{t.settings.search.pill}</span>
+      {searchCombo && (
+        <span className="max-sm:hidden">
+          <KbdCombo combo={searchCombo} size="sm" variant="ghost" />
+        </span>
+      )}
     </button>
   )
 

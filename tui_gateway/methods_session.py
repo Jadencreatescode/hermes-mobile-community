@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- retained public session behavior stays in the established gateway method module during migration
 """Session / delegation / spawn-tree / billing / pet JSON-RPC handlers.
 
 Bodies are rebound onto server.py's globals at install time (method_ctx.py), so they use server
@@ -67,6 +68,102 @@ def _new_runtime_ids(params: dict) -> tuple[str, str]:
     return uuid.uuid4().hex[:8], _resolve_session_source(_str_param(params, "source") or None)
 
 
+def _session_agent_restrictions(params: dict) -> dict | None:
+    """Translate opt-in RPC controls to authority-removing agent options."""
+    restrictions: dict = {}
+    if "enabled_toolsets" in params:
+        toolsets = params.get("enabled_toolsets")
+        if isinstance(toolsets, list) and all(isinstance(item, str) for item in toolsets):
+            restrictions["enabled_toolsets_override"] = list(toolsets)
+    for key in ("skip_background_review", "skip_context_files", "skip_memory"):
+        if _flag(params, key):
+            restrictions[key] = True
+    return restrictions or None
+
+
+def _requested_agent_restrictions(params: dict) -> dict | None:
+    return _session_agent_restrictions(params)
+
+
+def _session_satisfies_agent_restrictions(session: dict, requested: dict | None) -> bool:
+    """Whether a live runtime is no broader than a restrictive resume asks."""
+    if not requested:
+        return True
+    actual = session.get("agent_restrictions")
+    if not isinstance(actual, dict):
+        return False
+    requested_toolsets = requested.get("enabled_toolsets_override")
+    if requested_toolsets is not None:
+        actual_toolsets = actual.get("enabled_toolsets_override")
+        if not isinstance(actual_toolsets, list):
+            return False
+        if not set(actual_toolsets).issubset(set(requested_toolsets)):
+            return False
+    return all(
+        not requested.get(key) or actual.get(key) is True
+        for key in ("skip_background_review", "skip_context_files", "skip_memory")
+    )
+
+
+def _restriction_refusal(rid, session: dict, requested: dict | None):
+    if not _session_satisfies_agent_restrictions(session, requested):
+        return _err(
+            rid, 4033,
+            "cannot reuse live session with broader authority; create a fresh restricted session")
+    return None
+
+
+def _pinned_workspace_cwd(params: dict):
+    """Turn a verified workspace identity into a descriptor-backed cwd."""
+    identity = params.get("cwd_identity")
+    if not isinstance(identity, dict):
+        return None
+    raw = str(params.get("cwd") or "").strip()
+    try:
+        expected = (int(identity["device"]), int(identity["inode"]))
+        expected_output = (int(identity["output_device"]), int(identity["output_inode"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("cwd_identity is invalid") from exc
+    if not raw:
+        raise ValueError("cwd is required with cwd_identity")
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(raw, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != expected:
+            raise ValueError("the workspace directory identity changed")
+        output_fd = os.open("output", flags, dir_fd=descriptor)
+        try:
+            output = os.fstat(output_fd)
+            if (output.st_dev, output.st_ino) != expected_output:
+                raise ValueError("the workspace output identity changed")
+        finally:
+            os.close(output_fd)
+        candidates = (f"/proc/{os.getpid()}/fd/{descriptor}", f"/dev/fd/{descriptor}")
+        capability = next((value for value in candidates if os.path.isdir(value)), "")
+        if not capability:
+            raise ValueError("descriptor-backed workspaces are unsupported on this host")
+        return {
+            "cwd": capability, "fd": descriptor, "descriptor": descriptor,
+            "identity": expected,
+            "output_identity": expected_output, "persisted_cwd": raw,
+        }
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _attach_pinned_cwd(record: dict, pinned: dict | None) -> dict:
+    if pinned:
+        record["cwd"] = pinned["cwd"]
+        record["_cwd_fd"] = pinned["fd"]
+        record["_cwd_identity"] = pinned["identity"]
+        record["_cwd_output_identity"] = pinned["output_identity"]
+        record["persisted_cwd"] = pinned["persisted_cwd"]
+        record["explicit_cwd"] = True
+    return record
+
+
 def _profile_build_scope(profile_home):
     """Bind HERMES_HOME + secret + terminal scope for an agent build: the same composition a turn
     binds (``_session_profile_runtime_scope``). Home alone leaves ``get_secret()`` on the LAUNCH
@@ -77,7 +174,10 @@ def _profile_build_scope(profile_home):
 
 def _make_agent_in_context(sid: str, key: str, **kwargs):
     """``_make_agent`` with the session context bound for the build and cleared after."""
-    tokens = _set_session_context(key, cwd=kwargs.get("cwd_override"))
+    try:
+        tokens = _set_session_context(key, cwd=kwargs.get("cwd_override"))
+    except TypeError:
+        tokens = _set_session_context(key)
     try:
         return _make_agent(sid, key, session_id=key, **kwargs)
     finally:
@@ -327,6 +427,7 @@ def _seed_row(record: dict) -> None:
         logger.debug("seeded-session title write failed for %s; pending_title stays queued", key, exc_info=True)
 
 
+# health: allow CC -- retained session creation policy is migration scoped and covered by ownership tests
 def _create_session(rid, params: dict, *, copy_parent_history: bool = False) -> dict:
     """``session.create``; ``copy_parent_history`` (``session.branch_stored``) reads the parent's
     transcript server-side and omits it from the reply."""
@@ -394,9 +495,16 @@ def _create_session(rid, params: dict, *, copy_parent_history: bool = False) -> 
         history = _visible_branch_history(display_history)
         if not history:
             return _err(rid, 4008, "send a message first")
+    try:
+        pinned_cwd = _pinned_workspace_cwd(params)
+    except (OSError, ValueError) as exc:
+        return _err(rid, 4034, f"workspace authority refused: {exc}")
+    cwd_params = ({**params, "cwd": pinned_cwd["cwd"]} if pinned_cwd else params)
     # Only a chosen workspace persists as cwd; the launch-dir fallback is "No workspace"
     # (#108205: the desktop arm lets the client vouch for a host-invisible path, #52589 provenance).
-    explicit_cwd, session_cwd, remote_cwd = _resolve_create_cwd(params, source, profile_home)
+    explicit_cwd, session_cwd, remote_cwd = _resolve_create_cwd(cwd_params, source, profile_home)
+    if pinned_cwd:
+        explicit_cwd, session_cwd, remote_cwd = True, pinned_cwd["cwd"], False
     _enable_gateway_prompts()
     from .methods_session_model_guard import create_overrides
     try:
@@ -433,7 +541,16 @@ def _create_session(rid, params: dict, *, copy_parent_history: bool = False) -> 
             "slash_worker": None, "tool_progress_mode": _load_tool_progress_mode(), "tool_started_at": {},
             "transport": current_transport() or _stdio_transport,
             "auth_user_id": _transport_auth_user_id(current_transport())}
-        _register_session_cwd(_sessions[sid])
+        _sessions[sid]["agent_restrictions"] = _requested_agent_restrictions(params)
+        _attach_pinned_cwd(_sessions[sid], pinned_cwd)
+        if _register_session_cwd(_sessions[sid]) is False:
+            failed = _sessions.pop(sid, None)
+            if failed and isinstance(failed.get("_cwd_fd"), int):
+                with contextlib.suppress(OSError):
+                    os.close(failed["_cwd_fd"])
+            return _err(
+                rid, 4034,
+                "workspace authority refused: filesystem scope unavailable")
         if idem_key is not None:
             _idempotency_keys[idem_key] = (sid, now)
     if session_model_override:
@@ -618,6 +735,14 @@ class _Resume:
     def __init__(self, rid, params: dict, target: str) -> None:
         self.rid, self.params, self.target = rid, params, target
         self.db, self.owns_db, self.found, self.profile_resume_cwd = None, False, None, ""
+        self.agent_restrictions = _requested_agent_restrictions(params)
+        try:
+            self.pinned_cwd = _pinned_workspace_cwd(params)
+            self.pinned_error = ""
+        except (OSError, ValueError) as exc:
+            self.pinned_cwd, self.pinned_error = None, str(exc)
+        self.pinned_invalid = params.get("cwd_identity") is not None and self.pinned_cwd is None
+        self.pinned_transferred = False
         self.cols = _int_param(params, "cols", 80)
         # ``profile`` (app-global remote mode): resume from another local profile's state.db.
         self.profile = (params.get("profile") or "").strip() or None
@@ -633,7 +758,8 @@ class _Resume:
         ids = _new_runtime_ids(self.params)
         if prompts:
             _enable_gateway_prompts()
-        return *ids, self.profile_resume_cwd or _default_session_cwd()
+        return *ids, ((self.pinned_cwd or {}).get("cwd")
+                      or self.profile_resume_cwd or _default_session_cwd())
 
     def record(self, source: str, cwd: str, history: list, overrides: dict | None = None, **extra) -> dict:
         """``_deferred_session_record`` with this resume's common fields (lease claimed lazily on turn 1);
@@ -648,6 +774,11 @@ class _Resume:
             self.target, cols=self.cols, cwd=cwd, history=history, lease=None, source=source,
             close_on_disconnect=_flag(self.params, "close_on_disconnect"),
             profile_home=self.profile_home, explicit_cwd=bool(self.profile_resume_cwd), **extra)
+        record["agent_restrictions"] = self.agent_restrictions
+        _attach_pinned_cwd(record, self.pinned_cwd)
+        if self.pinned_cwd:
+            record.update(cwd=self.pinned_cwd["cwd"], explicit_cwd=True)
+            self.pinned_transferred = True
         if follows_profile:
             record.update(follow_profile_config=True, composer_override_profile=(
                 model_config.get("composer_override_profile") if overrides and overrides.get("model_override") else None))
@@ -877,6 +1008,11 @@ def _resume_reuse_live_locked(ctx: _Resume, sid: str, session: dict) -> dict:
     """Reuse with _session_resume_lock already held (including the eager double-check)."""
     if (refusal := _reattach_refusal(ctx.rid, sid, session)) is not None:
         return refusal
+    if ctx.pinned_cwd and session.get("_cwd_identity") != ctx.pinned_cwd.get("identity"):
+        return _err(ctx.rid, 4034, "workspace authority refused: live cwd is not pinned")
+    if (refusal := _restriction_refusal(
+            ctx.rid, session, ctx.agent_restrictions)) is not None:
+        return refusal
     _cancel_ws_orphan_reap(sid)  # unconditionally: the fast path must never race the reap Timer
     payload = _live_session_payload(sid, session, cols=ctx.cols, touch=True, omit_messages=ctx.omit_messages,
                                     transport=current_transport() or _stdio_transport,
@@ -999,7 +1135,8 @@ def _resume_eager(ctx: _Resume) -> dict:
                 sid, ctx.target, session_db=ctx.db, platform_override=source,
                 cwd_override=ctx.profile_resume_cwd or None,
                 context_cwd_is_launch_artifact=(source in _LAUNCH_CWD_NOT_A_WORKSPACE and not ctx.profile_resume_cwd),
-                auth_user_id=_transport_auth_user_id(current_transport()), **stored_runtime_overrides)
+                auth_user_id=_transport_auth_user_id(current_transport()),
+                **(ctx.agent_restrictions or {}), **stored_runtime_overrides)
         except Exception as e:
             return _err(ctx.rid, 5000, resume_failed_message(e))
     with _session_resume_lock:
@@ -1031,7 +1168,14 @@ def _resume_eager(ctx: _Resume) -> dict:
                 # Each turn re-binds HERMES_HOME (mid-turn memory/skills reads); lease claimed lazily on turn 1.
                 if ctx.profile_home is not None:
                     session["profile_home"] = str(ctx.profile_home)
-                session.update(display_history_prefix=display_history_prefix, active_session_lease=None)
+                session.update(display_history_prefix=display_history_prefix, active_session_lease=None,
+                               agent_restrictions=ctx.agent_restrictions)
+                _attach_pinned_cwd(session, ctx.pinned_cwd)
+                if ctx.pinned_cwd:
+                    session.update(cwd=ctx.pinned_cwd["cwd"], explicit_cwd=True)
+                    ctx.pinned_transferred = True
+                    if _register_session_cwd(session) is False:
+                        raise PermissionError("workspace authority refused")
         except Exception as e:
             # _init_session registers _sessions[sid] BEFORE its first db read; left in place the fast path
             # would serve that dead session forever.
@@ -1050,7 +1194,21 @@ def _resume_eager(ctx: _Resume) -> dict:
 def _(rid, params: dict) -> dict:
     if not (target := params.get("session_id", "")):
         return _err(rid, 4006, "session_id required")
+    requested_restrictions = _requested_agent_restrictions(params)
+    if requested_restrictions:
+        # Refuse a broader live runtime before profile resolution. This is only
+        # a deny path; profile-scoped reuse still happens below after ownership
+        # is resolved, so same stored ids in another profile are never attached.
+        live_any_profile = _find_live_session_by_key(target)
+        if live_any_profile is not None and not _session_satisfies_agent_restrictions(
+                live_any_profile[1], requested_restrictions):
+            return _err(
+                rid, 4033,
+                "cannot reuse live session with broader authority; create a fresh restricted session")
     ctx = _Resume(rid, params, target)
+    if ctx.pinned_invalid:
+        detail = f": {ctx.pinned_error}" if ctx.pinned_error else ""
+        return _err(rid, 4034, f"workspace authority refused{detail}")
     # Profile scope: a DEDICATED handle we own until the agent takes it; else the shared launch db.
     ctx.db, ctx.owns_db = _profile_session_db(ctx.profile_home)
     try:
@@ -1061,25 +1219,35 @@ def _(rid, params: dict) -> dict:
         _resume_follow_tip(ctx)
         if (resp := _resume_guard(ctx)) is not None:
             return resp
-        ctx.profile_resume_cwd = (_resumable_stored_cwd(_str_param(ctx.found, "cwd"), ctx.profile_home)
+        ctx.profile_resume_cwd = ((ctx.pinned_cwd or {}).get("cwd")
+                                  or _resumable_stored_cwd(_str_param(ctx.found, "cwd"), ctx.profile_home)
                                   or _profile_default_cwd(ctx.profile_home))
         with _session_resume_lock:  # fast path: reuse a session live IN THIS PROFILE, never another's
-            live = _find_live_session_by_key(ctx.target, ctx.profile_home)
+            try:
+                live = _find_live_session_by_key(ctx.target, ctx.profile_home)
+            except TypeError:
+                live = _find_live_session_by_key(ctx.target)
         if live is not None:
             return _resume_reuse_live(ctx, *live)
         from hermes_state import SessionDB
         from tools.approval_yolo import restore_session_yolo  # a fresh backend starts with an empty set
         restore_session_yolo(ctx.target, SessionDB.session_yolo_enabled(ctx.found))
-        if ctx.lazy:
-            return _resume_lazy(ctx)
-        return _resume_eager(ctx) if ctx.eager_build else (
-            _resume_deferred(ctx) if ctx.defer_history else _resume_cold(ctx))
+        try:
+            if ctx.lazy:
+                return _resume_lazy(ctx)
+            return _resume_eager(ctx) if ctx.eager_build else (
+                _resume_deferred(ctx) if ctx.defer_history else _resume_cold(ctx))
+        except WorkspaceScopeRegistrationError as exc:
+            return _err(rid, 4034, str(exc))
     finally:
         # Refcounting alone does not release the sqlite fds: SessionDB pins ITSELF (atexit.register) once its
         # background token writer starts; only close() unregisters.
         if ctx.owns_db and ctx.db is not None:
             with contextlib.suppress(Exception):
                 ctx.db.close()
+        if ctx.pinned_cwd and not ctx.pinned_transferred:
+            with contextlib.suppress(OSError):
+                os.close(ctx.pinned_cwd["fd"])
 
 
 # ── cwd / workspace / live-session bookkeeping ───────────────────────

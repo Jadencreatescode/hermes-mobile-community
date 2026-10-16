@@ -15,7 +15,7 @@ import {
   COMPOSER_FOLD_VOICE_PX,
   COMPOSER_MINIMAL_PX,
   COMPOSER_SINGLE_LINE_MAX_PX,
-  COMPOSER_STACK_BREAKPOINT_PX
+  composerStacksAtWidth
 } from '../composer-utils'
 
 interface UseComposerMetricsArgs {
@@ -40,7 +40,7 @@ const fitForWidth = (width: number): ComposerFit => ({
   compactPill: width < COMPOSER_COMPACT_PILL_PX,
   foldVoice: width < COMPOSER_FOLD_VOICE_PX,
   minimal: width < COMPOSER_MINIMAL_PX,
-  tight: width < COMPOSER_STACK_BREAKPOINT_PX
+  tight: composerStacksAtWidth(width)
 })
 
 const sameFit = (a: ComposerFit, b: ComposerFit) =>

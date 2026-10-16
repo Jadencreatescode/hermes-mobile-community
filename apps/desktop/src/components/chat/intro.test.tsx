@@ -1,4 +1,4 @@
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { I18nProvider, useI18n } from '@/i18n'
@@ -88,4 +88,11 @@ it('localizes the custom-personality fallback without translating its user-suppl
     expect(body).not.toBe(english)
     expect(body).toContain('My Custom Voice')
   }
+})
+
+it('uses a phone-safe wordmark floor without exceeding the desktop size', () => {
+  render(<Fixture personality="default" seed={0} />)
+
+  const wordmark = screen.getByLabelText('HERMES AGENT')
+  expect(wordmark.style.getPropertyValue('--fit-min')).toBe('clamp(1.75rem, 8vw, 2.75rem)')
 })

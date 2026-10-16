@@ -20,7 +20,8 @@ def _stdout_queue(proc: subprocess.Popen) -> queue.Queue[dict]:
     return out
 
 
-def _read_json_line(out: queue.Queue[dict], timeout: float = 2.0) -> dict:
+# Cold managed-tool discovery can take several seconds before the child emits its hello.
+def _read_json_line(out: queue.Queue[dict], timeout: float = 10.0) -> dict:
     try:
         return out.get(timeout=timeout)
     except queue.Empty as exc:

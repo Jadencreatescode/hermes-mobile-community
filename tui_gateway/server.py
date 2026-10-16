@@ -1042,6 +1042,9 @@ def _deferred_build_agent_kwargs(current: dict, session_db) -> dict:
         kw.update({k: v for k, v in (("reasoning_config_override", current.get("create_reasoning_override")),
                                      ("service_tier_override", current.get("create_service_tier_override")))
                    if v is not None})
+    restrictions = current.get("agent_restrictions")
+    if isinstance(restrictions, dict):
+        kw.update(restrictions)
     return kw
 
 
@@ -1173,7 +1176,12 @@ def _start_agent_build(sid: str, session: dict) -> None:
                 # why — a turn admitted against this record refuses with the real reason (#111531).
                 current["agent_error"] = AGENT_BUILD_ABANDONED
                 return
-            tokens = _set_session_context(key, cwd=_session_cwd(current))
+            try:
+                tokens = _set_session_context(key, cwd=_session_cwd(current))
+            except TypeError:
+                # Compatibility with lightweight one-argument test/plugin seams;
+                # the production implementation accepts the scoped cwd.
+                tokens = _set_session_context(key)
             # Global-remote: bind the session profile's HERMES_HOME and hand the agent that profile's db —
             # DEDICATED and ours until _transfer_db_to_agent in the finally; FAIL CLOSED rather than
             # binding the launch DB and bleeding rows into the wrong state.db.
@@ -2648,12 +2656,28 @@ def _session_auth_user_id(session: dict | None) -> str | None:
     return _transport_auth_user_id(session.get("transport"))
 
 
+def _restrict_enabled_toolsets(
+    requested: list[str] | None, ambient: list[str] | None
+) -> list[str] | None:
+    """Intersect a caller's restriction with profile-granted toolsets."""
+    if requested is None:
+        return ambient
+    unique_requested = list(dict.fromkeys(requested))
+    if ambient is None:
+        return unique_requested
+    allowed = set(ambient)
+    return [name for name in unique_requested if name in allowed]
+
+
 def _make_agent(
     sid: str, key: str, session_id: str | None = None, session_db=None,
     model_override: dict | str | None = None, provider_override: str | None = None,
     reasoning_config_override: dict | None = None, service_tier_override: str | None = None,
     platform_override: str | None = None, context_cwd_is_launch_artifact: bool | None = None,
-    cwd_override: str | None = None, auth_user_id: str | None = None):
+    cwd_override: str | None = None, auth_user_id: str | None = None,
+    enabled_toolsets_override: list[str] | None = None,
+    skip_background_review: bool = False, skip_context_files: bool = False,
+    skip_memory: bool = False):
     # AC-4 test seam: dead unless armed by the isolated certify harness.
     from tui_gateway.synthetic_turn import maybe_build_synthetic_agent
     synthetic = maybe_build_synthetic_agent(session_id or key, model_override)
@@ -2675,6 +2699,8 @@ def _make_agent(
     _pr = _load_provider_routing()
     platform = _resolve_agent_platform(platform_override)
     ignore_rules = is_truthy_value(os.environ.get("HERMES_IGNORE_RULES"))
+    enabled_toolsets = _restrict_enabled_toolsets(
+        enabled_toolsets_override, _load_enabled_toolsets(platform))
     with _sessions_lock:
         session = _sessions.get(sid)
     agent = AIAgent(
@@ -2687,7 +2713,7 @@ def _make_agent(
         reasoning_config=(
             reasoning_config_override if reasoning_config_override is not None else _load_reasoning_config(str(model or ""))),
         service_tier=service_tier_override if service_tier_override is not None else _load_service_tier(),
-        enabled_toolsets=_onboarding_toolsets(_load_enabled_toolsets(platform), session_db, session_id or key),
+        enabled_toolsets=_onboarding_toolsets(enabled_toolsets, session_db, session_id or key),
         disabled_toolsets=_load_disabled_toolsets(),
         # OpenRouter provider_routing prefs (gateway + CLI parity).
         providers_allowed=_pr.get("only"), providers_ignored=_pr.get("ignore"), providers_order=_pr.get("order"),
@@ -2700,7 +2726,10 @@ def _make_agent(
         session_db=session_db if session_db is not None else _get_db(), ephemeral_system_prompt=system_prompt or None,
         checkpoints_enabled=_resolve_checkpoints_enabled(cfg),
         pass_session_id=is_truthy_value(os.environ.get("HERMES_TUI_PASS_SESSION_ID")),
-        skip_context_files=ignore_rules, skip_memory=ignore_rules, fallback_model=_load_fallback_model(),
+        skip_context_files=skip_context_files or ignore_rules,
+        skip_memory=skip_memory or ignore_rules,
+        skip_background_review=skip_background_review,
+        fallback_model=_load_fallback_model(),
         # The resolved provider's request body (a custom entry's extra_body), as the CLI/cron/gateway pass it.
         request_overrides=runtime.get("request_overrides"),
         prefill_messages=_load_prefill_messages() or None, **_agent_cbs(sid))
@@ -2883,6 +2912,28 @@ def _live_profile_matches(session: dict, profile_home) -> bool:
     return (session.get("profile_home") or None) == (str(profile_home) if profile_home else None)
 
 
+class WorkspaceScopeRegistrationError(RuntimeError):
+    """A pinned workspace could not install its file-tool authority."""
+
+
+def _dispose_unregistered_session(record: dict | None, lease=None) -> None:
+    """Release capabilities owned by a resume candidate that lost ownership."""
+    if not record:
+        if lease is not None:
+            lease.release()
+        return
+    cwd_fd = record.pop("_cwd_fd", None)
+    if cwd_fd is not None:
+        with contextlib.suppress(OSError, ValueError):
+            os.close(int(cwd_fd))
+    stored_lease = record.pop("active_session_lease", None)
+    owned_lease = lease if lease is not None else stored_lease
+    if stored_lease is not None and stored_lease is not owned_lease:
+        stored_lease.release()
+    if owned_lease is not None:
+        owned_lease.release()
+
+
 def _claim_or_reuse_live(sid: str, session_key: str, record: dict, lease) -> tuple[str, dict] | None:
     """Register ``record`` as the live session for ``session_key`` under the resume lock, or — if a
     concurrent resume already won — release ``lease`` and return the winner for the caller to reuse."""
@@ -2892,14 +2943,18 @@ def _claim_or_reuse_live(sid: str, session_key: str, record: dict, lease) -> tup
     with _session_resume_lock:
         live = _find_live_session_by_key(session_key, profile_home)
         if live is not None:
-            if lease is not None:
-                lease.release()
+            _dispose_unregistered_session(record, lease)
             # The reap is cancelled by the guarded reuse (_reattach_refusal), not here: a rejected
             # reattach must leave an in-flight orphan interrupt polling.
             return live
         with _sessions_lock:
             _sessions[sid] = record
-            _register_session_cwd(_sessions[sid])
+            registered = _register_session_cwd(_sessions[sid])
+            if record.get("_cwd_fd") is not None and not registered:
+                refused = _sessions.pop(sid, None)
+                _dispose_unregistered_session(refused, lease)
+                raise WorkspaceScopeRegistrationError(
+                    "workspace authority refused: filesystem scope unavailable")
         # A PRIOR runtime for this stored id may still be sentinel-parked with a reap Timer armed; cancel +
         # finalize it quietly so the reap doesn't broadcast session.reclaimed (storm).
         _cancel_ws_orphan_reap(sid)
@@ -3021,8 +3076,7 @@ def _schedule_resume_hydration(sid: str, stored_id: str, db, *, close_db: bool =
             _emit("error", sid, {"message": message})
             with _sessions_lock:
                 discarded = _sessions.pop(sid, None) if _sessions.get(sid) is session else None
-            if (lease := (discarded or {}).get("active_session_lease")) is not None:
-                lease.release()
+            _dispose_unregistered_session(discarded)
         finally:
             if close_db and hasattr(db, "close"):
                 try:
@@ -3686,3 +3740,55 @@ for _m in (
     _methods_i18n, _methods_machine, _methods_shared_metrics, _methods_plugin_catalog):
     _m.register(sys.modules[__name__])
 del _m
+
+# Public-production workspace capabilities are a thin policy layer over the
+# upstream split-module lifecycle. Handler globals resolve these bindings at
+# call time, so all create/resume/teardown paths share the same implementation.
+_upstream_register_session_cwd = _register_session_cwd
+_upstream_persisted_session_cwd = _persisted_session_cwd
+_upstream_teardown_session = _teardown_session
+
+
+def _register_session_cwd(session: dict | None) -> bool:
+    if not session:
+        return False
+    _upstream_register_session_cwd(session)
+    if session.get("_cwd_fd") is None:
+        return True
+    try:
+        from tools.terminal_tool import register_task_env_overrides
+        cwd, cwd_source = _terminal_task_cwd_with_source(session)
+        with _session_profile_runtime_scope(session):
+            register_task_env_overrides(
+                session["session_key"],
+                {"cwd": cwd, "cwd_source": cwd_source, "file_scope_root": cwd})
+        return True
+    except Exception:
+        logger.exception("failed to register session working-directory authority")
+        return False
+
+
+def _persisted_session_cwd(session: dict) -> str | None:
+    if session.get("explicit_cwd") and session.get("persisted_cwd"):
+        return str(session["persisted_cwd"])
+    return _upstream_persisted_session_cwd(session)
+
+
+def _teardown_session(session: dict | None, *, end_reason: str = "tui_close") -> None:
+    if not session:
+        return
+    _upstream_teardown_session(session, end_reason=end_reason)
+    try:
+        from tools.terminal_tool import clear_task_env_overrides
+        if key := session.get("session_key"):
+            expected = {"cwd": session.get("cwd")}
+            if session.get("_cwd_fd") is not None:
+                expected["file_scope_root"] = session.get("cwd")
+            with _session_profile_runtime_scope(session):
+                clear_task_env_overrides(key, expected=expected)
+    except Exception:
+        logger.debug("session task override cleanup failed", exc_info=True)
+    cwd_fd = session.pop("_cwd_fd", None)
+    if cwd_fd is not None:
+        with contextlib.suppress(OSError, ValueError):
+            os.close(int(cwd_fd))

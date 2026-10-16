@@ -1,0 +1,8 @@
+{
+  "name": "operations",
+  "label": "Operations",
+  "description": "Durable public coordination for Hermes Bots",
+  "icon": "ServerCog",
+  "version": "1.0.0",
+  "api": "plugin_api.py"
+}
