@@ -199,7 +199,6 @@ def test_normalize_strips_credentials_and_warns():
     assert any("Stripped credential keys" in w for w in preview.warnings)
     assert preview.secret_redactions >= 1
     # The manifest must not carry raw secrets
-    from dataclasses import asdict
     manifest_text = json.dumps(asdict(preview.manifest), default=str)
     assert "sk-live" not in manifest_text
     assert "abc123.xyz" not in manifest_text

@@ -56,7 +56,6 @@ concurrency:
 
 jobs:
   generate-patch:
-    if: github.repository == 'NousResearch/hermes-agent'
     name: Generate eslint --fix patch
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -64,16 +63,13 @@ jobs:
       has-fixes: ${{ steps.produce-patch.outputs.has-fixes }}
     # No permissions override → inherits workflow-level contents: read.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - name: Set up locked Node and npm
+        id: node
+        uses: ./.github/actions/setup-pm
         with:
-          node-version: 26
-          cache: npm
-
-      - name: grab npm 12
-        run: |
-          npm i -g npm@12
+          toolchain: node
 
       # --ignore-scripts: eslint only needs TS sources + eslint packages.
       - uses: ./.github/actions/retry
@@ -125,7 +121,7 @@ jobs:
           fi
 
       - name: Upload patch artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: js-fix-patch
           path: js-fix.patch
@@ -145,7 +141,7 @@ jobs:
       contents: write # needed to push to bot/js-autofix
       pull-requests: write # needed for PR creation + auto-merge
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - name: Get GitHub App token
         id: app-token
@@ -155,7 +151,7 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Download patch
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: js-fix-patch
           # ${{ runner.temp }} expands in with: params (shell-style $VAR does not).

@@ -151,7 +151,7 @@ class TestRenameEndpoint:
 
         asyncio.run(request_json(app, "PATCH", "/agents/a2a/a2a:one", {"name": "Darrell"}))
         db = HarnessRegistry(registry_rows)
-        with db._connection:  # noqa: SLF001 - read only assertion on the audit table
+        with db._connection:
             rows = db._connection.execute(
                 "SELECT event_type, outcome FROM agent_events WHERE agent_id = ?",
                 ("a2a:one",),

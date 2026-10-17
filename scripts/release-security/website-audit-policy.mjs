@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 // npm's metavulnerability presentation is intentionally not pinned. The only
 // exception is the unpatched braces leaf advisory; its complete transitive
 // closure and concrete vulnerable nodes are derived from this reviewed lock.
-const REVIEWED_LOCK_SHA256 = 'b136067831a38784daeb35a923553b4ff2877b39737a6ddceea0487cd1ea9883'
+const REVIEWED_LOCK_SHA256 = '588202f2e797af76557f36702631b322ff38b35db4e214a21608157aede26f18'
 const FINDING_KEYS = ['effects', 'fixAvailable', 'isDirect', 'name', 'nodes', 'range', 'severity', 'via']
 const COUNT_KEYS = ['critical', 'high', 'info', 'low', 'moderate', 'total']
 const PRODUCTION_SECTIONS = ['dependencies', 'optionalDependencies']

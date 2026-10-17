@@ -99,6 +99,24 @@ describe('TrustedBridgeOnboarding', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
+  it('cancels its delayed reset when the dialog unmounts', () => {
+    vi.useFakeTimers()
+    const clearTimeout = vi.spyOn(window, 'clearTimeout')
+
+    try {
+      const view = render(<TrustedBridgeOnboarding onOpenChange={vi.fn()} open />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      const clearsBeforeUnmount = clearTimeout.mock.calls.length
+      view.unmount()
+
+      expect(clearTimeout.mock.calls.length).toBeGreaterThan(clearsBeforeUnmount)
+      vi.runAllTimers()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('disables confirm when no agent has been reviewed', async () => {
     render(<TrustedBridgeOnboarding onOpenChange={vi.fn()} open />)
 

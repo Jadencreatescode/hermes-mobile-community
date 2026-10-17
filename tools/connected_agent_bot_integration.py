@@ -189,7 +189,7 @@ class HarnessAgentRosterProvider:
                 try:
                     endpoint_domain = urlparse(connector_url).hostname or ""
                 except Exception:
-                    pass
+                    logger.debug("Connected-agent endpoint domain parsing failed", exc_info=True)
 
                 avatar_url = ""
                 if connector_url:
@@ -199,7 +199,7 @@ class HarnessAgentRosterProvider:
                         card = catalog.get(connector_url, allowlist=None)
                         avatar_url = str(card.get("avatarUrl") or card.get("imageUrl") or "")[:2048]
                     except Exception:
-                        pass
+                        logger.debug("Connected-agent card lookup failed", exc_info=True)
 
                 entries.append(
                     RosterEntry(
@@ -280,7 +280,7 @@ class ConnectedAgentChatStore:
         if not self._path.is_file():
             return {"events": {}, "by_agent": {}}
         try:
-            with open(self._path, "r", encoding="utf-8") as f:
+            with open(self._path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 return data
@@ -424,7 +424,7 @@ class BackendAuth:
         self._secret = secret.encode("utf-8") if isinstance(secret, str) else secret
 
     def generate_token(self, agent_id: str, operation: str) -> str:
-        payload = f"{agent_id}:{operation}".encode("utf-8")
+        payload = f"{agent_id}:{operation}".encode()
         mac = hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
         return f"{agent_id}:{operation}:{mac}"
 
@@ -525,7 +525,7 @@ def _get_hermes_home() -> str:
 def _compute_event_id(agent_id: str, sender: str, content: str, timestamp: float) -> str:
     # Microsecond precision for stability within the same call
     ts = f"{timestamp:.6f}"
-    payload = f"{agent_id}:{sender}:{content}:{ts}".encode("utf-8")
+    payload = f"{agent_id}:{sender}:{content}:{ts}".encode()
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -567,10 +567,11 @@ def _read_stale_state(home: Path, agent_id: str) -> bool:
     if not path.is_file():
         return False
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         return bool(data.get("stale", {}).get(agent_id, False))
     except Exception:
+        logger.debug("Connected-agent stale state could not be read", exc_info=True)
         return False
 
 
@@ -579,10 +580,10 @@ def _write_stale_state(home: Path, agent_id: str, stale: bool) -> None:
     data: dict[str, Any] = {}
     if path.is_file():
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
         except Exception:
-            pass
+            logger.debug("Connected-agent stale state was invalid; rebuilding it", exc_info=True)
     data.setdefault("stale", {})[agent_id] = stale
     tmp = path.with_suffix(".json.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -595,10 +596,10 @@ def _update_last_success(home: Path, agent_id: str) -> None:
     data: dict[str, Any] = {}
     if path.is_file():
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
         except Exception:
-            pass
+            logger.debug("Connected-agent success state was invalid; rebuilding it", exc_info=True)
     data.setdefault("last_success", {})[agent_id] = time.time()
     # If we just succeeded, clear stale flag
     data.setdefault("stale", {})[agent_id] = False
@@ -620,7 +621,7 @@ def _local_profiles(root: Path) -> list[tuple[str, Path]]:
                 if child.is_dir():
                     entries.append((child.name, child))
     except Exception:
-        pass
+        logger.debug("Local profile roster scan failed", exc_info=True)
     return entries
 
 
@@ -629,15 +630,16 @@ def _is_bot_managed(profile_dir: Path) -> bool:
     try:
         if not meta.is_file():
             return False
-        raw = meta.read_text(encoding="utf-8", errors="replace")
+        raw = meta.read_text(encoding="utf-8-sig", errors="replace")
         if "hermes-bots" not in raw:
             return False
-        import yaml
+        import hermes_yaml as yaml
 
         data = yaml.safe_load(raw)
         ui_meta = data.get("ui_meta") if isinstance(data, dict) else None
         return isinstance(ui_meta, dict) and isinstance(ui_meta.get("hermes-bots"), dict)
     except Exception:
+        logger.debug("Bot-managed profile metadata could not be read", exc_info=True)
         return False
 
 
@@ -646,8 +648,8 @@ def _profile_role(profile_dir: Path) -> str:
     try:
         if not meta.is_file():
             return ""
-        raw = meta.read_text(encoding="utf-8", errors="replace")
-        import yaml
+        raw = meta.read_text(encoding="utf-8-sig", errors="replace")
+        import hermes_yaml as yaml
 
         data = yaml.safe_load(raw)
         if not isinstance(data, dict):
@@ -664,4 +666,5 @@ def _profile_role(profile_dir: Path) -> str:
         line = " — ".join(parts)
         return " ".join(line.split())[:160]
     except Exception:
+        logger.debug("Bot profile role metadata could not be read", exc_info=True)
         return ""

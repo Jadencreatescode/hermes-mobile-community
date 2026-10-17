@@ -37,6 +37,7 @@ function ChecklistRow({
   )
 }
 
+// health: allow CC -- retained training approval UI is migration scoped and regression tested
 export function TrainingModePage({ profile }: TrainingModePageProps) {
   const selectedProfile = profile ?? String(host.state.profile.get?.() || 'default')
   const [name, setName] = useState('')

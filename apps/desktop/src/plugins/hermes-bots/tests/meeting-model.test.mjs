@@ -18,17 +18,17 @@ import {
   waitMeeting
 } from '../meeting-model.mjs'
 
-const vpsResearch = Object.freeze({ connectionId: 'vps', profile: 'research' })
-const bridgeOps = Object.freeze({ connectionId: 'bridge', profile: 'ops' })
+const gatewayAResearch = Object.freeze({ connectionId: 'gateway-a', profile: 'research' })
+const gatewayBOps = Object.freeze({ connectionId: 'gateway-b', profile: 'ops' })
 
 function draft(overrides = {}) {
   return createMeeting({
     id: 'meeting-release-1',
-    source: { connectionId: 'vps', profile: 'default' },
+    source: { connectionId: 'gateway-a', profile: 'default' },
     title: 'Release readiness',
     agenda: 'Review evidence and decide whether to release.',
-    chair: vpsResearch,
-    participants: [vpsResearch, bridgeOps],
+    chair: gatewayAResearch,
+    participants: [gatewayAResearch, gatewayBOps],
     maxRounds: 3,
     ...overrides
   })
@@ -38,11 +38,11 @@ test('createMeeting returns a stable source-qualified draft record', () => {
   const meeting = draft()
 
   assert.equal(meeting.id, 'meeting-release-1')
-  assert.deepEqual(meeting.source, { connectionId: 'vps', profile: 'default' })
+  assert.deepEqual(meeting.source, { connectionId: 'gateway-a', profile: 'default' })
   assert.equal(meeting.state, 'draft')
   assert.equal(meeting.currentRound, 0)
   assert.equal(meeting.maxRounds, 3)
-  assert.deepEqual(meeting.participants, [vpsResearch, bridgeOps])
+  assert.deepEqual(meeting.participants, [gatewayAResearch, gatewayBOps])
   assert.deepEqual(meeting.contributions, [])
   assert.deepEqual(meeting.evidenceRefs, [])
   assert.deepEqual(meeting.decisions, [])
@@ -52,10 +52,10 @@ test('createMeeting returns a stable source-qualified draft record', () => {
 
 test('duplicate participants collapse by connection and profile in first-seen order', () => {
   const meeting = draft({
-    participants: [vpsResearch, { ...vpsResearch }, bridgeOps, { ...bridgeOps }]
+    participants: [gatewayAResearch, { ...gatewayAResearch }, gatewayBOps, { ...gatewayBOps }]
   })
 
-  assert.deepEqual(meeting.participants, [vpsResearch, bridgeOps])
+  assert.deepEqual(meeting.participants, [gatewayAResearch, gatewayBOps])
 })
 
 test('malformed, ambiguous, and out-of-bounds meeting identities fail closed', () => {
@@ -63,10 +63,10 @@ test('malformed, ambiguous, and out-of-bounds meeting identities fail closed', (
     { id: '' },
     { source: { profile: 'default' } },
     { chair: { profile: 'research' } },
-    { participants: [vpsResearch, { profile: 'ops' }] },
-    { participants: [vpsResearch, { ...vpsResearch }] },
-    { chair: { connectionId: 'helm', profile: 'chair' } },
-    { participants: Array.from({ length: MEETING_LIMITS.maxParticipants + 1 }, (_, index) => ({ connectionId: 'vps', profile: `p${index}` })) },
+    { participants: [gatewayAResearch, { profile: 'ops' }] },
+    { participants: [gatewayAResearch, { ...gatewayAResearch }] },
+    { chair: { connectionId: 'gateway-c', profile: 'chair' } },
+    { participants: Array.from({ length: MEETING_LIMITS.maxParticipants + 1 }, (_, index) => ({ connectionId: 'gateway-a', profile: `p${index}` })) },
     { maxRounds: MEETING_LIMITS.maxRounds + 1 },
     { agenda: 'x'.repeat(MEETING_LIMITS.maxAgendaLength + 1) }
   ]
@@ -89,7 +89,7 @@ test('startMeeting transitions an unchanged draft into round one running', () =>
 
 test('submitContribution appends an immutable source-qualified speaking turn', () => {
   const submission = {
-    participant: { ...vpsResearch },
+    participant: { ...gatewayAResearch },
     kind: 'speak',
     text: 'The release checks are green.',
     evidenceRefs: ['run:desktop-tests']
@@ -100,9 +100,9 @@ test('submitContribution appends an immutable source-qualified speaking turn', (
   assert.equal(started.contributions.length, 0)
   assert.equal(updated.contributions.length, 1)
   assert.deepEqual(updated.contributions[0], {
-    id: 'meeting-release-1:r1:vps:research',
+    id: 'meeting-release-1:r1:gateway-a:research',
     round: 1,
-    participant: vpsResearch,
+    participant: gatewayAResearch,
     kind: 'speak',
     text: 'The release checks are green.',
     evidenceRefs: ['run:desktop-tests']
@@ -121,17 +121,17 @@ test('submitContribution appends an immutable source-qualified speaking turn', (
 
 test('rounds accept one speak or pass per participant and only advance after everyone contributes', () => {
   const started = startMeeting(draft())
-  const first = submitContribution(started, { participant: vpsResearch, kind: 'speak', text: 'Ready.' })
+  const first = submitContribution(started, { participant: gatewayAResearch, kind: 'speak', text: 'Ready.' })
   const snapshot = JSON.stringify(first)
 
   assert.equal(first.currentRound, 1)
   assert.throws(
-    () => submitContribution(first, { participant: vpsResearch, kind: 'pass' }),
+    () => submitContribution(first, { participant: gatewayAResearch, kind: 'pass' }),
     MeetingTransitionError
   )
   assert.equal(JSON.stringify(first), snapshot)
 
-  const second = submitContribution(first, { participant: bridgeOps, kind: 'pass' })
+  const second = submitContribution(first, { participant: gatewayBOps, kind: 'pass' })
   assert.equal(second.currentRound, 2)
   assert.equal(second.state, 'running')
   assert.deepEqual(second.contributions.map(entry => entry.kind), ['speak', 'pass'])
@@ -139,18 +139,18 @@ test('rounds accept one speak or pass per participant and only advance after eve
 
 test('unanimous pass and the hard round cap complete without opening another round', () => {
   let allPass = startMeeting(draft())
-  allPass = submitContribution(allPass, { participant: vpsResearch, kind: 'pass' })
-  allPass = submitContribution(allPass, { participant: bridgeOps, kind: 'pass' })
+  allPass = submitContribution(allPass, { participant: gatewayAResearch, kind: 'pass' })
+  allPass = submitContribution(allPass, { participant: gatewayBOps, kind: 'pass' })
   assert.equal(allPass.state, 'completed')
   assert.equal(allPass.currentRound, 1)
 
   let capped = startMeeting(draft({ maxRounds: 1 }))
-  capped = submitContribution(capped, { participant: vpsResearch, kind: 'speak', text: 'Ship.' })
-  capped = submitContribution(capped, { participant: bridgeOps, kind: 'pass' })
+  capped = submitContribution(capped, { participant: gatewayAResearch, kind: 'speak', text: 'Ship.' })
+  capped = submitContribution(capped, { participant: gatewayBOps, kind: 'pass' })
   assert.equal(capped.state, 'completed')
   assert.equal(capped.currentRound, 1)
   assert.throws(
-    () => submitContribution(capped, { participant: vpsResearch, kind: 'pass' }),
+    () => submitContribution(capped, { participant: gatewayAResearch, kind: 'pass' }),
     MeetingTransitionError
   )
 })
@@ -166,7 +166,7 @@ test('waiting resumes while cancellation and failure are terminal and mutation s
     assert.throws(() => startMeeting(terminal), MeetingTransitionError)
     assert.throws(() => resumeMeeting(terminal), MeetingTransitionError)
     assert.throws(
-      () => submitContribution(terminal, { participant: vpsResearch, kind: 'pass' }),
+      () => submitContribution(terminal, { participant: gatewayAResearch, kind: 'pass' }),
       MeetingTransitionError
     )
     assert.equal(JSON.stringify(terminal), snapshot)
@@ -175,19 +175,19 @@ test('waiting resumes while cancellation and failure are terminal and mutation s
 
 test('chair conclusion records decisions, dissent, and action items without rewriting contributions', () => {
   const contributed = submitContribution(startMeeting(draft()), {
-    participant: vpsResearch,
+    participant: gatewayAResearch,
     kind: 'speak',
     text: 'Release evidence is complete.',
     evidenceRefs: ['run:release-suite']
   })
   const originalContribution = contributed.contributions[0]
   const concluded = concludeMeeting(contributed, {
-    chair: vpsResearch,
+    chair: gatewayAResearch,
     decisions: [{ id: 'decision-ship', text: 'Ship the release.', evidenceRefs: ['run:release-suite'] }],
-    dissent: [{ participant: bridgeOps, text: 'Prefer one more soak cycle.', evidenceRefs: ['risk:soak'] }],
+    dissent: [{ participant: gatewayBOps, text: 'Prefer one more soak cycle.', evidenceRefs: ['risk:soak'] }],
     actionItems: [{
       id: 'publish',
-      ownerRoute: bridgeOps,
+      ownerRoute: gatewayBOps,
       title: 'Publish the signed release',
       acceptanceCriteria: 'The signed artifact is available on the private route.',
       priority: 'high',
@@ -203,23 +203,23 @@ test('chair conclusion records decisions, dissent, and action items without rewr
     text: 'Ship the release.',
     evidenceRefs: ['run:release-suite']
   })
-  assert.deepEqual(concluded.dissent[0].participant, bridgeOps)
+  assert.deepEqual(concluded.dissent[0].participant, gatewayBOps)
   assert.equal(concluded.dissent[0].text, 'Prefer one more soak cycle.')
   assert.equal(concluded.actionItems[0].dedupeKey, 'meeting:meeting-release-1:action:publish')
   assert.throws(
-    () => concludeMeeting(contributed, { chair: bridgeOps, decisions: [], dissent: [], actionItems: [] }),
+    () => concludeMeeting(contributed, { chair: gatewayBOps, decisions: [], dissent: [], actionItems: [] }),
     MeetingTransitionError
   )
 })
 
 test('Kanban conversion payloads are deterministic, source-routed, and idempotent', () => {
   const completed = concludeMeeting(startMeeting(draft()), {
-    chair: vpsResearch,
+    chair: gatewayAResearch,
     decisions: [],
     dissent: [],
     actionItems: [{
       id: 'publish',
-      ownerRoute: bridgeOps,
+      ownerRoute: gatewayBOps,
       title: 'Publish the signed release',
       acceptanceCriteria: 'The signed artifact is available on the private route.',
       priority: 'high',
@@ -231,7 +231,7 @@ test('Kanban conversion payloads are deterministic, source-routed, and idempoten
   const second = buildKanbanCreatePayloads(completed)
   assert.deepEqual(first, second)
   assert.deepEqual(first, [{
-    route: bridgeOps,
+    route: gatewayBOps,
     request: {
       title: 'Publish the signed release',
       body: 'Acceptance criteria:\nThe signed artifact is available on the private route.\n\nDue intent:\nBefore the next owner checkpoint.\n\nMeeting: meeting-release-1',
@@ -246,7 +246,7 @@ test('Kanban conversion payloads are deterministic, source-routed, and idempoten
 test('serialize and hydrate round trip immutable records and reject malformed or oversized payloads', () => {
   let record = startMeeting(draft())
   record = submitContribution(record, {
-    participant: vpsResearch,
+    participant: gatewayAResearch,
     kind: 'speak',
     text: 'Evidence attached.',
     evidenceRefs: ['run:focused']

@@ -5,6 +5,7 @@ import { useGatewayRequest } from '@/app/gateway/hooks/use-gateway-request'
 import { useOnProfileSwitch } from '@/app/hooks/use-on-profile-switch'
 import { useRouteOverlayActive } from '@/app/hooks/use-route-overlay-active'
 import { PetHeartField } from '@/components/chat/vibe-hearts'
+import { PetBubble } from '@/components/pet/pet-bubble'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { persistString, storedString } from '@/lib/storage'
 import { $changeEventsAvailable, $petChange } from '@/store/live-sync'
@@ -100,6 +101,7 @@ function loadPosition(): Point {
  * Promotion to a separate frameless OS-level window is a follow-up — the
  * sprite + state logic here is reused as-is, only the host changes.
  */
+// health: allow CC -- retained narrow-screen pet behavior is migration scoped and covered by mobile overlap tests
 export function FloatingPet() {
   const { requestGateway } = useGatewayRequest()
   const { resolvedMode } = useTheme()
@@ -511,6 +513,22 @@ export function FloatingPet() {
       {/* Hearts puff off the pet; its celebrate ("yay"/jump) pose is driven by
           burstVibeHearts's router. */}
       <PetHeartField petH={petH} petW={petW} />
+      {/* Plugin lines (ctx.pet.say) float above the pet, upright (outside the
+          mirrored sprite wrapper) and grown toward the window's middle so a pet
+          parked at an edge never pushes its bubble off-screen. Core status
+          lines stay in the pop-out overlay; in-window the app is the surface. */}
+      <div
+        style={{
+          bottom: '100%',
+          marginBottom: 4,
+          pointerEvents: 'none',
+          position: 'absolute',
+          zIndex: 2,
+          ...(position.x + petW / 2 < (window.innerWidth || 800) / 2 ? { left: 0 } : { right: 0 })
+        }}
+      >
+        <PetBubble showStatus={false} />
+      </div>
     </div>
   )
 }

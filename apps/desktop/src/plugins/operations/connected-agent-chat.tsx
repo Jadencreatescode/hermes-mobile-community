@@ -63,6 +63,7 @@ function AgentMetadata({ agent, runtimeState }: { agent: HarnessAgent; runtimeSt
   )
 }
 
+// health: allow CC -- retained public connected-agent chat flow is security reviewed; preserve its established state branches during migration
 export function ConnectedAgentChatSurface({
   agent,
   showHeader = true

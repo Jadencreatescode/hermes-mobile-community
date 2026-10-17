@@ -63,7 +63,7 @@ describe('browser Desktop capability bridge', () => {
 
   it('fails closed without installing a bridge when the descriptor is invalid', async () => {
     delete desktopWindow.hermesDesktop
-    const fetcher = vi.fn(async () => response({ version: 1, backend: { id: 'vps', label: 'VPS', url: 'https://owner' } }))
+    const fetcher = vi.fn(async () => response({ version: 1, backend: { id: 'unknown-gateway', label: 'Unknown Gateway', url: 'https://invalid.example' } }))
 
     await expect(
       installBrowserBridge({ fetcher, location: new URL('https://mobile.example.test/') })
@@ -72,15 +72,15 @@ describe('browser Desktop capability bridge', () => {
   })
 
   it('rejects stale or unknown connection ids instead of falling back', async () => {
-    localStorage.setItem('hermes-mobile-connection-id', 'vps')
+    localStorage.setItem('hermes-mobile-connection-id', 'unknown-gateway')
     const bridge = createBrowserBridge({
       location: new URL('https://mobile.example.test/'),
       runtimeDescriptor
     })
 
     await expect(bridge.getConnection()).resolves.toMatchObject({ connectionId: 'strix-halo' })
-    await expect(bridge.getConnectionFor?.({ connectionId: 'vps' })).rejects.toThrow(/unavailable/i)
-    await expect(bridge.connections.setLastUsed?.('vps')).rejects.toThrow(/unavailable/i)
+    await expect(bridge.getConnectionFor?.({ connectionId: 'unknown-gateway' })).rejects.toThrow(/unavailable/i)
+    await expect(bridge.connections.setLastUsed?.('unknown-gateway')).rejects.toThrow(/unavailable/i)
   })
 
   it('preserves same-origin cookie REST authentication and profile scope', async () => {

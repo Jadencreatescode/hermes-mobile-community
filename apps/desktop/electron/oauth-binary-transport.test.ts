@@ -6,8 +6,9 @@
  * caller asks for them instead of JSON-parsing a ZIP. The shaping logic is
  * unit-tested here; the two main-process transports pull in main-process
  * singletons (https/http, electronNet, the OAuth session), so their wiring is
- * asserted on source shape — the same approach as
- * gateway-file-download-transport.test.ts.
+ * asserted at the named-function boundary. Function bodies are located by
+ * balanced braces rather than neighboring source markers, keeping the checks
+ * stable when unrelated handlers or centralized response helpers move.
  */
 
 import assert from 'node:assert/strict'
@@ -22,13 +23,86 @@ import { binaryTransportResponse, normalizeResponseHeaders } from './oauth-net-r
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const source = fs.readFileSync(path.join(__dirname, 'main.ts'), 'utf8')
 
-function extract(startMarker: string, endMarker: string): string {
-  const start = source.indexOf(startMarker)
-  assert.notEqual(start, -1, `${startMarker} should exist`)
-  const end = source.indexOf(endMarker, start + startMarker.length)
-  assert.notEqual(end, -1, `boundary after ${startMarker} should exist`)
+function matchingDelimiter(start: number, open: string, close: string): number {
+  let depth = 0
+  let quote = ''
+  let lineComment = false
+  let blockComment = false
 
-  return source.slice(start, end)
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index]
+    const next = source[index + 1]
+
+    if (lineComment) {
+      if (char === '\n') {lineComment = false}
+
+      continue
+    }
+
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false
+        index += 1
+      }
+
+      continue
+    }
+
+    if (quote) {
+      if (char === '\\') {
+        index += 1
+      } else if (char === quote) {
+        quote = ''
+      }
+
+      continue
+    }
+
+    if (char === '/' && next === '/') {
+      lineComment = true
+      index += 1
+
+      continue
+    }
+
+    if (char === '/' && next === '*') {
+      blockComment = true
+      index += 1
+
+      continue
+    }
+
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char
+
+      continue
+    }
+
+    if (char === open) {depth += 1}
+
+    if (char === close) {depth -= 1}
+
+    if (depth === 0) {return index}
+  }
+
+  return -1
+}
+
+function functionSource(name: string): string {
+  const signature = new RegExp(`(?:async\\s+)?function\\s+${name}\\s*\\(`)
+  const match = signature.exec(source)
+  assert.ok(match, `${name} should exist`)
+
+  const start = match.index
+  const parametersStart = source.indexOf('(', start)
+  const parametersEnd = matchingDelimiter(parametersStart, '(', ')')
+  assert.notEqual(parametersEnd, -1, `${name} parameters should be balanced`)
+
+  const bodyStart = source.indexOf('{', parametersEnd)
+  const bodyEnd = matchingDelimiter(bodyStart, '{', '}')
+  assert.notEqual(bodyEnd, -1, `${name} body should be balanced`)
+
+  return source.slice(start, bodyEnd + 1)
 }
 
 test('normalizeResponseHeaders lowercases names and flattens repeats', () => {
@@ -92,44 +166,52 @@ test('binaryTransportResponse surfaces an HTTP error with its status attached', 
   assert.match((error as Error).message, /missing member/)
 })
 
-test('the OAuth cookie transport honors responseType instead of parsing bytes', () => {
-  const fn = extract('function fetchJsonViaOauthSession', '\n// ---')
+test('the OAuth cookie transport handles binary before centralized JSON response wiring', () => {
+  const fn = functionSource('fetchJsonViaOauthSession')
 
-  // The binary branch is taken BEFORE any utf8 decode / JSON.parse.
+  // JSON parsing now lives in wireOauthSessionResponse. The binary branch must
+  // still short-circuit before that helper receives the response stream.
   const binaryBranch = fn.indexOf("options.responseType === 'binary'")
+  const jsonWiring = fn.indexOf('wireOauthSessionResponse(res,')
   assert.notEqual(binaryBranch, -1, 'cookie transport should branch on responseType')
-  assert.ok(binaryBranch < fn.indexOf('JSON.parse'), 'binary must short-circuit JSON parsing')
-  assert.match(fn, /binaryTransportResponse\(/)
+  assert.notEqual(jsonWiring, -1, 'cookie transport should delegate JSON response handling')
+  assert.ok(binaryBranch < jsonWiring, 'binary must short-circuit centralized JSON response handling')
+  assert.match(fn.slice(binaryBranch, jsonWiring), /binaryTransportResponse\(/)
+  assert.match(fn.slice(binaryBranch, jsonWiring), /\n\s+return\n/)
 })
 
-test('both renderer-facing cookie fallbacks forward responseType and the header allowlist', () => {
-  // The two paths a renderer REST call can take into cookie mode: the
-  // descriptor path (fetchJsonForBackend) and the window-backend path
-  // (handleHermesApiRequest). Neither may drop the caller's response type or
-  // its allowlisted Idempotency-Key just because no native bearer was held.
-  const descriptorPath = extract('async function fetchJsonForBackend', '\nipcMain.handle')
-  const windowPath = extract('async function handleHermesApiRequest', '\n  } catch (error) {')
+test('renderer routes preserve responseType and allowlisted headers through the centralized descriptor transport', () => {
+  const descriptorPath = functionSource('fetchJsonForBackend')
+  const registryPath = functionSource('dispatchRegistryApiRequest')
+  const windowPath = functionSource('handleHermesApiRequest')
+  const headerAllowlist = functionSource('apiRequestHeaders')
 
+  // Renderer entry points normalize untrusted request fields exactly once,
+  // then hand them to the shared descriptor transport.
   for (const [label, body] of [
-    ['fetchJsonForBackend', descriptorPath],
+    ['dispatchRegistryApiRequest', registryPath],
     ['handleHermesApiRequest', windowPath]
   ] as const) {
-    const fallback = body.slice(body.indexOf('fetchJsonViaOauthSession'))
-
-    assert.notEqual(fallback, '', `${label} should have a cookie fallback`)
-    assert.match(fallback, /responseType:/, label)
-    assert.match(fallback, /headers:/, label)
+    assert.match(body, /fetchJsonForBackend\(/, `${label} should use the centralized transport`)
+    assert.match(body, /headers: apiRequestHeaders\(request\)/, label)
+    assert.match(body, /responseType: apiRequestResponseType\(request\)/, label)
   }
 
-  // Every branch a renderer call can leave through — registry-pinned, native
-  // bearer, OAuth cookie, token/local — forwards the same two helpers. A new
-  // branch that forgets one is a visible count change here.
-  assert.equal(windowPath.match(/headers: apiRequestHeaders\(request\)/g)?.length, 4)
-  assert.equal(windowPath.match(/apiRequestResponseType\(request\)/g)?.length, 4)
+  assert.match(windowPath, /return dispatchRegistryApiRequest\(request, registryConnectionId\)/)
+  assert.match(headerAllowlist, /\['Idempotency-Key'\]/)
+  assert.match(headerAllowlist, /\{ 'Idempotency-Key': key \}/)
+
+  // The descriptor transport owns the auth split. One options object carries
+  // responseType and merged descriptor/allowlisted headers through both OAuth
+  // branches; the token/local branch forwards the same fields explicitly.
+  assert.match(descriptorPath, /responseType: opts\.responseType/)
+  assert.match(descriptorPath, /headers: \{ \.\.\.descriptor\.headers, \.\.\.\(opts\.headers \|\| \{\}\) \}/)
+  assert.match(descriptorPath, /requestWithBearer: .*fetchJson\(url, null, \{ \.\.\.options, bearer \}\)/)
+  assert.match(descriptorPath, /requestWithCookie: \(\) => fetchJsonViaOauthSession\(url, options\)/)
 })
 
 test('the bearer transport shares the one binary response shaper', () => {
-  const fn = extract('function fetchJson(url, token, options: any = {})', '\nfunction ')
+  const fn = functionSource('fetchJson')
 
   assert.match(fn, /options\.responseType === 'binary'/)
   assert.match(fn, /binaryTransportResponse\(/)

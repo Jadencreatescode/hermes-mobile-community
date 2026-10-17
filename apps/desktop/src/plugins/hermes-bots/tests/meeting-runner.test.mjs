@@ -4,13 +4,13 @@ import test from 'node:test'
 import { createMeeting, startMeeting } from '../meeting-model.mjs'
 import { filterMeetingHistory, meetingMarker, runStructuredMeetingRound, stripMeetingMarkers } from '../meeting-runner.mjs'
 
-const chair = { connectionId: 'vps', profile: 'research' }
-const reviewer = { connectionId: 'bridge', profile: 'reviewer' }
+const chair = { connectionId: 'gateway-a', profile: 'research' }
+const reviewer = { connectionId: 'gateway-b', profile: 'reviewer' }
 
 function meeting() {
   return startMeeting(createMeeting({
     id: 'meeting-integration-1',
-    source: { connectionId: 'vps', profile: 'default' },
+    source: { connectionId: 'gateway-a', profile: 'default' },
     title: 'Release review',
     agenda: 'Review the evidence and decide whether the release is ready.',
     chair,
@@ -51,8 +51,8 @@ test('meeting history keeps only the exact marked conversation segment', () => {
 test('runner creates source-scoped hidden sessions and records one ordered round', async () => {
   const calls = []
   const replies = new Map([
-    ['vps::research', 'Evidence is complete.'],
-    ['bridge::reviewer', '(pass)']
+    ['gateway-a::research', 'Evidence is complete.'],
+    ['gateway-b::reviewer', '(pass)']
   ])
   const messageCounts = new Map()
   const request = async (route, method, params) => {
@@ -86,13 +86,13 @@ test('runner creates source-scoped hidden sessions and records one ordered round
     [reviewer, 'pass', '']
   ])
   assert.deepEqual(result.sessions, {
-    'vps::research': 'stored-vps::research',
-    'bridge::reviewer': 'stored-bridge::reviewer'
+    'gateway-a::research': 'stored-gateway-a::research',
+    'gateway-b::reviewer': 'stored-gateway-b::reviewer'
   })
   const creates = calls.filter(call => call.method === 'session.create')
   assert.deepEqual(creates.map(call => [call.key, call.params.hidden, call.params.title]), [
-    ['vps::research', true, 'Meeting: meeting-integration-1'],
-    ['bridge::reviewer', true, 'Meeting: meeting-integration-1']
+    ['gateway-a::research', true, 'Meeting: meeting-integration-1'],
+    ['gateway-b::reviewer', true, 'Meeting: meeting-integration-1']
   ])
   const firstPrompt = calls.find(call => call.method === 'prompt.submit').params.text
   assert.ok(firstPrompt.startsWith(`${meetingMarker('meeting-integration-1')}\n`))
@@ -177,7 +177,7 @@ test('checkpoint callback receives contribution and waiting states with copied s
       if (method === 'session.resume') {
         const count = resumeCounts.get(key) || 0
         resumeCounts.set(key, count + 1)
-        if (key === 'bridge::reviewer') {
+        if (key === 'gateway-b::reviewer') {
           return {
             session_id: `runtime-${key}`,
             messages: [],
@@ -213,7 +213,7 @@ test('checkpoint callback receives contribution and waiting states with copied s
       }
       throw new Error(`unexpected ${method}`)
     },
-    sessions: { 'bridge::reviewer': 'stored-reviewer' },
+    sessions: { 'gateway-b::reviewer': 'stored-reviewer' },
     sleep: async () => undefined,
     maxPolls: 1,
     onCheckpoint
@@ -247,7 +247,7 @@ test('checkpoint callback receives contribution and waiting states with copied s
       }
       throw new Error(`unexpected ${method}`)
     },
-    sessions: { 'bridge::reviewer': 'stored-reviewer' },
+    sessions: { 'gateway-b::reviewer': 'stored-reviewer' },
     sleep: async () => undefined,
     maxPolls: 1,
     onCheckpoint
@@ -259,16 +259,16 @@ test('checkpoint callback receives contribution and waiting states with copied s
     checkpoint.pendingKind,
     checkpoint.sessionValues
   ]), [
-    ['running', 1, null, { 'vps::research': 'stored-vps::research' }],
+    ['running', 1, null, { 'gateway-a::research': 'stored-gateway-a::research' }],
     ['waiting', 1, 'clarify', {
-      'vps::research': 'stored-vps::research',
-      'bridge::reviewer': 'stored-bridge::reviewer'
+      'gateway-a::research': 'stored-gateway-a::research',
+      'gateway-b::reviewer': 'stored-gateway-b::reviewer'
     }],
-    ['waiting', 0, 'timeout', { 'bridge::reviewer': 'stored-reviewer' }],
-    ['running', 2, null, { 'bridge::reviewer': 'stored-reviewer' }]
+    ['waiting', 0, 'timeout', { 'gateway-b::reviewer': 'stored-reviewer' }],
+    ['running', 2, null, { 'gateway-b::reviewer': 'stored-reviewer' }]
   ])
   assert.equal(new Set(checkpoints.map(checkpoint => checkpoint.sessions)).size, checkpoints.length)
-  assert.equal(events.indexOf('checkpoint:end:1:none') < events.indexOf('session.create:bridge::reviewer'), true)
+  assert.equal(events.indexOf('checkpoint:end:1:none') < events.indexOf('session.create:gateway-b::reviewer'), true)
   assert.equal(events.at(-1), 'checkpoint:end:2:none')
   assert.equal(normalResult.sessions.__checkpointMutation, undefined)
   assert.equal(recoveredWaitingResult.sessions.__checkpointMutation, undefined)
@@ -420,7 +420,7 @@ test('resume harvests the pending participant and never replays completed seats'
 
   const result = await runStructuredMeetingRound(current, {
     request,
-    sessions: { 'bridge::reviewer': 'stored-reviewer' },
+    sessions: { 'gateway-b::reviewer': 'stored-reviewer' },
     sleep: async () => undefined,
     maxPolls: 1
   })

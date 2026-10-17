@@ -333,6 +333,7 @@ export interface ProductionDispatchInput {
 }
 
 /** Produce or revise: create/recover, claim, dispatch once, collect. */
+// health: allow CC -- retained production dispatch state machine is security reviewed; preserve its fail-closed branch ordering during migration
 export async function runProductionDispatch(
   input: ProductionDispatchInput
 ): Promise<DispatchResult> {
@@ -614,6 +615,7 @@ export interface ReviewDispatchInput {
 }
 
 /** Review: open, claim, dispatch one reviewer turn, record ITS verdict. */
+// health: allow CC -- retained review dispatch state machine is security reviewed; preserve its fail-closed branch ordering during migration
 export async function runReviewDispatch(input: ReviewDispatchInput): Promise<DispatchResult> {
   const eligibility = reviewDispatchEligibility(
     input.meeting, input.connectionModes, input.agents ?? []

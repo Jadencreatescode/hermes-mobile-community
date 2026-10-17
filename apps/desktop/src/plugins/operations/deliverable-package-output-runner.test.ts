@@ -155,6 +155,7 @@ function harness(options: {
       ]
     : []
 
+// health: allow CC -- the test harness intentionally models every production dispatch route in one protocol stub
   const rest = vi.fn(async (
     path: string,
     init?: { body?: unknown; headers?: Record<string, string>; method?: string }

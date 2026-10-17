@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import logging
 import re
 from pathlib import Path
 from typing import Literal, Optional
@@ -18,35 +19,37 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SECRET_LABEL_RE = re.compile(
     r"password|passphrase|passcode|verification code|authentication code|security code|access code|recovery code|one.?time|\botp\b|\b2fa\b|\bmfa\b|\bpin\b|credential|authenticate|login|log.?in|sign.?in|username|user id|api.?key|access key|token|secret|private key|cookie|session id|authorization|payment|card number|account number|routing number|social security",
-    re.I,
+    re.IGNORECASE,
 )
 _RAW_SECRET_RE = re.compile(
     r"(?:sk|gh[op])-[A-Za-z0-9_-]{16,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}|(?:api[_-]?key|password|token|secret)\s*[:=]\s*\S+",
-    re.I,
+    re.IGNORECASE,
 )
 _PRIVATE_BROWSER_DATA_RE = re.compile(
     r"\b(?:cookie|local\s*storage|session\s*storage|indexeddb|authorization\s+header|bearer\s+token)\b",
-    re.I,
+    re.IGNORECASE,
 )
 _RAW_VALUE_ACTION_RE = re.compile(
     r"\b(?:(?:type|enter|paste|input|provide|supply|fill|use)\b|(?:set|write|insert|put|populate|assign|configure|update|replace|apply|record|copy|place|store|unlock)\b.+?\b(?:to|into|in|as|with|using)\b)",
-    re.I,
+    re.IGNORECASE,
 )
 _RAW_TRIGGER_VALUE_RE = re.compile(
     r"\b(?:(?:type|enter|paste|input|provide|supply|fill)\b|(?:set|write|insert|put|populate|assign|configure|update|replace|apply|record|copy|place|store|unlock)\b.+?\b(?:to|into|in|as|with|using)\b)",
-    re.I,
+    re.IGNORECASE,
 )
 _CONSEQUENTIAL_ACTION_RE = re.compile(
-    r"^\s*(?:submit|send|publish|post|delete|remove|purchase|pay|transfer)\b", re.I
+    r"^\s*(?:submit|send|publish|post|delete|remove|purchase|pay|transfer)\b", re.IGNORECASE
 )
 _CODE_VALUE_RE = re.compile(
     r"(?:\b(?:code|number)\b\s*(?:(?:is|equals)\s+|[:=]\s*)\S+|\b(?:code|number)\b\s+(?:\d{3,}|[A-Za-z0-9]*[-_=:.][A-Za-z0-9_.:=-]+)\b)",
-    re.I,
+    re.IGNORECASE,
 )
 _VALUE_LIKE_TOKEN_RE = re.compile(
     r"(?:\b\d{3,}\b|\b(?=[A-Za-z0-9_-]{12,}\b)(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{12,}\b)"
@@ -312,7 +315,7 @@ def _draft(body: TrainingDraftRequest) -> dict[str, object]:
 def _write_and_verify(
     name: str, content: str, digest: str, profile: Optional[str]
 ) -> dict[str, object]:
-    from hermes_cli.web_server import _profile_scope
+    from hermes_cli.web_server_profiles import _profile_scope
     from tools.skill_manager_tool import _create_skill, _find_skill
 
     with _profile_scope(profile):
@@ -394,6 +397,7 @@ async def approve_training(
             headers={"Cache-Control": "no-store"},
         ) from None
     except Exception:
+        logger.exception("Training approval save verification failed")
         raise HTTPException(
             status_code=500,
             detail="training save verification failed",

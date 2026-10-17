@@ -30,14 +30,24 @@ describe('WhatsApp production npm audit policy', () => {
     })
   })
 
-  test('requires patched music-metadata in the exact lock', () => {
+  test('requires music-metadata 11.16.1 in the exact lock', () => {
     const lock = structuredClone(repositoryLock) as {
       packages: Record<string, { version?: string }>
     }
 
-    lock.packages['node_modules/music-metadata'].version = '11.15.0'
+    lock.packages['node_modules/music-metadata'].version = '11.16.0'
 
-    assert.match(validateWhatsAppLock(lock).join('\n'), /music-metadata.*11\.16\.0/i)
+    assert.match(validateWhatsAppLock(lock).join('\n'), /music-metadata.*11\.16\.1/i)
+  })
+
+  test('rejects even a newer music-metadata version until it is reviewed exactly', () => {
+    const lock = structuredClone(repositoryLock) as {
+      packages: Record<string, { version?: string }>
+    }
+
+    lock.packages['node_modules/music-metadata'].version = '11.16.2'
+
+    assert.match(validateWhatsAppLock(lock).join('\n'), /music-metadata.*11\.16\.1/i)
   })
 
   test('requires patched sharp in the exact lock', () => {

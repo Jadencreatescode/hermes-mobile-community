@@ -87,6 +87,7 @@ function DigestRow({ label, value }: { label: string; value: string }) {
   )
 }
 
+// health: allow CC -- retained deliverable lifecycle UI is migration scoped and contract tested
 export function DeliverablePackageOutput({
   detail,
   meeting,

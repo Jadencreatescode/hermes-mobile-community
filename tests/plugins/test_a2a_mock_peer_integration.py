@@ -128,8 +128,8 @@ def api_module(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         url_safety,
-        "ssrf_safe_http_transport",
-        lambda **kwargs: httpx.HTTPTransport(),
+        "create_ssrf_safe_client",
+        lambda **kwargs: httpx.Client(**kwargs),
     )
     monkeypatch.setattr(
         api, "_a2a_registry_path", lambda: tmp_path / "harness_agents.db"

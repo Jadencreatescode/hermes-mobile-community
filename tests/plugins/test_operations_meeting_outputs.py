@@ -895,7 +895,7 @@ def test_two_concurrent_requests_with_one_key_mutate_once_and_replay(lifecycle):
                     mutate=_production_run_mutation(lifecycle),
                 )
             )
-        except BaseException as exc:  # noqa: BLE001 - recorded for the assertion
+        except BaseException as exc:
             failures.append(exc)
 
     threads = [threading.Thread(target=attempt) for _ in range(2)]
@@ -1620,6 +1620,7 @@ def test_an_invalid_preexisting_blob_entry_is_replaced_with_verified_bytes(tmp_p
     outside = tmp_path / "outside.bin"
     outside.write_bytes(b"attacker owned\n")
 
+# health: allow HX011 -- the explicit adversarial fixture ladder documents each distinct hostile filesystem object under test
     if plant == "wrong_bytes":
         path.write_bytes(b"not the package at all\n")
     elif plant == "truncated":

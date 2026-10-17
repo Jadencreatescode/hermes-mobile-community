@@ -9,7 +9,7 @@ import {
   DialogTitle,
   Input
 } from '@hermes/plugin-sdk'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { type HarnessAgent, registerA2AAgent } from './data'
 
@@ -26,6 +26,7 @@ export function TrustedBridgeOnboarding({ open, onOpenChange, onRegistered }: Tr
   const [step, setStep] = useState<Step>('paste')
   const [preview, setPreview] = useState<HarnessAgent | null>(null)
   const [error, setError] = useState('')
+  const resetTimerRef = useRef<number | null>(null)
 
   const reset = useCallback(() => {
     setUrl('')
@@ -39,10 +40,25 @@ export function TrustedBridgeOnboarding({ open, onOpenChange, onRegistered }: Tr
       onOpenChange(next)
 
       if (!next) {
-        window.setTimeout(reset, 300)
+        if (resetTimerRef.current !== null) {
+          window.clearTimeout(resetTimerRef.current)
+        }
+        resetTimerRef.current = window.setTimeout(() => {
+          resetTimerRef.current = null
+          reset()
+        }, 300)
       }
     },
     [onOpenChange, reset]
+  )
+
+  useEffect(
+    () => () => {
+      if (resetTimerRef.current !== null) {
+        window.clearTimeout(resetTimerRef.current)
+      }
+    },
+    []
   )
 
   const handleReview = useCallback(async () => {

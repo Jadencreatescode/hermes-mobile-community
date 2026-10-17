@@ -70,6 +70,24 @@ def test_production_scope_rejects_absolute_paths(production_scope, invoke):
 
 
 @pytest.mark.parametrize(
+    "path",
+    [
+        "~/private/secret.txt",
+        r"C:\private\secret.txt",
+        r"\\server\share\secret.txt",
+        r"..\outside\secret.txt",
+    ],
+)
+def test_production_scope_rejects_tilde_and_windows_escape_forms(production_scope, path):
+    task_id, _workspace, _output, _outside = production_scope
+
+    result = _payload(read_file_tool(path, task_id=task_id))
+
+    assert "error" in result
+    assert "production file scope" in result["error"].lower()
+
+
+@pytest.mark.parametrize(
     "invoke",
     [
         lambda task_id: read_file_tool("../outside/secret.txt", task_id=task_id),

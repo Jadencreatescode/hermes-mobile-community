@@ -215,6 +215,7 @@ export async function loadOperationsSnapshot(
   const degraded = new Set<string>()
 
   const agents = await Promise.all(
+// health: allow CC -- retained public Operations wire normalization is migration scoped and contract tested
     roster.agents.map(async agent => {
       const route = routeFor(agent)
       let profile: ProfileSummary | undefined

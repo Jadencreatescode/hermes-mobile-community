@@ -548,7 +548,7 @@ def test_complete_production_meeting_refuses_a_client_authored_approver(tmp_path
 def test_legacy_records_are_read_unchanged_and_append_a_v2_version(tmp_path):
     api = load_meeting_store()
     db_path = tmp_path / "meetings.db"
-    store = api.MeetingStore(db_path)
+    api.MeetingStore(db_path)
     legacy = {
         "id": "meeting_legacy_1",
         "source": route("default"),

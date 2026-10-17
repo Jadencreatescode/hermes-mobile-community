@@ -14,6 +14,7 @@ desktop Operations plugin, and gateway import surfaces.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import logging
@@ -155,7 +156,7 @@ def _is_base64_high_entropy(value: str) -> bool:
     try:
         decoded = base64.b64decode(value, validate=True)
         return len(decoded) >= 24
-    except Exception:
+    except (binascii.Error, ValueError):
         return False
 
 
@@ -244,10 +245,7 @@ def detect_platform(source: bytes, filename: str) -> HarnessFamily:
 
     # Content heuristics (cheap prefix checks only)
     prefix = source[:2048]
-    try:
-        text = prefix.decode("utf-8", errors="ignore")
-    except Exception:
-        text = ""
+    text = prefix.decode("utf-8", errors="ignore")
 
     if "agentCard" in text or "a2a_protocol" in text:
         return HarnessFamily.GENERIC_A2A
@@ -413,13 +411,14 @@ def _parse_markdown_or_plaintext(text: str) -> dict[str, Any]:
             frontmatter = parts[1].strip()
             body = parts[2].strip()
             try:
-                import yaml
+                from hermes_yaml import safe_load
 
-                parsed = yaml.safe_load(frontmatter)
+                parsed = safe_load(frontmatter)
                 if isinstance(parsed, dict):
                     data = parsed
                 data["instructions"] = body
             except Exception:
+                logger.debug("Connected-agent YAML frontmatter was invalid", exc_info=True)
                 data["_raw_text"] = text
     return data
 
@@ -526,7 +525,7 @@ def _normalize_a2a_url(url: str) -> str:
     return stripped
 
 
-def import_agent_from_url(url: str, registry: Optional["AgentRegistry"] = None) -> AgentRegistryEntry:
+def import_agent_from_url(url: str, registry: Optional[AgentRegistry] = None) -> AgentRegistryEntry:
     """Fetch, normalize, and persist an agent from a public URL.
 
     Raises ValueError if the import is rejected or verification fails.
@@ -577,7 +576,7 @@ class AgentRegistry:
         if not self._path.is_file():
             return {}
         try:
-            with open(self._path, "r", encoding="utf-8") as f:
+            with open(self._path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 return data
@@ -607,7 +606,12 @@ class AgentRegistry:
                 entry = _deserialize_entry(payload)
                 entries[agent_id] = entry
             except Exception as exc:
-                logger.warning("AgentRegistry: skipping invalid entry %s: %s", agent_id, exc)
+                logger.warning(
+                    "AgentRegistry: skipping invalid entry %s: %s",
+                    agent_id,
+                    exc,
+                    exc_info=True,
+                )
         return entries
 
     def save_entries(self, entries: dict[str, AgentRegistryEntry]) -> None:

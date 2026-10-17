@@ -724,6 +724,7 @@ def test_durable_chat_retries_one_request_and_serializes_each_agent(tmp_path, mo
                 active += 1
                 maximum_active = max(maximum_active, active)
                 calls.append(request_id)
+# health: allow HX013 -- the short delay deliberately holds the fake connector open so the serialization race is exercised
             time.sleep(0.04)
             with guard:
                 active -= 1

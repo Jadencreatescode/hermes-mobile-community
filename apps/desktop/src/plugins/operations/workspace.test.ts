@@ -7,7 +7,7 @@ const agent: WorkspaceAgent = {
   openSessionId: 'stored-bot-chat',
   openSessionKind: 'bot-chat',
   profile: 'release',
-  sourceId: 'vps'
+  sourceId: 'gateway-a'
 }
 
 describe('openAgentWorkspace', () => {
@@ -20,7 +20,7 @@ describe('openAgentWorkspace', () => {
 
     await openAgentWorkspace(host, agent)
 
-    expect(host.ensureAgent).toHaveBeenCalledWith('vps', 'release')
+    expect(host.ensureAgent).toHaveBeenCalledWith('gateway-a', 'release')
     expect(host.openSession).toHaveBeenCalledWith('stored-bot-chat', {
       awaitHydration: true,
       expectHistory: true,
@@ -40,7 +40,7 @@ describe('openAgentWorkspace', () => {
 
     await openAgentWorkspace(host, { ...agent, openSessionId: undefined, openSessionKind: undefined })
 
-    expect(host.ensureAgent).toHaveBeenCalledWith('vps', 'release')
+    expect(host.ensureAgent).toHaveBeenCalledWith('gateway-a', 'release')
     expect(host.newChat).toHaveBeenCalledWith('release')
     expect(host.openSession).not.toHaveBeenCalled()
   })

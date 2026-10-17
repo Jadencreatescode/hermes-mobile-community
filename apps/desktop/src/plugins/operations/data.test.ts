@@ -6,7 +6,7 @@ import { getA2AAgentStatus, listA2AAgents, loadOperationsSnapshot, registerA2AAg
 describe('loadOperationsSnapshot', () => {
   it('keeps reachable agents visible beside a failed source and maps authoritative work', async () => {
     const requestProfile = vi.fn(async (route: { connectionId: string }, method: string, params: unknown) => {
-      if (route.connectionId === 'dead') {
+      if (route.connectionId === 'gateway-b') {
         throw new Error('offline')
       }
 
@@ -41,11 +41,11 @@ describe('loadOperationsSnapshot', () => {
     const host = {
       agents: vi.fn().mockResolvedValue({
         agents: [
-          { connectionId: 'vps', connectionKind: 'remote', connectionLabel: 'VPS', handle: 'release', profile: 'release' }
+          { connectionId: 'gateway-a', connectionKind: 'remote', connectionLabel: 'Gateway A', handle: 'release', profile: 'release' }
         ],
         sources: [
-          { connectionId: 'vps', kind: 'remote', label: 'VPS', reachable: true },
-          { connectionId: 'dead', error: 'offline', kind: 'ssh', label: 'Bridge', reachable: false }
+          { connectionId: 'gateway-a', kind: 'remote', label: 'Gateway A', reachable: true },
+          { connectionId: 'gateway-b', error: 'offline', kind: 'ssh', label: 'Gateway B', reachable: false }
         ]
       }),
       requestProfile,
@@ -55,25 +55,25 @@ describe('loadOperationsSnapshot', () => {
     const snapshot = await loadOperationsSnapshot(host as never, { nowMs: 1_020_000 })
 
     expect(snapshot.sources.map(source => [source.label, source.status])).toEqual([
-      ['VPS', 'online'],
-      ['Bridge', 'offline']
+      ['Gateway A', 'online'],
+      ['Gateway B', 'offline']
     ])
     expect(snapshot.agents[0]).toMatchObject({
       displayName: 'Release Bot',
       openSessionId: 'bot-chat-tip',
       profile: 'release',
-      sourceLabel: 'VPS',
+      sourceLabel: 'Gateway A',
       state: 'waiting',
       workSummary: 'Checking the release'
     })
-    expect(snapshot.partialFailures).toContain('Bridge: offline')
+    expect(snapshot.partialFailures).toContain('Gateway B: offline')
   })
 
   it('maps a live delegated agent to the owning Operations agent', async () => {
     const host = {
       agents: vi.fn().mockResolvedValue({
-        agents: [{ connectionId: 'vps', connectionKind: 'remote', connectionLabel: 'VPS', handle: 'ops', profile: 'ops' }],
-        sources: [{ connectionId: 'vps', kind: 'remote', label: 'VPS', reachable: true }]
+        agents: [{ connectionId: 'gateway-a', connectionKind: 'remote', connectionLabel: 'Gateway A', handle: 'ops', profile: 'ops' }],
+        sources: [{ connectionId: 'gateway-a', kind: 'remote', label: 'Gateway A', reachable: true }]
       }),
       requestProfile: vi.fn(async (_route, method: string) => {
         if (method === 'profiles.list') {
@@ -101,8 +101,8 @@ describe('loadOperationsSnapshot', () => {
   it('keeps a reachable identity unknown when its detail request fails', async () => {
     const host = {
       agents: vi.fn().mockResolvedValue({
-        agents: [{ connectionId: 'vps', connectionKind: 'remote', connectionLabel: 'VPS', handle: 'ops', profile: 'ops' }],
-        sources: [{ connectionId: 'vps', kind: 'remote', label: 'VPS', reachable: true }]
+        agents: [{ connectionId: 'gateway-a', connectionKind: 'remote', connectionLabel: 'Gateway A', handle: 'ops', profile: 'ops' }],
+        sources: [{ connectionId: 'gateway-a', kind: 'remote', label: 'Gateway A', reachable: true }]
       }),
       requestProfile: vi.fn().mockRejectedValue(new Error('detail timeout')),
       status: vi.fn().mockResolvedValue({})

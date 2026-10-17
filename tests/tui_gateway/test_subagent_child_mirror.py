@@ -38,8 +38,7 @@ def server():
 
     yield mod
     mod._sessions.clear()
-    mod._pending.clear()
-    mod._answers.clear()
+    __import__("tui_gateway.server_requests", fromlist=["x"]).reset_for_tests()
     mod._child_mirrors.clear()
     mod._active_child_runs.clear()
 
@@ -57,7 +56,9 @@ def emits(server, monkeypatch):
 
 
 def _relay(server, event_type, **payload):
-    """Drive _on_tool_progress the way the delegate relay does."""
+    """Drive _on_tool_progress the way the delegate relay does; the parent record
+    exists like any live turn's does (launch profile: no profile_home)."""
+    server._sessions.setdefault("parent-sid", {"session_key": "parent"})
     server._on_tool_progress(
         "parent-sid",
         event_type,
@@ -128,7 +129,7 @@ def test_live_child_session_gets_native_stream(server, emits):
 def test_window_closed_midrun_drops_state_then_fresh_turn_on_reopen(server, emits):
     server._sessions["live-1"] = {"session_key": "child-1", "agent": None}
     _relay(server, "subagent.tool", tool_name="terminal", child_session_id="child-1")
-    assert "child-1" in server._child_mirrors
+    assert (None, "child-1") in server._child_mirrors
 
     # Window closes → live session gone → state dropped on the next event.
     server._sessions.clear()
@@ -155,18 +156,18 @@ def test_upgraded_child_session_not_mirrored(server, emits):
     assert [(e, s) for e, s, _ in emits] == [("subagent.tool", "parent-sid")]
     assert server._child_mirrors == {}
     # Liveness registry still updates — it serves resume, not the mirror.
-    assert "child-1" in server._active_child_runs
+    assert (None, "child-1") in server._active_child_runs
 
 
 def test_stale_child_run_not_reported_active(server, emits):
     """A leaked registry entry (lost completion event) must age out instead of
     pinning running=true on every future lazy resume of that child."""
-    server._active_child_runs["child-1"] = 0.0  # epoch — ancient
+    server._active_child_runs[(None, "child-1")] = 0.0  # epoch — ancient
 
-    assert server._child_run_active("child-1") is False
+    assert server._child_run_active("child-1", None) is False
 
     _relay(server, "subagent.tool", tool_name="terminal", child_session_id="child-1")
-    assert server._child_run_active("child-1") is True
+    assert server._child_run_active("child-1", None) is True
 
 
 def test_prompt_submit_rejected_while_child_run_active(server, emits):
@@ -189,7 +190,7 @@ def test_prompt_submit_rejected_while_child_run_active(server, emits):
     # Run completes → the same submit upgrades into a real conversation
     # (passes the guard; fails later only because this test stubs no agent).
     _relay(server, "subagent.complete", child_session_id="child-1", status="completed", summary="ok")
-    assert server._child_run_active("child-1") is False
+    assert server._child_run_active("child-1", None) is False
 
 
 def test_prompt_submit_dispatch_identity_is_an_atomic_concurrency_gate(server, monkeypatch):
@@ -209,7 +210,7 @@ def test_prompt_submit_dispatch_identity_is_an_atomic_concurrency_gate(server, m
         "transport": None,
     }
     monkeypatch.setattr(server, "_ensure_active_session_slot", lambda *_: None)
-    monkeypatch.setattr(server, "_load_dashboard_process_isolation_config", lambda: {})
+    monkeypatch.setattr(server, "_load_dashboard_process_isolation_config", dict)
     monkeypatch.setattr(server, "_session_uses_compute_host", lambda *_: True)
     monkeypatch.setattr(server, "_start_inflight_turn", lambda *_: None)
 
@@ -263,7 +264,7 @@ def test_failed_agent_initialization_releases_the_dispatch_key_for_one_retry(
     }
     server._sessions["live-1"] = session
     monkeypatch.setattr(server, "_ensure_active_session_slot", lambda *_: None)
-    monkeypatch.setattr(server, "_load_dashboard_process_isolation_config", lambda: {})
+    monkeypatch.setattr(server, "_load_dashboard_process_isolation_config", dict)
     monkeypatch.setattr(server, "_session_uses_compute_host", lambda *_: False)
     monkeypatch.setattr(server, "_ensure_session_db_row", lambda *_: None)
     monkeypatch.setattr(server, "_persist_branch_seed", lambda *_: None)
@@ -486,13 +487,13 @@ def test_active_child_runs_registry_tracks_liveness(server, emits):
     open), and completion clears it — lazy watch resumes read this registry to
     report running=true while the child is silent inside a long tool call."""
     _relay(server, "subagent.start", preview="go", child_session_id="child-1")
-    assert "child-1" in server._active_child_runs
+    assert (None, "child-1") in server._active_child_runs
 
     _relay(server, "subagent.tool", tool_name="terminal", child_session_id="child-1")
-    assert "child-1" in server._active_child_runs
+    assert (None, "child-1") in server._active_child_runs
 
     _relay(server, "subagent.complete", child_session_id="child-1", status="completed", summary="ok")
-    assert "child-1" not in server._active_child_runs
+    assert (None, "child-1") not in server._active_child_runs
 
 
 def test_start_mirrors_as_immediate_header_line(server, emits):

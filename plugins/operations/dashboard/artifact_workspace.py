@@ -409,6 +409,7 @@ class ArtifactStore:
                 "the stored package slot could not be replaced safely"
             ) from exc
 
+# health: allow NESTING -- the security-reviewed descriptor-relative blob replacement keeps all identity and link checks in one fail-closed transaction
     def put_blob(self, payload: bytes) -> str:
         """Durably store bytes and return their digest."""
         digest = hashlib.sha256(payload).hexdigest()

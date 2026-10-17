@@ -46,6 +46,15 @@ class TestA2AConnectorInit:
         assert "Test" in repr(conn)
 
 
+class TestA2ATaskStateCompatibility:
+    @pytest.mark.parametrize(
+        "state", ["TASK_STATE_AUTH_REQUIRED", "AUTH_REQUIRED"]
+    )
+    def test_auth_required_is_blocked_but_not_terminal(self, state: str) -> None:
+        assert connectors._normalize_task_state(state) == "blocked"
+        assert "TASK_STATE_AUTH_REQUIRED" not in connectors.protocol.TERMINAL_STATES
+
+
 class TestA2AConnectorProbe:
     def test_probe_success(self) -> None:
         conn = connectors.A2AConnector(

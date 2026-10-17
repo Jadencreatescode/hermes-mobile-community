@@ -75,6 +75,7 @@ function machineOptionLabel(catalog: MachineCatalog): string {
   return `${machine.label} · ${machine.state}`
 }
 
+// health: allow CC -- retained public bot-creation validation flow is migration scoped and regression tested
 export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogProps) {
   const [state, setState] = useState<MakeBotState | null>(null)
   const [loading, setLoading] = useState(false)

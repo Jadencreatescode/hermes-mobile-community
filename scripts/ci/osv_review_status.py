@@ -244,7 +244,7 @@ def build_review_status(scan_result: str, results_path: Path) -> tuple[list[dict
         failures.append("OSV JSON artifact was not produced")
     else:
         try:
-            document = json.loads(results_path.read_text(encoding="utf-8"))
+            document = json.loads(results_path.read_text(encoding="utf-8-sig"))
             summaries = _validate_results(document)
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
             failures.append(f"OSV JSON artifact could not be validated: {exc}")

@@ -56,10 +56,10 @@ class TestGetBotsCatalog:
     def test_catalog_empty_when_nothing_configured(self, client, monkeypatch):
         """Catalog returns empty lists when nothing is configured."""
         monkeypatch.setattr(
-            "hermes_cli.web_routers.bots._build_harness_catalog", lambda: []
+            "hermes_cli.web_routers.bots._build_harness_catalog", list
         )
         monkeypatch.setattr(
-            "hermes_cli.web_routers.bots._build_model_catalog", lambda: []
+            "hermes_cli.web_routers.bots._build_model_catalog", list
         )
         response = client.get("/api/bots/catalog", headers=_auth_headers())
         assert response.status_code == 200
@@ -72,10 +72,10 @@ class TestGetBotsCatalog:
         install_mock = MagicMock()
         exec_mock = MagicMock()
         monkeypatch.setattr(
-            "hermes_cli.web_routers.bots._build_harness_catalog", lambda: []
+            "hermes_cli.web_routers.bots._build_harness_catalog", list
         )
         monkeypatch.setattr(
-            "hermes_cli.web_routers.bots._build_model_catalog", lambda: []
+            "hermes_cli.web_routers.bots._build_model_catalog", list
         )
         # The test passes if the endpoint returns 200 without calling install/exec.
         response = client.get("/api/bots/catalog", headers=_auth_headers())
@@ -95,7 +95,7 @@ class TestHarnessCatalogInvariants:
         )
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_registry_harnesses",
-            lambda: {},
+            dict,
         )
         catalog = bots._build_harness_catalog()
         ids = {h["id"] for h in catalog}
@@ -120,11 +120,11 @@ class TestHarnessCatalogInvariants:
         """Every catalog entry carries a non-empty id and label."""
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_native_harnesses",
-            lambda: {},
+            dict,
         )
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_registry_harnesses",
-            lambda: {},
+            dict,
         )
         catalog = bots._build_harness_catalog()
         assert catalog
@@ -136,11 +136,11 @@ class TestHarnessCatalogInvariants:
         """Entries without a download_url must be explicitly protocol-only."""
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_native_harnesses",
-            lambda: {},
+            dict,
         )
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_registry_harnesses",
-            lambda: {},
+            dict,
         )
         catalog = bots._build_harness_catalog()
         assert catalog
@@ -152,11 +152,11 @@ class TestHarnessCatalogInvariants:
         """A harness that is not present is still listed with detected=False."""
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_native_harnesses",
-            lambda: {},
+            dict,
         )
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_registry_harnesses",
-            lambda: {},
+            dict,
         )
         catalog = bots._build_harness_catalog()
         claude = next((h for h in catalog if h["id"] == "claude_code"), None)
@@ -181,11 +181,11 @@ class TestHarnessCatalogInvariants:
 
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_native_harnesses",
-            lambda: {},
+            dict,
         )
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_registry_harnesses",
-            lambda: {},
+            dict,
         )
 
         response = client.get("/api/bots/catalog", headers=_auth_headers())
@@ -202,7 +202,7 @@ class TestHarnessCatalogInvariants:
         """A protocol-only harness is never selectable even when detected."""
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_native_harnesses",
-            lambda: {},
+            dict,
         )
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_registry_harnesses",
@@ -222,7 +222,7 @@ class TestHarnessCatalogInvariants:
         )
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_registry_harnesses",
-            lambda: {},
+            dict,
         )
         catalog = bots._build_harness_catalog()
         hermes = next((h for h in catalog if h["id"] == "hermes"), None)
@@ -237,11 +237,11 @@ class TestHarnessCatalogInvariants:
         """An absent harness still carries every expected field."""
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_native_harnesses",
-            lambda: {},
+            dict,
         )
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._detect_registry_harnesses",
-            lambda: {},
+            dict,
         )
         catalog = bots._build_harness_catalog()
         codex = next((h for h in catalog if h["id"] == "codex"), None)
@@ -343,7 +343,7 @@ class TestPostBots:
             ],
         )
         monkeypatch.setattr(
-            "hermes_cli.web_routers.bots._build_model_catalog", lambda: []
+            "hermes_cli.web_routers.bots._build_model_catalog", list
         )
 
         response = client.post(
@@ -397,7 +397,7 @@ class TestPostBots:
         )
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._build_model_catalog",
-            lambda: [],
+            list,
         )
 
         create_profile_mock = MagicMock(side_effect=FileExistsError("Profile 'testbot' already exists"))
@@ -418,11 +418,11 @@ class TestPostBots:
 
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._build_harness_catalog",
-            lambda: [],
+            list,
         )
         monkeypatch.setattr(
             "hermes_cli.web_routers.bots._build_model_catalog",
-            lambda: [],
+            list,
         )
 
         create_profile_mock = MagicMock(return_value=profile_dir)

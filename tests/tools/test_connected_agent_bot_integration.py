@@ -217,13 +217,13 @@ def test_chat_store_sanitizes_on_append(tmp_path):
     assert event.sanitized is True
 
 
-def test_chat_store_orders_by_timestamp(tmp_path):
+def test_chat_store_orders_by_timestamp(tmp_path, monkeypatch):
+    timestamps = iter((1.0, 2.0, 3.0))
+    monkeypatch.setattr(cabi.time, "time", lambda: next(timestamps))
     store = ConnectedAgentChatStore(hermes_home=tmp_path)
-    e1 = store.append("agent-1", "me", "first")
-    time.sleep(0.01)
-    e2 = store.append("agent-1", "me", "second")
-    time.sleep(0.01)
-    e3 = store.append("agent-1", "me", "third")
+    store.append("agent-1", "me", "first")
+    store.append("agent-1", "me", "second")
+    store.append("agent-1", "me", "third")
 
     messages = store.get_messages("agent-1")
     contents = [m.content for m in messages]
@@ -328,10 +328,11 @@ def test_chat_store_allows_different_content(tmp_path):
     assert e1.event_id != e2.event_id
 
 
-def test_chat_store_allows_after_dedup_window(tmp_path):
+def test_chat_store_allows_after_dedup_window(tmp_path, monkeypatch):
+    timestamps = iter((1.0, 1.02))
+    monkeypatch.setattr(cabi.time, "time", lambda: next(timestamps))
     store = ConnectedAgentChatStore(hermes_home=tmp_path)
     e1 = store.append("agent-1", "me", "hello", dedup_window_seconds=0.01)
-    time.sleep(0.02)
     e2 = store.append("agent-1", "me", "hello", dedup_window_seconds=0.01)
     assert e1.event_id != e2.event_id
 

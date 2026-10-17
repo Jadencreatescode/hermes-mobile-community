@@ -1,13 +1,10 @@
-import { host } from '@hermes/plugin-sdk'
+import { type BotsRosterProviderAgent, host } from '@hermes/plugin-sdk'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-// @ts-expect-error The bundled Bot Mode plugin is intentionally authored as runtime JavaScript.
-import botsPlugin from './plugin.js'
+import { ProviderBotRow, type ProviderRosterRow } from './provider-roster-ui'
 
-const { ProviderBotRow } = botsPlugin.__test
-
-function agent(overrides: Record<string, unknown> = {}) {
+function agent(overrides: Record<string, unknown> = {}): BotsRosterProviderAgent {
   return {
     description: 'Release compliance review',
     handle: 'release-reviewer',
@@ -18,10 +15,10 @@ function agent(overrides: Record<string, unknown> = {}) {
     name: 'Claude Reviewer',
     verification_state: 'verified',
     ...overrides
-  }
+  } as BotsRosterProviderAgent
 }
 
-function row(provider: Record<string, unknown>) {
+function row(provider: Record<string, unknown>): ProviderRosterRow {
   return {
     active: false,
     activity: 0,

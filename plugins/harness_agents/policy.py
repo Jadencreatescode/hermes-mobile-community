@@ -236,7 +236,7 @@ def fetch_json(
 
     import httpx
 
-    from tools.url_safety import SSRFConnectionBlocked, ssrf_safe_http_transport
+    from tools.url_safety import SSRFConnectionBlocked, create_ssrf_safe_client
 
     try:
         timeout = httpx.Timeout(
@@ -245,8 +245,7 @@ def fetch_json(
             write=_READ_TIMEOUT_S,
             pool=_CONNECT_TIMEOUT_S,
         )
-        with httpx.Client(
-            transport=ssrf_safe_http_transport(),
+        with create_ssrf_safe_client(
             follow_redirects=False,
             timeout=timeout,
         ) as client:

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 import time
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -118,9 +119,22 @@ def acquire_agent_operation_lock(
     if not isinstance(agent_id, str) or not agent_id or "\x00" in agent_id:
         raise ValueError("agent id is required")
     lock_root = Path(database_path).parent / "harness-agent-locks"
-    lock_root.mkdir(parents=True, exist_ok=True)
+    lock_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     digest = hashlib.sha256(agent_id.encode("utf-8")).hexdigest()
-    handle = (lock_root / f"{digest}.lock").open("a+b")
+    lock_path = lock_root / f"{digest}.lock"
+    flags = os.O_RDWR | os.O_CREAT | os.O_APPEND
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(lock_path, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EINVAL, "agent lock must be a regular file", lock_path)
+        handle = os.fdopen(descriptor, "a+b")
+    except BaseException:
+        os.close(descriptor)
+        raise
     handle.seek(0, os.SEEK_END)
     if handle.tell() == 0:
         handle.write(b"\0")

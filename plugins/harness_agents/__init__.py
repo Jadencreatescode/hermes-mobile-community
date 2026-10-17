@@ -14,12 +14,12 @@ from plugins.harness_agents.policy import (
 from plugins.harness_agents.registry import HarnessRegistry, acquire_agent_operation_lock
 
 __all__ = [
-    "AgentCardCatalog",
-    "A2AConnector",
-    "Connector",
-    "AgentImport",
     "ALL_CAPABILITIES",
     "ROLE_PRESETS",
+    "A2AConnector",
+    "AgentCardCatalog",
+    "AgentImport",
+    "Connector",
     "HarnessRegistry",
     "acquire_agent_operation_lock",
     "connector_factory",

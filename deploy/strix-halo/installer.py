@@ -69,8 +69,8 @@ class SubprocessRunner:
                 command,
                 input=input_text,
                 text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
+                timeout=300,
                 check=False,
             )
         except OSError as exc:
@@ -831,10 +831,8 @@ class FriendInstaller:
         snapshot_before = self.snapshot_path.read_text(encoding="utf-8") if self.snapshot_path.is_file() else None
         backend_owned = False
         release: Path | None = None
-        release_created = False
         serve_before: dict | None = None
         https_port: int | None = None
-        serve_changed = False
         serve_before, raw_snapshot = self._serve_config()
         dns_name = self._tailscale_name()
 
@@ -891,14 +889,13 @@ class FriendInstaller:
                 self._clear_transaction()
                 return InstallResult(version, old_state["url"], relay_port, https_port)
 
-            release, release_created = self._stage_release(source, version)
+            release, _release_created = self._stage_release(source, version)
             self._write_relay_unit(release, relay_port)
             _atomic_link(release, self.current)
 
             if not old_state:
                 _atomic_write(self.snapshot_path, raw_snapshot if raw_snapshot.endswith("\n") else raw_snapshot + "\n")
                 self._add_serve_handler(https_port, relay_port)
-                serve_changed = True
                 actual, _ = self._serve_config()
                 if _canonical(actual) != _canonical(target_config):
                     raise InstallError("Tailscale Serve did not preserve the exact requested handler config")
@@ -935,7 +932,7 @@ class FriendInstaller:
         except BaseException as original_error:
             try:
                 self._restore_interrupted_transaction(transaction)
-            except Exception as recovery_error:
+            except Exception as recovery_error:  # health: allow BLE001 -- any secondary recovery failure must become a durable pending-state error
                 raise InstallError(
                     f"Install failed and durable recovery remains pending: {recovery_error}"
                 ) from original_error
@@ -992,7 +989,7 @@ class FriendInstaller:
             try:
                 self._restore_interrupted_transaction(transaction)
                 self.runner.run(["systemctl", "--user", "restart", RELAY_UNIT], check=False)
-            except Exception as recovery_error:
+            except Exception as recovery_error:  # health: allow BLE001 -- any secondary rollback recovery failure must become a durable pending-state error
                 raise InstallError(
                     f"Rollback failed and durable recovery remains pending: {recovery_error}"
                 ) from original_error

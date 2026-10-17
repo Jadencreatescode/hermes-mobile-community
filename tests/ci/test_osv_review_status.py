@@ -7,7 +7,7 @@ import json
 import shlex
 from pathlib import Path
 
-import yaml
+from hermes_yaml import safe_load
 
 _PATH = Path(__file__).resolve().parents[2] / "scripts" / "ci" / "osv_review_status.py"
 _SPEC = importlib.util.spec_from_file_location("osv_review_status", _PATH)
@@ -254,7 +254,7 @@ def test_invalid_json_fails_closed(tmp_path: Path) -> None:
 
 def test_workflow_exports_json_and_required_aggregate_consumes_review() -> None:
     workflow_path = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "osv-scanner.yml"
-    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    workflow = safe_load(workflow_path.read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
 
     assert jobs["scan"]["with"]["export-results"] is True

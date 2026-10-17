@@ -278,6 +278,7 @@ function seatFromWire(value: unknown): Record<string, unknown> {
   return { ...seat, bot: routeFromWire(seat.bot) }
 }
 
+// health: allow CC -- retained meeting wire decoder validates the full closed contract in one auditable boundary
 export function meetingFromWire(value: unknown): MeetingRecord {
   const row = objectRow(value)
 

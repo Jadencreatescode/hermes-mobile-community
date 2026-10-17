@@ -22,7 +22,7 @@ class TestPolicyValidateUrl:
         assert port == 443
 
     def test_allows_https_with_port(self) -> None:
-        scheme, host, port = policy.validate_url("https://example.com:8443")
+        _scheme, _host, port = policy.validate_url("https://example.com:8443")
         assert port == 8443
 
     def test_rejects_http_when_https_required(self) -> None:
@@ -30,7 +30,7 @@ class TestPolicyValidateUrl:
             policy.validate_url("http://example.com")
 
     def test_allows_http_when_https_not_required(self) -> None:
-        scheme, host, port = policy.validate_url(
+        scheme, _host, port = policy.validate_url(
             "http://example.com", require_https=False
         )
         assert scheme == "http"
@@ -123,13 +123,13 @@ class TestPolicyValidateUrl:
             )
 
     def test_allowlist_explicit_allow(self) -> None:
-        scheme, host, port = policy.validate_url(
+        _scheme, host, _port = policy.validate_url(
             "https://example.com", allowlist=frozenset({"example.com"})
         )
         assert host == "example.com"
 
     def test_allowlist_case_insensitive(self) -> None:
-        scheme, host, port = policy.validate_url(
+        _scheme, host, _port = policy.validate_url(
             "https://EXAMPLE.COM", allowlist=frozenset({"example.com"})
         )
         assert host == "example.com"
@@ -181,11 +181,15 @@ class TestPolicyResolveCapabilities:
 
 class TestPolicyFetchJson:
     @staticmethod
-    def mock_transport(monkeypatch, handler):
+    def mock_client(monkeypatch, handler):
         from tools import url_safety
 
         monkeypatch.setattr(
-            url_safety, "ssrf_safe_http_transport", lambda: httpx.MockTransport(handler)
+            url_safety,
+            "create_ssrf_safe_client",
+            lambda **kwargs: httpx.Client(
+                transport=httpx.MockTransport(handler), **kwargs
+            ),
         )
 
     def test_rejects_http(self) -> None:
@@ -197,7 +201,7 @@ class TestPolicyFetchJson:
             policy.fetch_json("https://192.168.1.1/test")
 
     def test_rejects_redirect(self, monkeypatch) -> None:
-        self.mock_transport(
+        self.mock_client(
             monkeypatch,
             lambda request: httpx.Response(
                 302, headers={"Location": "https://evil.example"}
@@ -209,7 +213,7 @@ class TestPolicyFetchJson:
             )
 
     def test_rejects_oversized_response(self, monkeypatch) -> None:
-        self.mock_transport(
+        self.mock_client(
             monkeypatch,
             lambda request: httpx.Response(
                 200, content=b"x" * (policy._MAX_RESPONSE_BYTES + 1)
@@ -221,7 +225,7 @@ class TestPolicyFetchJson:
             )
 
     def test_rejects_malformed_json(self, monkeypatch) -> None:
-        self.mock_transport(
+        self.mock_client(
             monkeypatch, lambda request: httpx.Response(200, content=b"not json")
         )
         with pytest.raises(ValueError, match="not valid JSON"):
@@ -230,7 +234,7 @@ class TestPolicyFetchJson:
             )
 
     def test_returns_empty_for_empty_body(self, monkeypatch) -> None:
-        self.mock_transport(
+        self.mock_client(
             monkeypatch, lambda request: httpx.Response(200, content=b"")
         )
         result = policy.fetch_json(
@@ -239,7 +243,7 @@ class TestPolicyFetchJson:
         assert result == {}
 
     def test_returns_parsed_json(self, monkeypatch) -> None:
-        self.mock_transport(
+        self.mock_client(
             monkeypatch,
             lambda request: httpx.Response(
                 200, content=json.dumps({"key": "value"}).encode()
@@ -250,7 +254,7 @@ class TestPolicyFetchJson:
         )
         assert result == {"key": "value"}
     def test_rejects_non_object_json(self, monkeypatch) -> None:
-        self.mock_transport(
+        self.mock_client(
             monkeypatch,
             lambda request: httpx.Response(200, json=["not", "an", "object"]),
         )

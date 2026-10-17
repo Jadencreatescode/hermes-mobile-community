@@ -8,6 +8,7 @@ Provides the backend surface the Make a Bot dialog needs:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 from pathlib import Path
@@ -38,7 +39,7 @@ class BotCreate(BaseModel):
 # Harness catalog helpers
 # ---------------------------------------------------------------------------
 
-_HARNESS_BINARIES: Dict[str, List[str]] = {
+_HARNESS_BINARIES: dict[str, list[str]] = {
     "hermes": ["hermes"],
     "pi": ["pi"],
     "claude_code": ["claude"],
@@ -49,7 +50,7 @@ _HARNESS_BINARIES: Dict[str, List[str]] = {
     "generic_a2a": [],
 }
 
-_HARNESS_LABELS: Dict[str, str] = {
+_HARNESS_LABELS: dict[str, str] = {
     "hermes": "Hermes",
     "pi": "Pi",
     "claude_code": "Claude Code",
@@ -60,7 +61,7 @@ _HARNESS_LABELS: Dict[str, str] = {
     "generic_a2a": "Generic A2A",
 }
 
-_HARNESS_DOWNLOAD_URLS: Dict[str, Optional[str]] = {
+_HARNESS_DOWNLOAD_URLS: dict[str, Optional[str]] = {
     "hermes": "https://github.com/NousResearch/Hermes-Agent#readme",
     "pi": "https://pi.dev/",
     "claude_code": "https://www.npmjs.com/package/@anthropic-ai/claude-code",
@@ -71,7 +72,7 @@ _HARNESS_DOWNLOAD_URLS: Dict[str, Optional[str]] = {
     "generic_a2a": None,
 }
 
-_HARNESS_INSTALL_HINTS: Dict[str, str] = {
+_HARNESS_INSTALL_HINTS: dict[str, str] = {
     "claude_code": "npm install -g @anthropic-ai/claude-code",
     "codex": "npm install -g @openai/codex",
     "cursor": "Install Cursor from https://cursor.com",
@@ -83,9 +84,9 @@ _HARNESS_INSTALL_HINTS: Dict[str, str] = {
 _PROTOCOL_HARNESSES: set = {"generic_a2a"}
 
 
-def _detect_native_harnesses() -> Dict[str, str]:
+def _detect_native_harnesses() -> dict[str, str]:
     """Return harness_id -> 'native' for binaries found on PATH."""
-    detected: Dict[str, str] = {}
+    detected: dict[str, str] = {}
     for harness_id, binaries in _HARNESS_BINARIES.items():
         for binary in binaries:
             if shutil.which(binary):
@@ -96,9 +97,9 @@ def _detect_native_harnesses() -> Dict[str, str]:
     return detected
 
 
-def _detect_registry_harnesses() -> Dict[str, str]:
+def _detect_registry_harnesses() -> dict[str, str]:
     """Return harness_id -> 'registry' for harnesses stored in HarnessRegistry."""
-    detected: Dict[str, str] = {}
+    detected: dict[str, str] = {}
     try:
         from plugins.harness_agents.registry import HarnessRegistry
 
@@ -114,16 +115,16 @@ def _detect_registry_harnesses() -> Dict[str, str]:
                     detected[harness] = "registry"
         finally:
             registry.close()
-    except Exception:
+    except Exception:  # health: allow BLE001 -- optional catalog discovery logs the traceback and degrades to an empty registry view
         _log.exception("Failed to read harness registry for catalog")
     return detected
 
 
-def _build_harness_catalog() -> List[Dict[str, Any]]:
+def _build_harness_catalog() -> list[dict[str, Any]]:
     """Build the harness catalog from native detection + registry."""
     native = _detect_native_harnesses()
     registry = _detect_registry_harnesses()
-    catalog: List[Dict[str, Any]] = []
+    catalog: list[dict[str, Any]] = []
 
     for harness_id in _HARNESS_BINARIES:
         detected = harness_id in native or harness_id in registry
@@ -149,20 +150,20 @@ def _build_harness_catalog() -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _build_model_catalog() -> List[Dict[str, str]]:
+def _build_model_catalog() -> list[dict[str, str]]:
     """Build the model catalog from configured providers (no network)."""
-    models: List[Dict[str, str]] = []
+    models: list[dict[str, str]] = []
     seen: set = set()
 
     try:
         from hermes_cli.config import cfg_get, load_config_readonly
 
         cfg = load_config_readonly()
-    except Exception:
+    except Exception:  # health: allow BLE001 -- optional model discovery logs the traceback and returns an empty catalog
         _log.exception("Failed to load config for model catalog")
         return models
 
-    providers: List[str] = []
+    providers: list[str] = []
 
     # Main provider
     main_provider = str(cfg_get(cfg, "model", "provider", default="") or "").strip()
@@ -204,7 +205,7 @@ def _build_model_catalog() -> List[Dict[str, str]]:
                         "provider": provider,
                     }
                 )
-        except Exception:
+        except Exception:  # health: allow BLE001 -- one provider cannot suppress other configured providers; the traceback is logged
             _log.exception("Failed to list models for provider %s", provider)
 
     return models
@@ -261,7 +262,7 @@ async def create_bot_endpoint(body: BotCreate):
             profiles_mod.create_wrapper_script(body.name)
     except (ValueError, FileExistsError, FileNotFoundError) as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+    except Exception as e:  # health: allow BLE001 -- the route logs unexpected profile backend failures before mapping them to HTTP 500
         _log.exception("POST /api/bots failed")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -276,16 +277,16 @@ async def create_bot_endpoint(body: BotCreate):
 
             token = set_hermes_home_override(str(path))
             try:
-                cfg = load_config()
+                cfg = await asyncio.to_thread(load_config)
                 bot_cfg = cfg.setdefault("bot", {})
                 if harness:
                     bot_cfg["harness"] = harness
                 if model:
                     bot_cfg["model"] = model
-                save_config(cfg)
+                await asyncio.to_thread(save_config, cfg)
             finally:
                 reset_hermes_home_override(token)
-        except Exception:
+        except Exception:  # health: allow BLE001 -- post-creation metadata remains best effort and logs its traceback; the usable profile is retained
             _log.exception("Writing bot harness/model for profile %s failed", body.name)
 
     return {

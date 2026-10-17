@@ -19,8 +19,8 @@ pairs = [
 ]
 
 for a, b in pairs:
-    print(f"  {repr(a)}.casefold() = {repr(a.casefold())}")
-    print(f"  {repr(b)}.casefold() = {repr(b.casefold())}")
+    print(f"  {a!r}.casefold() = {a.casefold()!r}")
+    print(f"  {b!r}.casefold() = {b.casefold()!r}")
     print(f"  equal: {a.casefold() == b.casefold()}")
     print()
 

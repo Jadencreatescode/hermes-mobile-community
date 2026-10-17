@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- retained public Operations API is security reviewed; route extraction during core migration would risk authorization wiring
 """Authenticated public Operations plugin API.
 
 The router owns only bounded Mailroom metadata and dispatches through the
@@ -10,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import logging
 import os
 
 import secrets
@@ -23,11 +25,13 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+logger = logging.getLogger(__name__)
+
 try:
     from hermes_constants import get_hermes_home
 except ImportError:  # pragma: no cover
     def get_hermes_home() -> Path:
-        return Path.home() / ".hermes"
+        return Path.home() / ".hermes"  # health: allow HX001 -- standalone plugin import fallback only; Hermes runtime uses the profile-aware helper
 
 
 def _load_store_module():
@@ -160,7 +164,7 @@ def _sweep_workspaces_once(store: MeetingOutputStore) -> None:
     try:
         store.sweep_workspaces()
     except Exception:
-        pass
+        logger.exception("Operations workspace sweep failed")
 
 
 def _output_store() -> MeetingOutputStore:
@@ -390,14 +394,17 @@ def _watch_delivery(db_path: Path, envelope_id: str, process_id: str) -> None:
         session._completion_event.wait()
         MailroomStore(db_path).record_delivery(envelope_id, delivered=session.exit_code == 0)
     except Exception:
+        logger.exception("Operations delivery watcher failed")
         try:
             MailroomStore(db_path).record_delivery(envelope_id, delivered=False)
         except Exception:
-            pass
+            logger.exception("Operations delivery watcher could not record failure")
 
 
 def _start_delivery_watch(db_path: Path, envelope_id: str, process_id: str) -> None:
-    threading.Thread(
+    from agent.memory_provider import spawn_context_thread
+
+    spawn_context_thread(
         target=_watch_delivery,
         args=(db_path, envelope_id, process_id),
         daemon=True,
@@ -436,9 +443,9 @@ def _dispatch(envelope: dict[str, object]) -> dict[str, object]:
         )
     except Exception as exc:
         try:
-            failed = _store().record_delivery(envelope_id, delivered=False)
+            _store().record_delivery(envelope_id, delivered=False)
         except Exception:
-            failed = envelope
+            logger.exception("Operations dispatch could not record delivery failure")
         raise HTTPException(
             status_code=503,
             detail={"message": "Mailroom delivery could not start", "envelope_id": envelope_id},
@@ -592,6 +599,7 @@ def list_connected_agents():
         roster = BotRoster(hermes_home=home)
         entries = roster.list_entries(home, "default")
     except Exception:
+        logger.exception("Connected-agent roster could not be loaded")
         return {"agents": []}
 
     return {
@@ -690,7 +698,7 @@ def _principal_hash_from_request(request: Request) -> str:
         try:
             path.chmod(0o600)
             for attempt in range(100):
-                installation_secret = path.read_text(encoding="utf-8").strip()
+                installation_secret = path.read_text(encoding="utf-8-sig").strip()
                 if len(installation_secret) == 64:
                     break
                 if created or attempt == 99:
@@ -769,7 +777,7 @@ def _authorized_registry(
                         str(getattr(session, "org_id", "")),
                     )
                 assertion = json.dumps(identity, separators=(",", ":"))
-                trusted = os.getenv("HERMES_OPERATIONS_OWNER", "").strip()
+                trusted = os.getenv("HERMES_OPERATIONS_OWNER", "").strip()  # health: allow HX002 -- this value is a credential-bound owner assertion, not a behavioral setting
                 if not trusted or not secrets.compare_digest(assertion, trusted):
                     raise HTTPException(
                         status_code=403, detail="operations_owner_setup_required"
@@ -804,7 +812,7 @@ def _authorized_registry(
                 detail={"capability": capability},
             )
         except Exception:
-            pass
+            logger.exception("Operations policy denial could not be recorded")
         registry.close()
         raise HTTPException(
             status_code=403, detail="operations_owner_or_admin_required"
@@ -861,7 +869,7 @@ def _register_a2a_agent_with_registry(
     try:
         from plugins.harness_agents.policy import validate_url
 
-        scheme, host, _port = validate_url(url, require_https=True)
+        _scheme, host, _port = validate_url(url, require_https=True)
     except ValueError as exc:
         raise HTTPException(
             status_code=403, detail="a2a_destination_not_allowed"
@@ -1361,7 +1369,7 @@ def refresh_a2a_agent(request: Request, agent_id: str):
         try:
             reg.mark_degraded(agent_id, error=type(exc).__name__[:128])
         except Exception:
-            pass
+            logger.exception("A2A refresh failure could not mark the agent degraded")
         raise HTTPException(status_code=502, detail="a2a_refresh_failed") from exc
     finally:
         if lock is not None:

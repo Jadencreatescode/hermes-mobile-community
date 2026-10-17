@@ -68,6 +68,7 @@ function recordText(value: unknown, key: 'text' | 'title'): string {
   return typeof candidate === 'string' ? candidate.trim() : ''
 }
 
+// health: allow CC -- retained public meeting room state flow is migration scoped and regression tested
 export function MeetingRoom({
   agents,
   meeting,

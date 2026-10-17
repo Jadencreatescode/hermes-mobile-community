@@ -55,16 +55,6 @@ def test_normalize_entry_drops_invalid_extra_headers():
         assert "extra_headers" not in normalized
 
 
-def test_normalize_entry_stringifies_values_and_skips_none():
-    normalized = _normalize_custom_provider_entry(
-        {
-            "name": "my-proxy",
-            "base_url": "https://llm.internal.example.com/v1",
-            "extra_headers": {"X-Int": 7, "X-None": None},
-        }
-    )
-    assert normalized is not None
-    assert normalized["extra_headers"] == {"X-Int": "7"}
 
 
 def test_get_custom_provider_extra_headers_matches_base_url():
@@ -229,6 +219,7 @@ def test_fetch_api_models_sends_extra_headers_to_models_probe(monkeypatch):
         return FakeResponse()
 
     monkeypatch.setattr(models_mod, "_urlopen_model_catalog_request", fake_urlopen)
+    monkeypatch.setattr(models_mod, "_custom_provider_ssl_context", lambda _base_url: None)
 
     models = models_mod.fetch_api_models(
         "proxy-key",

@@ -117,7 +117,7 @@ class TestPolicy:
             policy.validate_url("https://example.com", allowlist=frozenset({"other.com"}))
 
     def test_validate_url_allowlist_explicit_allow(self) -> None:
-        scheme, host, port = policy.validate_url(
+        _scheme, host, _port = policy.validate_url(
             "https://example.com", allowlist=frozenset({"example.com"})
         )
         assert host == "example.com"

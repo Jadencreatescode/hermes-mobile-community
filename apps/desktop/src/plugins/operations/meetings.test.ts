@@ -18,8 +18,8 @@ import {
 } from './meetings'
 
 const participants = [
-  { connectionId: 'vps', profile: 'chair' },
-  { connectionId: 'bridge', profile: 'research' }
+  { connectionId: 'gateway-a', profile: 'chair' },
+  { connectionId: 'gateway-b', profile: 'research' }
 ]
 
 const a2aParticipant = { connectionId: 'a2a', profile: 'agent-1' }
@@ -67,7 +67,7 @@ describe('Operations structured meeting client', () => {
       { requestProfile } as never,
       { ...draft(), state: 'running' as const },
       participants[1],
-      { bridge: 'remote' },
+      { 'gateway-b': 'remote' },
       text,
       []
     )).rejects.toThrow('1 through 8000')
@@ -179,7 +179,7 @@ describe('Operations structured meeting client', () => {
   it('queues a marked native prompt on the exact runtime session and shows the visible prompt', async () => {
     const meeting = {
       ...draft(),
-      runnerSessions: { 'bridge::research': 'stored-research' },
+      runnerSessions: { 'gateway-b::research': 'stored-research' },
       state: 'running' as const
     }
 
@@ -209,14 +209,14 @@ describe('Operations structured meeting client', () => {
       { requestProfile } as never,
       meeting,
       participants[1],
-      { bridge: 'remote' },
+      { 'gateway-b': 'remote' },
       '  Check the final evidence.  ',
       []
     )
 
     expect(requestProfile).toHaveBeenNthCalledWith(
       2,
-      { connectionId: 'bridge', mode: 'remote', profile: 'research', targetProfile: 'research' },
+      { connectionId: 'gateway-b', mode: 'remote', profile: 'research', targetProfile: 'research' },
       'prompt.submit',
       {
         queued: true,
@@ -281,7 +281,7 @@ describe('Operations structured meeting client', () => {
   it('reads the hidden native participant conversation with meeting-safe presentation', async () => {
     const meeting = {
       ...draft(),
-      runnerSessions: { 'bridge::research': 'stored-research' },
+      runnerSessions: { 'gateway-b::research': 'stored-research' },
       state: 'running' as const
     }
 
@@ -298,12 +298,12 @@ describe('Operations structured meeting client', () => {
       { requestProfile } as never,
       meeting,
       participants[1],
-      { bridge: 'remote' },
+      { 'gateway-b': 'remote' },
       []
     )
 
     expect(requestProfile).toHaveBeenCalledWith(
-      { connectionId: 'bridge', mode: 'remote', profile: 'research', targetProfile: 'research' },
+      { connectionId: 'gateway-b', mode: 'remote', profile: 'research', targetProfile: 'research' },
       'session.resume',
       {
         enabled_toolsets: ['clarify'],
@@ -329,7 +329,7 @@ describe('Operations structured meeting client', () => {
   it('rejects a generic connected participant instead of routing it as native', async () => {
     const meeting = {
       ...draft(),
-      runnerSessions: { 'bridge::research': 'stored-research' },
+      runnerSessions: { 'gateway-b::research': 'stored-research' },
       state: 'running' as const
     }
 
@@ -337,9 +337,9 @@ describe('Operations structured meeting client', () => {
 
     const connectedAgent = {
       ...a2aAgent,
-      id: 'bridge::research',
+      id: 'gateway-b::research',
       profile: 'research',
-      sourceId: 'bridge',
+      sourceId: 'gateway-b',
       sourceKind: 'connected'
     }
 
@@ -347,7 +347,7 @@ describe('Operations structured meeting client', () => {
       { requestProfile } as never,
       meeting,
       participants[1],
-      { bridge: 'remote' },
+      { 'gateway-b': 'remote' },
       [connectedAgent]
     )).rejects.toThrow('unsupported')
     expect(requestProfile).not.toHaveBeenCalled()
@@ -356,7 +356,7 @@ describe('Operations structured meeting client', () => {
   it('rejects a native participant when its exact connection mode is missing', async () => {
     const meeting = {
       ...draft(),
-      runnerSessions: { 'bridge::research': 'stored-research' },
+      runnerSessions: { 'gateway-b::research': 'stored-research' },
       state: 'running' as const
     }
 
@@ -379,7 +379,7 @@ describe('Operations structured meeting client', () => {
       { requestProfile } as never,
       { ...draft(), state: 'running' as const },
       participants[1],
-      { bridge: 'remote' },
+      { 'gateway-b': 'remote' },
       []
     )
 
@@ -399,11 +399,11 @@ describe('Operations structured meeting client', () => {
       { requestProfile } as never,
       {
         ...draft(),
-        runnerSessions: { 'bridge::intruder': 'stored-intruder' },
+        runnerSessions: { 'gateway-b::intruder': 'stored-intruder' },
         state: 'running' as const
       },
-      { connectionId: 'bridge', profile: 'intruder' },
-      { bridge: 'remote' },
+      { connectionId: 'gateway-b', profile: 'intruder' },
+      { 'gateway-b': 'remote' },
       []
     )).rejects.toThrow('not seated')
     expect(requestProfile).not.toHaveBeenCalled()
@@ -430,7 +430,7 @@ describe('Operations structured meeting client', () => {
       ...meetingToWire(draft()),
       current_round: 1,
       round_run: {
-        participant: { connection: 'bridge', profile: 'research' },
+        participant: { connection: 'gateway-b', profile: 'research' },
         round: 1,
         started_at: 1_800_000_000_123
       },
@@ -444,7 +444,7 @@ describe('Operations structured meeting client', () => {
     })
     expect(meetingToWire(parsed)).toEqual(expect.objectContaining({
       round_run: {
-        participant: { connection: 'bridge', profile: 'research' },
+        participant: { connection: 'gateway-b', profile: 'research' },
         round: 1,
         started_at: 1_800_000_000_123
       }
@@ -466,10 +466,10 @@ describe('Operations structured meeting client', () => {
 
   it.each([
     { caseName: 'absent', marker: undefined },
-    { caseName: 'partial', marker: { participant: { connection: 'bridge', profile: 'research' }, round: 1 } },
+    { caseName: 'partial', marker: { participant: { connection: 'gateway-b', profile: 'research' }, round: 1 } },
     { caseName: 'invalid participant', marker: { participant: { connection: '', profile: 'research' }, round: 1, started_at: 1 } },
-    { caseName: 'non-integer round', marker: { participant: { connection: 'bridge', profile: 'research' }, round: 1.5, started_at: 1 } },
-    { caseName: 'non-positive timestamp', marker: { participant: { connection: 'bridge', profile: 'research' }, round: 1, started_at: 0 } }
+    { caseName: 'non-integer round', marker: { participant: { connection: 'gateway-b', profile: 'research' }, round: 1.5, started_at: 1 } },
+    { caseName: 'non-positive timestamp', marker: { participant: { connection: 'gateway-b', profile: 'research' }, round: 1, started_at: 0 } }
   ])('drops an $caseName round run marker from the public wire shape', ({ marker }) => {
     expect(meetingFromWire({
       ...meetingToWire(draft()),
@@ -533,7 +533,7 @@ describe('Operations structured meeting client', () => {
       {
         caseName: 'for a participant no longer seated',
         expected: false,
-        meeting: { ...running, roundRun: { ...freshMarker, participant: { connectionId: 'bridge', profile: 'former' } } }
+        meeting: { ...running, roundRun: { ...freshMarker, participant: { connectionId: 'gateway-b', profile: 'former' } } }
       },
       { caseName: 'while waiting', expected: false, meeting: { ...running, state: 'waiting' } },
       { caseName: 'without a marker', expected: false, meeting: { ...running, roundRun: undefined } }
@@ -550,7 +550,7 @@ describe('Operations structured meeting client', () => {
     const wire = {
       action_items: [],
       agenda: 'Choose a release plan',
-      chair: { connection: 'vps', profile: 'chair' },
+      chair: { connection: 'gateway-a', profile: 'chair' },
       contributions: [],
       current_round: 0,
       decisions: [],
@@ -559,10 +559,10 @@ describe('Operations structured meeting client', () => {
       id: 'meeting-1',
       max_rounds: 3,
       participants: [
-        { connection: 'vps', profile: 'chair' },
-        { connection: 'bridge', profile: 'research' }
+        { connection: 'gateway-a', profile: 'chair' },
+        { connection: 'gateway-b', profile: 'research' }
       ],
-      source: { connection: 'vps', profile: 'chair' },
+      source: { connection: 'gateway-a', profile: 'chair' },
       state: 'draft',
       title: 'Release council'
     }
@@ -598,8 +598,8 @@ describe('Operations structured meeting client', () => {
           id: 'meeting-1',
           max_rounds: 3,
           participants: [
-            { connection: 'vps', profile: 'chair' },
-            { connection: 'bridge', profile: 'research' }
+            { connection: 'gateway-a', profile: 'chair' },
+            { connection: 'gateway-b', profile: 'research' }
           ]
         })
       }
@@ -661,11 +661,11 @@ describe('Operations structured meeting client', () => {
       .mockRejectedValueOnce(Object.assign(new Error('409 Meeting version conflict'), { status: 409 }))
       .mockResolvedValueOnce({ meeting: {
         ...authoritative,
-        source: { connection: 'vps', profile: 'chair' },
-        chair: { connection: 'vps', profile: 'chair' },
+        source: { connection: 'gateway-a', profile: 'chair' },
+        chair: { connection: 'gateway-a', profile: 'chair' },
         participants: [
-          { connection: 'vps', profile: 'chair' },
-          { connection: 'bridge', profile: 'research' }
+          { connection: 'gateway-a', profile: 'chair' },
+          { connection: 'gateway-b', profile: 'research' }
         ],
         max_rounds: 3,
         current_round: 1,
@@ -686,7 +686,7 @@ describe('Operations structured meeting client', () => {
       ...draft(),
       contributions: [{
         evidenceRefs: [],
-        id: 'meeting-1:r1:vps:chair',
+        id: 'meeting-1:r1:gateway-a:chair',
         kind: 'pass',
         participant: participants[0],
         round: 1
@@ -741,7 +741,7 @@ describe('Operations structured meeting client', () => {
       ...draft(),
       contributions: [{
         evidenceRefs: [],
-        id: 'meeting-1:r1:vps:chair',
+        id: 'meeting-1:r1:gateway-a:chair',
         kind: 'pass',
         participant: participants[0],
         round: 1
@@ -806,7 +806,7 @@ describe('Operations structured meeting client', () => {
         { requestProfile } as never,
         running,
         5,
-        { vps: 'remote' },
+        { 'gateway-a': 'remote' },
         { agents: [a2aAgent], now: () => 2_000_000_000_000 }
       )
 
@@ -853,7 +853,7 @@ describe('Operations structured meeting client', () => {
       ...draft(),
       contributions: [{
         evidenceRefs: [],
-        id: 'meeting-1:r1:vps:chair',
+        id: 'meeting-1:r1:gateway-a:chair',
         kind: 'pass',
         participant: participants[0],
         round: 1
@@ -898,7 +898,7 @@ describe('Operations structured meeting client', () => {
       { requestProfile } as never,
       running,
       5,
-      { vps: 'remote' },
+      { 'gateway-a': 'remote' },
       { agents: [a2aAgent], now: () => 2_000_000_000_000 }
     )
 
@@ -937,7 +937,7 @@ describe('Operations structured meeting client', () => {
     const running: MeetingRecord = {
       ...draft(),
       contributions: [{
-        id: 'meeting-1:r1:vps:chair',
+        id: 'meeting-1:r1:gateway-a:chair',
         round: 1,
         participant: participants[0],
         kind: 'speak',
@@ -1000,7 +1000,7 @@ describe('Operations structured meeting client', () => {
       { requestProfile } as never,
       running,
       5,
-      { bridge: 'remote', vps: 'remote' },
+      { 'gateway-b': 'remote', 'gateway-a': 'remote' },
       { now: () => 2_000_000_000_000, onParticipantStart, onProgress }
     )
 
@@ -1022,7 +1022,7 @@ describe('Operations structured meeting client', () => {
       expectedVersion: 5,
       record: {
         round_run: {
-          participant: { connection: 'bridge', profile: 'research' },
+          participant: { connection: 'gateway-b', profile: 'research' },
           round: 1,
           started_at: 2_000_000_000_000
         }
@@ -1031,11 +1031,11 @@ describe('Operations structured meeting client', () => {
     expect(writes[1].expectedVersion).toBe(6)
     expect(writes[1].record).not.toHaveProperty('round_run')
     expect(writes[1].record).toMatchObject({
-      runner_sessions: { 'bridge::research': 'stored-research' }
+      runner_sessions: { 'gateway-b::research': 'stored-research' }
     })
     expect(result).toMatchObject({ conflict: false, pending: null, version: 7 })
     expect(result.meeting.roundRun).toBeUndefined()
-    expect(result.meeting.runnerSessions).toEqual({ 'bridge::research': 'stored-research' })
+    expect(result.meeting.runnerSessions).toEqual({ 'gateway-b::research': 'stored-research' })
     expect(onParticipantStart).toHaveBeenCalledOnce()
     expect(onProgress).toHaveBeenCalledOnce()
   })
@@ -1047,7 +1047,7 @@ describe('Operations structured meeting client', () => {
       ...draft(),
       contributions: [{
         evidenceRefs: [],
-        id: 'meeting-1:r1:vps:chair',
+        id: 'meeting-1:r1:gateway-a:chair',
         kind: 'pass',
         participant: participants[0],
         round: 1
@@ -1060,7 +1060,7 @@ describe('Operations structured meeting client', () => {
         reason: 'Participant requested clarification.',
         session: 'stored-research'
       },
-      runnerSessions: { 'bridge::research': 'stored-research' },
+      runnerSessions: { 'gateway-b::research': 'stored-research' },
       state: 'waiting'
     }
 
@@ -1096,7 +1096,7 @@ describe('Operations structured meeting client', () => {
       { requestProfile } as never,
       waiting,
       5,
-      { bridge: 'remote', vps: 'remote' },
+      { 'gateway-b': 'remote', 'gateway-a': 'remote' },
       { now: () => 2_000_000_000_000 }
     )
 
@@ -1110,7 +1110,7 @@ describe('Operations structured meeting client', () => {
     expect(writes[0]).toMatchObject({
       contributions: expect.arrayContaining([
         expect.objectContaining({
-          participant: { connection: 'bridge', profile: 'research' },
+          participant: { connection: 'gateway-b', profile: 'research' },
           text: 'Use the verified candidate.'
         })
       ]),
@@ -1138,7 +1138,7 @@ describe('Operations structured meeting client', () => {
       { requestProfile } as never,
       running,
       5,
-      { bridge: 'remote', vps: 'remote' },
+      { 'gateway-b': 'remote', 'gateway-a': 'remote' },
       { now: () => now }
     )).rejects.toThrow('round is already running')
     expect(rest).not.toHaveBeenCalled()
@@ -1195,7 +1195,7 @@ describe('Operations structured meeting client', () => {
       { requestProfile } as never,
       running,
       5,
-      { bridge: 'remote', vps: 'remote' },
+      { 'gateway-b': 'remote', 'gateway-a': 'remote' },
       { now: () => now }
     )
 
@@ -1203,7 +1203,7 @@ describe('Operations structured meeting client', () => {
       expectedVersion: 5,
       record: {
         round_run: {
-          participant: { connection: 'vps', profile: 'chair' },
+          participant: { connection: 'gateway-a', profile: 'chair' },
           round: 1,
           started_at: now
         }
@@ -1239,7 +1239,7 @@ describe('Operations structured meeting client', () => {
       { requestProfile } as never,
       running,
       5,
-      { bridge: 'remote', vps: 'remote' },
+      { 'gateway-b': 'remote', 'gateway-a': 'remote' },
       { now: () => 2_000_000_000_000 }
     )
 
@@ -1295,7 +1295,7 @@ describe('Operations structured meeting client', () => {
         { requestProfile } as never,
         running,
         5,
-        { bridge: 'remote', vps: 'remote' },
+        { 'gateway-b': 'remote', 'gateway-a': 'remote' },
         { now: () => 2_000_000_000_000 }
       )
     } catch (error) {
@@ -1336,12 +1336,12 @@ describe('Operations structured meeting client', () => {
     })
 
     const result = await runMeetingRound({ requestProfile } as never, running, 5, {
-      vps: 'remote',
-      bridge: 'remote'
+      'gateway-a': 'remote',
+      'gateway-b': 'remote'
     })
 
     expect(requestProfile).toHaveBeenCalledWith(
-      { connectionId: 'vps', mode: 'remote', profile: 'chair', targetProfile: 'chair' },
+      { connectionId: 'gateway-a', mode: 'remote', profile: 'chair', targetProfile: 'chair' },
       'session.create',
       expect.objectContaining({
         enabled_toolsets: ['clarify'],
@@ -1392,8 +1392,8 @@ describe('Operations structured meeting client', () => {
     })
 
     const result = await runMeetingRound({ requestProfile } as never, running, 5, {
-      vps: 'remote',
-      bridge: 'remote'
+      'gateway-a': 'remote',
+      'gateway-b': 'remote'
     })
 
     const put = rest.mock.calls.find(([, options]) => options?.body) as [string, { body: { record: Record<string, unknown> } }]
@@ -1418,10 +1418,10 @@ describe('Operations structured meeting client', () => {
       state: 'completed' as const
     }
 
-    await convertMeetingActions({ requestProfile } as never, completed, { bridge: 'remote' })
+    await convertMeetingActions({ requestProfile } as never, completed, { 'gateway-b': 'remote' })
 
     expect(requestProfile).toHaveBeenCalledWith(
-      { connectionId: 'bridge', mode: 'remote', profile: 'research', targetProfile: 'research' },
+      { connectionId: 'gateway-b', mode: 'remote', profile: 'research', targetProfile: 'research' },
       'cli.exec',
       expect.objectContaining({
         argv: expect.arrayContaining(['--idempotency-key', 'meeting:meeting-1:action:publish'])

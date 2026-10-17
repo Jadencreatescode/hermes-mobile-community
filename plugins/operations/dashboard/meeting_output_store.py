@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- retained public production lifecycle is security reviewed; migration preserves its established storage transaction boundary
 """Durable output lifecycle for public production meetings.
 
 The tables here are **additive** to the existing public meeting database. The

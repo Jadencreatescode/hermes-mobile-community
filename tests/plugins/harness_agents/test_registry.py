@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from pathlib import Path
 
@@ -32,6 +33,19 @@ class TestAgentLock:
     def test_rejects_null_in_agent_id(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="agent id is required"):
             registry.acquire_agent_operation_lock(tmp_path / "agents.db", "a\x00b")
+
+    @pytest.mark.platforms("posix")
+    def test_rejects_symlink_lock_file(self, tmp_path: Path) -> None:
+        lock_root = tmp_path / "harness-agent-locks"
+        lock_root.mkdir()
+        target = tmp_path / "target"
+        target.write_bytes(b"unchanged")
+        digest = hashlib.sha256(b"agent-1").hexdigest()
+        (lock_root / f"{digest}.lock").symlink_to(target)
+
+        with pytest.raises(OSError):
+            registry.acquire_agent_operation_lock(tmp_path / "agents.db", "agent-1")
+        assert target.read_bytes() == b"unchanged"
 
 
 class TestRegistryCreate:

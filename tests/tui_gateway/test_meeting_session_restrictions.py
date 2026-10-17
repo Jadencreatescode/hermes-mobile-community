@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import tui_gateway.server as server
+from tui_gateway import server
 
 
 MEETING_PARAMS = {
@@ -71,7 +71,7 @@ def test_session_create_threads_meeting_restrictions_into_agent_build(monkeypatc
         ("_notify_session_boundary", lambda *args, **kwargs: None),
         ("_session_info", lambda *args, **kwargs: {}),
         ("_probe_config_health", lambda _cfg: None),
-        ("_load_cfg", lambda: {}),
+        ("_load_cfg", dict),
         ("_emit", lambda *args, **kwargs: None),
         ("_schedule_mcp_late_refresh", lambda *args, **kwargs: None),
         ("_child_run_active", lambda _key: False),

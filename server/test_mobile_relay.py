@@ -7,7 +7,7 @@ from unittest.mock import patch
 from aiohttp import WSCloseCode, web
 from aiohttp.test_utils import TestClient, TestServer
 
-import server.mobile_relay as mobile_relay
+from server import mobile_relay
 from server.mobile_relay import create_relay_app
 
 
@@ -126,6 +126,20 @@ class MobileRelayTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 200)
         self.assertIn("Hermes Mobile", await response.text())
+
+    def test_rejects_symlinked_static_entries_before_serving(self):
+        with tempfile.TemporaryDirectory() as root_name, tempfile.TemporaryDirectory() as outside_name:
+            root = Path(root_name)
+            outside = Path(outside_name)
+            (root / "index.html").write_text("<main>Hermes Mobile</main>", encoding="utf-8")
+            (outside / "private.txt").write_text("private\n", encoding="utf-8")
+            (root / "escape").symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                create_relay_app(
+                    static_root=root,
+                    upstream=str(self.primary_server.make_url("/")),
+                )
 
     async def test_serves_single_backend_runtime_descriptor_without_proxying(self):
         response = await self.client.get("/.well-known/hermes-mobile-runtime.json")

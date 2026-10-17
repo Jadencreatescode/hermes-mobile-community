@@ -5,18 +5,18 @@ import { loadOperationsRoutines, operationsRoutineEmptyMessage } from './routine
 describe('loadOperationsRoutines', () => {
   it('aggregates every public profile route without losing source identity', async () => {
     const routes = [
-      { connectionId: 'vps-id', mode: 'remote' as const, profile: 'ops-alias', targetProfile: 'remote-ops' },
-      { connectionId: 'bridge-id', mode: 'remote' as const, profile: 'default', targetProfile: 'default' }
+      { connectionId: 'gateway-a', mode: 'remote' as const, profile: 'ops-alias', targetProfile: 'remote-ops' },
+      { connectionId: 'gateway-b', mode: 'remote' as const, profile: 'default', targetProfile: 'default' }
     ]
 
     const host = {
       connections: vi.fn().mockResolvedValue([
-        { id: 'vps-id', kind: 'remote', label: 'VPS' },
-        { id: 'bridge-id', kind: 'ssh', label: 'Bridge' }
+        { id: 'gateway-a', kind: 'remote', label: 'Gateway A' },
+        { id: 'gateway-b', kind: 'ssh', label: 'Gateway B' }
       ]),
       profileRoutes: vi.fn().mockResolvedValue(routes),
       requestProfile: vi.fn(async (route: (typeof routes)[number]) =>
-        route.connectionId === 'vps-id'
+        route.connectionId === 'gateway-a'
           ? { jobs: [{ enabled: true, job_id: 'daily', name: 'Daily review', schedule: '0 8 * * *' }] }
           : { jobs: [] }
       )
@@ -30,8 +30,8 @@ describe('loadOperationsRoutines', () => {
     })
     expect(result.routines).toEqual([
       {
-        connectionId: 'vps-id',
-        connectionLabel: 'VPS',
+        connectionId: 'gateway-a',
+        connectionLabel: 'Gateway A',
         enabled: true,
         jobId: 'daily',
         name: 'Daily review',
@@ -45,19 +45,19 @@ describe('loadOperationsRoutines', () => {
 
   it('reports failed profile sources separately from successful empty sources', async () => {
     const routes = [
-      { connectionId: 'vps-id', mode: 'remote' as const, profile: 'ops', targetProfile: 'ops' },
-      { connectionId: 'bridge-id', mode: 'remote' as const, profile: 'default', targetProfile: 'default' }
+      { connectionId: 'gateway-a', mode: 'remote' as const, profile: 'ops', targetProfile: 'ops' },
+      { connectionId: 'gateway-b', mode: 'remote' as const, profile: 'default', targetProfile: 'default' }
     ]
 
     const host = {
       connections: vi.fn().mockResolvedValue([
-        { id: 'vps-id', kind: 'remote', label: 'VPS' },
-        { id: 'bridge-id', kind: 'ssh', label: 'Bridge' },
-        { id: 'helm-id', kind: 'ssh', label: 'Helm' }
+        { id: 'gateway-a', kind: 'remote', label: 'Gateway A' },
+        { id: 'gateway-b', kind: 'ssh', label: 'Gateway B' },
+        { id: 'gateway-c', kind: 'ssh', label: 'Gateway C' }
       ]),
       profileRoutes: vi.fn().mockResolvedValue(routes),
       requestProfile: vi.fn(async (route: (typeof routes)[number]) => {
-        if (route.connectionId === 'bridge-id') {
+        if (route.connectionId === 'gateway-b') {
           throw new Error('gateway timeout')
         }
 
@@ -70,13 +70,13 @@ describe('loadOperationsRoutines', () => {
     expect(result.routines).toEqual([])
     expect(result.failures).toEqual([
       {
-        connectionId: 'helm-id',
-        connectionLabel: 'Helm',
+        connectionId: 'gateway-c',
+        connectionLabel: 'Gateway C',
         error: 'Profile inventory unavailable'
       },
       {
-        connectionId: 'bridge-id',
-        connectionLabel: 'Bridge',
+        connectionId: 'gateway-b',
+        connectionLabel: 'Gateway B',
         error: 'gateway timeout',
         profile: 'default',
         targetProfile: 'default'
@@ -96,8 +96,8 @@ describe('loadOperationsRoutines', () => {
       operationsRoutineEmptyMessage({
         failures: [
           {
-            connectionId: 'bridge-id',
-            connectionLabel: 'Bridge',
+            connectionId: 'gateway-b',
+            connectionLabel: 'Gateway B',
             error: 'gateway timeout',
             profile: 'default',
             targetProfile: 'default'
@@ -106,6 +106,6 @@ describe('loadOperationsRoutines', () => {
         routines: [],
         successfulSources: 1
       })
-    ).toBe('Routine reads failed for Bridge / @default.')
+    ).toBe('Routine reads failed for Gateway B / @default.')
   })
 })

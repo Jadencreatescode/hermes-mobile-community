@@ -1,5 +1,6 @@
 import { chromium } from 'playwright'
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 
 const password = process.env.HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
@@ -7,7 +8,7 @@ const username = process.env.HERMES_DASHBOARD_BASIC_AUTH_USERNAME || 'boss'
 const baseUrl = process.env.HERMES_MOBILE_TEST_URL || 'http://127.0.0.1:4175'
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH
 const evidenceDir = path.resolve(process.env.HERMES_MOBILE_EVIDENCE_DIR || 'artifacts/evidence/media')
-const backendFile = process.env.HERMES_MOBILE_BACKEND_TEST_FILE || '/tmp/hermes-mobile-download-proof.txt'
+const backendFile = process.env.HERMES_MOBILE_BACKEND_TEST_FILE || path.join(os.tmpdir(), 'hermes-mobile-download-proof.txt')
 const outputFile = path.join(evidenceDir, 'downloaded-proof.txt')
 const expectedDownload = 'Hermes mobile authenticated download proof.\n'
 if (!password) throw new Error('HERMES_DASHBOARD_BASIC_AUTH_PASSWORD is required')

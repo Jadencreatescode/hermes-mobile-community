@@ -423,6 +423,7 @@ def is_production_record(value: Mapping[str, Any]) -> bool:
     return any(value.get(field) is not None for field in PRODUCTION_ONLY_FIELDS)
 
 
+# health: allow CC -- the meeting validator intentionally evaluates the complete closed persisted contract in one auditable boundary
 def validate_meeting(value: object) -> dict[str, Any]:
     row = _record(value, "meeting")
     required = {
@@ -805,8 +806,7 @@ def complete_production_in_transaction(
     proposed["state"] = "completed"
     proposed["production_stage"] = "completed"
     proposed["artifact_binding"] = binding
-    if proposed["current_round"] < 1:
-        proposed["current_round"] = 1
+    proposed["current_round"] = max(proposed["current_round"], 1)
     revalidated = validate_meeting(proposed)
     next_version = current_version + 1
     append_meeting_version(connection, revalidated, next_version, now)

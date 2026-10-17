@@ -9,11 +9,11 @@ const agents: OperationsAgentModel[] = [
   {
     assignments: [],
     displayName: 'Chair Bot',
-    id: 'vps::chair',
+    id: 'gateway-a::chair',
     profile: 'chair',
-    sourceId: 'vps',
+    sourceId: 'gateway-a',
     sourceKind: 'remote',
-    sourceLabel: 'VPS',
+    sourceLabel: 'Gateway A',
     state: 'working',
     workSummary: 'Chairing the release decision'
   },
@@ -31,11 +31,11 @@ const agents: OperationsAgentModel[] = [
   {
     assignments: [],
     displayName: 'Review Bot',
-    id: 'vps::review',
+    id: 'gateway-a::review',
     profile: 'review',
-    sourceId: 'vps',
+    sourceId: 'gateway-a',
     sourceKind: 'remote',
-    sourceLabel: 'VPS',
+    sourceLabel: 'Gateway A',
     state: 'reviewing',
     workSummary: 'Reviewing evidence'
   },
@@ -55,7 +55,7 @@ const agents: OperationsAgentModel[] = [
 const meeting: MeetingRecord = {
   actionItems: [],
   agenda: 'Choose the verified release plan.',
-  chair: { connectionId: 'vps', profile: 'chair' },
+  chair: { connectionId: 'gateway-a', profile: 'chair' },
   contributions: [],
   currentRound: 1,
   decisions: [],
@@ -64,11 +64,11 @@ const meeting: MeetingRecord = {
   id: 'meeting-1',
   maxRounds: 3,
   participants: [
-    { connectionId: 'vps', profile: 'chair' },
+    { connectionId: 'gateway-a', profile: 'chair' },
     { connectionId: 'local', profile: 'research' },
-    { connectionId: 'vps', profile: 'review' }
+    { connectionId: 'gateway-a', profile: 'review' }
   ],
-  source: { connectionId: 'vps', profile: 'chair' },
+  source: { connectionId: 'gateway-a', profile: 'chair' },
   state: 'running',
   title: 'Release council'
 }
@@ -273,7 +273,7 @@ describe('graphical Bot meeting room', () => {
     const a2aMeeting: MeetingRecord = {
       ...meeting,
       participants: [
-        { connectionId: 'vps', profile: 'chair' },
+        { connectionId: 'gateway-a', profile: 'chair' },
         { connectionId: 'a2a', profile: 'agent-1' }
       ]
     }
@@ -289,7 +289,7 @@ describe('graphical Bot meeting room', () => {
     const noAgentMeeting: MeetingRecord = {
       ...meeting,
       participants: [
-        { connectionId: 'vps', profile: 'chair' },
+        { connectionId: 'gateway-a', profile: 'chair' },
         { connectionId: 'unknown', profile: 'ghost' }
       ]
     }
@@ -335,7 +335,7 @@ describe('graphical Bot meeting room', () => {
     const leaveMeeting: MeetingRecord = {
       ...meeting,
       participants: [
-        { connectionId: 'vps', profile: 'chair' }
+        { connectionId: 'gateway-a', profile: 'chair' }
       ]
     }
 

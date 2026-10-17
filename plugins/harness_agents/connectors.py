@@ -38,7 +38,7 @@ def _normalize_task_state(value: Any) -> str:
         "WORKING": "working",
         protocol.STATE_INPUT_REQUIRED: "waiting",
         "INPUT_REQUIRED": "waiting",
-        protocol.STATE_AUTH_REQUIRED: "blocked",
+        "TASK_STATE_AUTH_REQUIRED": "blocked",
         "AUTH_REQUIRED": "blocked",
         protocol.STATE_COMPLETED: "idle",
         "COMPLETED": "idle",

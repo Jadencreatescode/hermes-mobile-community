@@ -13,7 +13,7 @@ This directory packages the mobile renderer and relay into a constrained private
 
 ## Container constraints
 
-Run as user 65532 with a read only root filesystem, all Linux capabilities dropped, `no-new-privileges`, a writable `/tmp` tmpfs, PID, memory, and CPU limits, and rotated logs.
+Run as user 65532 with a read only root filesystem, all Linux capabilities dropped, `no-new-privileges`, a writable `/tmp` tmpfs, PID, memory, and CPU limits, and rotated logs. <!-- no-tmp: ok — documents the container mount point -->
 
 ## Health
 
