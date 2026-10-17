@@ -5,7 +5,7 @@ import * as path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { POWERSHELL_PATH, RELAUNCH_WAITER_SCRIPT } from './relaunch-waiter'
+import { RELAUNCH_WAITER_SCRIPT, windowsPowerShellPath } from './relaunch-waiter'
 
 const scriptPath = path.resolve(__dirname, '..', '..', 'scripts', RELAUNCH_WAITER_SCRIPT)
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
@@ -53,7 +53,7 @@ exit $LASTEXITCODE
       )
 
       try {
-        const result = spawnSync(POWERSHELL_PATH, ['-NoProfile', '-NonInteractive', '-File', wrapper], {
+        const result = spawnSync(windowsPowerShellPath(), ['-NoProfile', '-NonInteractive', '-File', wrapper], {
           cwd: root,
           encoding: 'utf8',
           windowsHide: true,
@@ -89,7 +89,7 @@ exit $LASTEXITCODE
     )
 
     try {
-      const result = spawnSync(POWERSHELL_PATH, ['-NoProfile', '-NonInteractive', '-File', wrapper], {
+      const result = spawnSync(windowsPowerShellPath(), ['-NoProfile', '-NonInteractive', '-File', wrapper], {
         cwd: root,
         encoding: 'utf8',
         env: { ...process.env, TEMP: root, TMP: root },

@@ -647,10 +647,11 @@ def _configure_ui_meta(profile_dir, params, applied) -> None:
             applied["ui_meta_revisions"] = {key: revisions[key] for key in incoming}
             if _bots_title(current) != old_title:
                 # A client writing another machine's bot title lands here; the Desktop's
-                # `[bot-meta win=…]` desktop.log line at the same time names the window.
+                # `[bot-meta win=…]` desktop.log line at the same time names the window. Titles are
+                # user content, so the audit records only profile identity and revision.
                 logging.getLogger(__name__).info(
-                    "ui_meta hermes-bots title for profile %s: %r -> %r (revision %s)",
-                    params.get("name") or profile_dir.name, old_title, _bots_title(current),
+                    "ui_meta hermes-bots title changed for profile %s (revision %s)",
+                    params.get("name") or profile_dir.name,
                     revisions.get("hermes-bots"))
     except Exception:
         applied["ui_meta"] = False

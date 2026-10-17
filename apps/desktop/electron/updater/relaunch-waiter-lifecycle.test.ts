@@ -7,13 +7,16 @@ import path from 'node:path'
 
 import { test, vi } from 'vitest'
 
+import { WINDOWS_HANDOFF_PAYLOAD_ENV } from '../updater-process'
+import { windowsCmdPath } from '../windows-powershell'
+
 import {
-  POWERSHELL_PATH,
   RELAUNCH_WAITER_LOG_TAIL_BYTES,
   type RelaunchWaiterHandle,
   type SpawnWaiter,
   startRelaunchWaiter,
-  waiterLogTail
+  waiterLogTail,
+  windowsPowerShellPath
 } from './relaunch-waiter'
 
 const scriptPath: string = path.resolve(import.meta.dirname, '../../scripts/update-relaunch-waiter.ps1')
@@ -24,6 +27,13 @@ async function stop(child: ChildProcess | undefined): Promise<void> {
     child.kill()
     await exited
   }
+}
+
+function isWaiterStage(stage: string): boolean {
+  return (
+    path.dirname(path.resolve(stage)) === path.resolve(os.tmpdir()) &&
+    /^hermes-relaunch-[^/\\]+$/.test(path.basename(stage))
+  )
 }
 
 for (const mode of [
@@ -39,41 +49,76 @@ for (const mode of [
     let child: ChildProcess | undefined
     let originalKill: ChildProcess['kill'] | undefined
     let stage: string = ''
+    let stageVerified: boolean = false
     let closed: boolean = false
     const cleanupError: Error = new Error('fixture staging cleanup refused')
 
     const start: SpawnWaiter = (command: string, args: string[], options: Parameters<SpawnWaiter>[2]): ChildProcess => {
-      stage = path.dirname(args[args.indexOf('-ReadyFile') + 1])
+      const encodedPayload = options.env[WINDOWS_HANDOFF_PAYLOAD_ENV]
+      assert.ok(encodedPayload, 'the waiter payload must be present in the child environment')
+
+      const payload = JSON.parse(Buffer.from(encodedPayload, 'base64').toString('utf8')) as {
+        scriptPath: string
+        parameters: Array<{ kind: string; name: string; value?: string }>
+      }
+
+      const payloadReadyFile: string | undefined = payload.parameters.find(
+        parameter => parameter.name === 'ReadyFile'
+      )?.value
+      assert.ok(payloadReadyFile, 'the waiter payload must contain the ready-file value')
+      const candidateStage: string = path.dirname(payloadReadyFile)
+      assert.equal(isWaiterStage(candidateStage), true, 'the waiter stage must be a direct child of the OS temp dir')
+      stage = candidateStage
       const readyFile: string = path.join(stage, 'ready.txt')
-      assert.equal(
-        command,
-        path.win32.join(process.env.SystemRoot || process.env.SYSTEMROOT || 'C:\\Windows', 'System32', 'cmd.exe')
+      assert.equal(command, windowsCmdPath())
+      assert.deepEqual(
+        { ...options, env: undefined },
+        { cwd: os.tmpdir(), detached: false, env: undefined, stdio: 'ignore', windowsHide: true }
       )
-      assert.deepEqual(options, { cwd: os.tmpdir(), detached: false, stdio: 'ignore', windowsHide: true })
       assert.notEqual(stage, path.dirname(scriptPath))
       assert.deepEqual(fs.readFileSync(path.join(stage, 'update-relaunch-waiter.ps1')), fs.readFileSync(scriptPath))
-      assert.deepEqual(args, [
+      stageVerified = true
+      assert.equal(args.length, 13)
+      assert.deepEqual(args.slice(0, 10), [
         '/d',
         '/s',
         '/c',
-        POWERSHELL_PATH,
+        windowsPowerShellPath(),
+        '-NoLogo',
         '-NoProfile',
         '-NonInteractive',
         '-ExecutionPolicy',
         'Bypass',
-        '-File',
-        path.join(stage, 'update-relaunch-waiter.ps1'),
-        '-ProcessId',
-        String(process.pid),
-        '-ProcessStartTimeMs',
-        '1000000',
-        '-IdentityName',
-        'disposable-waiter-test',
-        '-ReadyFile',
-        readyFile,
-        '-TimeoutSeconds',
-        '900'
+        '-Command'
       ])
+      assert.match(
+        args[10] ?? '',
+        /^& \(\[ScriptBlock\]::Create\(\[Text\.Encoding\]::Unicode\.GetString\(\[Convert\]::FromBase64String\('[A-Za-z0-9+/=]+'\)\)\)\)$/
+      )
+      assert.deepEqual(args.slice(-2), ['-HermesDesktopPidMarker', String(process.pid)])
+      assert.deepEqual(payload, {
+        scriptPath: path.join(stage, 'update-relaunch-waiter.ps1'),
+        parameters: [
+          { kind: 'value', name: 'ProcessId', value: String(process.pid) },
+          { kind: 'value', name: 'ProcessStartTimeMs', value: '1000000' },
+          { kind: 'value', name: 'IdentityName', value: 'disposable-waiter-test' },
+          { kind: 'value', name: 'ReadyFile', value: readyFile },
+          { kind: 'value', name: 'TimeoutSeconds', value: '900' }
+        ]
+      })
+
+      // ProcessId intentionally equals the final ownership marker, so only that payload value may appear in argv.
+      for (const dynamicValue of [
+        payload.scriptPath,
+        ...payload.parameters.flatMap(parameter =>
+          (parameter.name === 'ProcessId' && parameter.value === String(process.pid)) || parameter.value === undefined
+            ? []
+            : [parameter.value]
+        )
+      ]) {
+        assert.equal(args.includes(dynamicValue), false)
+      }
+
       child = spawn(
         mode.missing ? path.join(stage, 'missing.exe') : process.execPath,
         [
@@ -181,7 +226,7 @@ for (const mode of [
 
       await stop(child)
 
-      if (stage) {
+      if (stageVerified && isWaiterStage(stage)) {
         fs.rmSync(stage, { recursive: true, force: true })
       }
     }
@@ -235,7 +280,7 @@ test('every failed start tells the log why it failed', async (): Promise<void> =
       }
     }
   )
-  assert.match(logs.join('\n'), /spawning .*powershell\.exe threw: Error: EACCES fixture/)
+  assert.match(logs.join('\n'), /resolving or spawning PowerShell threw: Error: EACCES fixture/)
 
   logs.length = 0
   await startRelaunchWaiter(
@@ -265,6 +310,30 @@ test('every failed start tells the log why it failed', async (): Promise<void> =
   )
   assert.match(logs.join('\n'), /no handshake within 200ms \(pid \d+\); stopping it/)
 }, 20_000)
+
+test('an invalid Windows root logs and refuses the waiter before spawning', async (): Promise<void> => {
+  const logs: string[] = []
+  const spawn = vi.fn<SpawnWaiter>()
+  vi.stubEnv('SystemRoot', String.raw`C:\Program Files\Win`)
+
+  try {
+    const handle = await startRelaunchWaiter(
+      {
+        processId: process.pid,
+        processStartTimeMs: 1_000_000,
+        identityName: 'disposable-waiter-test',
+        scriptPath
+      },
+      { log: message => logs.push(message), spawn }
+    )
+
+    assert.equal(handle, undefined)
+    assert.equal(spawn.mock.calls.length, 0)
+    assert.match(logs.join('\n'), /Invalid Windows system root/)
+  } finally {
+    vi.unstubAllEnvs()
+  }
+})
 
 test('the script log report keeps only this attempt, reads a bounded suffix, and decodes UTF-8', (): void => {
   const dir: string = fs.mkdtempSync(path.join(os.tmpdir(), 'waiter-log-'))

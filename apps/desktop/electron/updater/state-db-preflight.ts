@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 
 import { hiddenWindowsChildOptions } from '../windows-child-options'
+import { windowsCmdPath } from '../windows-powershell'
 
 interface StateDbPreflight {
   python: string | null
@@ -14,6 +15,51 @@ interface StateDbPreflight {
    * it exactly like the update check does (`readSourceUpdate`).
    */
   launcher?: string | null
+}
+
+const SNAPSHOT_TIMEOUT_MS = 30_000
+
+function runDirect(command: string, args: string[]): string {
+  return execFileSync(
+    command,
+    args,
+    hiddenWindowsChildOptions({
+      encoding: 'utf8',
+      timeout: SNAPSHOT_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: false
+    })
+  )
+}
+
+export function guardedStateDbCmdArgs(command: string, args: string[]): string[] {
+  for (const value of [command, ...args]) {
+    if (/["%&|<>^\r\n]/.test(value)) {
+      throw new Error('The pre-flight snapshot contains an unsafe Windows command argument.')
+    }
+  }
+
+  const commandLine = `""${command}" ${args.map((arg: string): string => `"${arg}"`).join(' ')}"`
+  return ['/d', '/v:off', '/s', '/c', commandLine]
+}
+
+export function stateDbPreflightInvocation(command: string, args: string[]): { args: string[]; command: string } {
+  return { command: windowsCmdPath(), args: guardedStateDbCmdArgs(command, args) }
+}
+
+function runViaCmd(command: string, args: string[]): string {
+  const invocation = stateDbPreflightInvocation(command, args)
+
+  return execFileSync(
+    invocation.command,
+    invocation.args,
+    hiddenWindowsChildOptions({
+      encoding: 'utf8',
+      timeout: SNAPSHOT_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsVerbatimArguments: true
+    })
+  )
 }
 
 // Synchronous by design: the caller must not stop the backend before the snapshot.
@@ -33,26 +79,7 @@ export function preflightStateDb({ python, script, home, log, launcher = null }:
     // closed instead.
     const viaCmd: boolean = process.platform === 'win32' && /\.cmd$/i.test(command)
 
-    if (viaCmd) {
-      for (const value of [command, ...args]) {
-        if (/["%&|<>^\r\n]/.test(value)) {
-          throw new Error('The pre-flight snapshot contains an unsafe Windows command argument.')
-        }
-      }
-    }
-
-    const result: string = execFileSync(
-      viaCmd ? (process.env.ComSpec ?? 'cmd.exe') : command,
-      viaCmd
-        ? ['/d', '/v:off', '/s', '/c', `""${command}" ${args.map((arg: string): string => `"${arg}"`).join(' ')}"`]
-        : args,
-      hiddenWindowsChildOptions({
-        encoding: 'utf8',
-        timeout: 30_000,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsVerbatimArguments: viaCmd
-      })
-    )
+    const result: string = viaCmd ? runViaCmd(command, args) : runDirect(command, args)
 
     log(`[updates] state.db pre-flight: ${result.trim()}`)
   } catch (error: unknown) {

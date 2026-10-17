@@ -6,7 +6,10 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import { wrapHandoffForDetachedConsole } from '../updater-process'
+import { type WindowsHandoffParameter, wrapHandoffForDetachedConsole } from '../updater-process'
+import { windowsPowerShellPath, windowsTaskkillPath } from '../windows-powershell'
+
+export { windowsPowerShellPath }
 
 export const RELAUNCH_WAITER_SCRIPT = 'update-relaunch-waiter.ps1'
 
@@ -22,15 +25,6 @@ export function relaunchWaiterScript(resourcesPath: string): string {
 export const RELAUNCH_WAITER_READY_FILENAME = 'ready.txt'
 export const DEFAULT_RELAUNCH_WAITER_TIMEOUT_SECONDS = 900
 export const DEFAULT_RELAUNCH_WAITER_HANDSHAKE_MS = 10_000
-
-/** Absolute path — never resolved via inherited PATH (it can point into the package). */
-export const POWERSHELL_PATH = path.win32.join(
-  process.env.SystemRoot || process.env.SYSTEMROOT || 'C:\\Windows',
-  'System32',
-  'WindowsPowerShell',
-  'v1.0',
-  'powershell.exe'
-)
 
 export interface RelaunchWaiterOptions {
   /** The quitting app's pid — the waiter waits for this process to exit. */
@@ -53,7 +47,7 @@ export interface WaiterStaging {
 export type SpawnWaiter = (
   command: string,
   args: string[],
-  opts: { detached: boolean; stdio: 'ignore'; windowsHide: boolean; cwd: string }
+  opts: { detached: boolean; env: NodeJS.ProcessEnv; stdio: 'ignore'; windowsHide: boolean; cwd: string }
 ) => ChildProcess
 
 export interface RelaunchWaiterDeps {
@@ -111,25 +105,21 @@ export function waiterLogTail(
   return `${file}:\n${lines.length ? lines.join('\n') : 'no lines from this attempt'}`
 }
 
-/** Pure: the exact argv the waiter is spawned with. */
-export function buildRelaunchWaiterArgs(options: RelaunchWaiterOptions, readyFile: string): string[] {
+/** Pure: named values matching update-relaunch-waiter.ps1's param block. */
+export function buildRelaunchWaiterParameters(
+  options: RelaunchWaiterOptions,
+  readyFile: string
+): WindowsHandoffParameter[] {
   return [
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-File',
-    options.scriptPath,
-    '-ProcessId',
-    String(options.processId),
-    '-ProcessStartTimeMs',
-    String(options.processStartTimeMs),
-    '-IdentityName',
-    options.identityName,
-    '-ReadyFile',
-    readyFile,
-    '-TimeoutSeconds',
-    String(options.timeoutSeconds ?? DEFAULT_RELAUNCH_WAITER_TIMEOUT_SECONDS)
+    { kind: 'value', name: 'ProcessId', value: String(options.processId) },
+    { kind: 'value', name: 'ProcessStartTimeMs', value: String(options.processStartTimeMs) },
+    { kind: 'value', name: 'IdentityName', value: options.identityName },
+    { kind: 'value', name: 'ReadyFile', value: readyFile },
+    {
+      kind: 'value',
+      name: 'TimeoutSeconds',
+      value: String(options.timeoutSeconds ?? DEFAULT_RELAUNCH_WAITER_TIMEOUT_SECONDS)
+    }
   ]
 }
 
@@ -198,16 +188,17 @@ export async function startRelaunchWaiter(
     // The PowerShell grandchild survives Electron's libuv job being closed.
     const wrapped = wrapHandoffForDetachedConsole(
       {
-        command: POWERSHELL_PATH,
-        args: buildRelaunchWaiterArgs({ ...options, scriptPath: staging.scriptPath }, staging.readyFile),
+        command: windowsPowerShellPath(),
+        args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', staging.scriptPath],
         scriptPath: staging.scriptPath
       },
-      [],
+      buildRelaunchWaiterParameters({ ...options, scriptPath: staging.scriptPath }, staging.readyFile),
       true
     )
 
-    child = spawn(path.win32.resolve(POWERSHELL_PATH, '../../../cmd.exe'), wrapped.args, {
+    child = spawn(wrapped.command, wrapped.args, {
       detached: wrapped.detached,
+      env: { ...process.env, ...wrapped.handoffEnv },
       stdio: 'ignore',
       windowsHide: true,
       // A working directory pins its folder: keep it out of the package, which
@@ -215,7 +206,7 @@ export async function startRelaunchWaiter(
       cwd: os.tmpdir()
     })
   } catch (error) {
-    log(`[updates] relaunch waiter: spawning ${POWERSHELL_PATH} threw: ${errorText(error)}`)
+    log(`[updates] relaunch waiter: resolving or spawning PowerShell threw: ${errorText(error)}`)
 
     try {
       await cleanup()
@@ -249,7 +240,7 @@ export async function startRelaunchWaiter(
           } else {
             await new Promise<void>((resolve, reject) => {
               execFile(
-                path.win32.resolve(POWERSHELL_PATH, '../../../taskkill.exe'),
+                windowsTaskkillPath(),
                 ['/PID', String(child.pid), '/T', '/F'],
                 { windowsHide: true, timeout: cancelTimeoutMs },
                 error => (error ? reject(error) : resolve())

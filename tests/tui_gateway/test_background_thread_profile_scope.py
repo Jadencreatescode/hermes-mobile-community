@@ -56,12 +56,16 @@ def test_auto_title_thread_runs_in_the_turns_profile_scope(served_home, monkeypa
     db.get_session_title.return_value = None
     home_token = set_hermes_home_override(str(b))
     secret_token = set_secret_scope(build_profile_secret_scope(b))
+    upgrade = None
     try:
-        tg.maybe_auto_title(db, "sess-1", "hello there", [{"role": "user", "content": "hello there"}])
+        upgrade = tg.maybe_auto_title(db, "sess-1", "hello there", [{"role": "user", "content": "hello there"}])
     finally:
         reset_secret_scope(secret_token)
         reset_hermes_home_override(home_token)
-    assert done.wait(timeout=10), "auto-title thread never ran"
+    assert upgrade is not None, "auto-title thread was not created"
+    upgrade.join(timeout=10)
+    assert not upgrade.is_alive(), "auto-title thread did not stop"
+    assert done.is_set(), "auto-title thread never ran"
     assert seen == {"home": str(b), "key": "b-key"}
 
 
@@ -88,12 +92,22 @@ def test_ws_orphan_reap_tears_down_under_the_sessions_profile(served_home, monke
     monkeypatch.setattr(server, "_ws_session_is_orphaned", lambda s: s is session)
     with server._sessions_lock:
         server._sessions[sid] = session
+    timer = None
+    pending_ws_reaps = server._pending_ws_reaps  # type: ignore[attr-defined]
     try:
         server._schedule_ws_orphan_reap(sid)
+        with server._sessions_lock:
+            timer = pending_ws_reaps.get(sid)
+        assert timer is not None, "reap timer was not scheduled"
         assert done.wait(timeout=10), "reap timer never tore the session down"
     finally:
+        if timer is not None:
+            timer.cancel()
+            timer.join(timeout=10)
         with server._sessions_lock:
             server._sessions.pop(sid, None)
+            pending_ws_reaps.pop(sid, None)
+    assert timer is not None and not timer.is_alive(), "reap timer did not stop"
     assert seen_commit == {"home": str(b), "key": "b-key"}
     assert seen_close == {"home": str(b), "key": "b-key"}
     assert Path(get_hermes_home()) == a  # the test thread's own context is untouched

@@ -8,13 +8,17 @@ import { expect, it } from 'vitest'
 
 import { startRelaunchWaiter } from './relaunch-waiter'
 
-it.runIf(process.platform === 'win32')(
-  'a waiter that exits before its handshake reports its own exit code',
-  async () => {
+it.runIf(process.platform === 'win32').each([
+  { expected: 0, source: '' },
+  { expected: 1, source: "throw 'fixture terminating error'\n" },
+  { expected: 2, source: 'exit 2\n' }
+])(
+  'a waiter that exits before its handshake reports bootstrap exit code $expected',
+  async ({ expected, source }) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'waiter exit '))
     const script = path.join(root, 'waiter.ps1')
     const logs: string[] = []
-    fs.writeFileSync(script, 'exit 2\n')
+    fs.writeFileSync(script, source)
 
     try {
       const handle = await startRelaunchWaiter(
@@ -28,7 +32,9 @@ it.runIf(process.platform === 'win32')(
       )
 
       expect(handle).toBeUndefined()
-      expect(logs.join('\n')).toMatch(/exited before its handshake after \d+ms \(exit code 2,/)
+      expect(logs.join('\n')).toMatch(
+        new RegExp(`exited before its handshake after \\d+ms \\(exit code ${expected},`)
+      )
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

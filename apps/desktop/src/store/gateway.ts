@@ -845,7 +845,7 @@ async function openSecondary(entry: Secondary, spawnPriority: SpawnPriority = 'b
       // reconnectSecondary classifies failures by message ("No connection
       // with id", "no longer exists") to fail-stop permanent conditions, and
       // wrapping here would break that. Callers decide surfacing (#81094).
-      console.error(`[gateway] dial failed for scope="${entry.scope}" profile="${entry.profile}":`, error)
+      console.error('[gateway] dial failed for scope="%s" profile="%s":', entry.scope, entry.profile, error)
       throw error
     }
 
@@ -1785,16 +1785,14 @@ function scopeHasTurnLease(scope: string): boolean {
   return false
 }
 
-// Tell main whether a prompt turn leases this scope's pooled backend. An early
-// skip for cooperative retirement (electron/pool-retire.ts), never the proof:
-// main asks the backend itself before stopping anything. From #104871.
+// Tell main whether a prompt turn leases this scope's pooled backend. This is an early skip for
+// cooperative retirement, never the proof: main asks the backend before stopping it. From #104871.
 function publishTurnLease(scope: string, activeTurn: boolean): void {
   void window.hermesDesktop?.touchBackend?.(scope, { activeTurn }).catch(() => undefined)
 }
 
 function releaseTerminalTurnLease(scope: string, event: GatewayEvent): void {
   const sessionId = String(event.session_id || '').trim()
-
   if (!sessionId) {
     return
   }
@@ -1802,37 +1800,39 @@ function releaseTerminalTurnLease(scope: string, event: GatewayEvent): void {
   const key = turnLeaseKey(scope, sessionId)
 
   if (event.type === 'message.start') {
-    // The gateway emits settled session.info before immediately chaining a
-    // queued/goal follow-up. Keep the same route alive for that next turn.
+    // Keep the route alive when settled session.info immediately chains a queued/goal follow-up.
     cancelTurnLeaseRelease(key)
 
     return
   }
 
   if (event.type === 'session.reclaimed') {
-    g.turnLeases.get(key)?.()
-
+    const release = g.turnLeases.get(key)
+    if (typeof release === 'function') {
+      release()
+    }
     return
   }
 
   const payload = event.payload as Record<string, unknown> | undefined
 
   if (event.type === 'session.info' && payload?.running === false && !g.turnLeaseReleaseTimers.has(key)) {
-    // session.info(false) is the authoritative settled edge, but auto-followup
-    // emits message.start immediately after it. A short debounce lets that
-    // frame cancel release while still reclaiming ordinary completed turns.
+    // Debounce authoritative session.info(false) so immediate auto-followup message.start can cancel release.
     g.turnLeaseReleaseTimers.set(
       key,
       setTimeout(() => {
         g.turnLeaseReleaseTimers.delete(key)
-        g.turnLeases.get(key)?.()
+        const release = g.turnLeases.get(key)
+        if (typeof release === 'function') {
+          release()
+        }
       }, TURN_LEASE_SETTLE_DELAY_MS)
     )
   }
 }
 
-// Open `profile`'s socket WITHOUT making it active — the hover-intent pre-warm
-// (store/profile). Runs the same spawn + connect chain as a real switch, so by
+// Open `profile`'s socket WITHOUT making it active — the hover-intent pre-warm (store/profile).
+// Runs the same spawn + connect chain as a real switch, so by
 // click time ensureGatewayForProfile finds an open socket and just activates
 // it. No scheduleReconnect on failure: a hover is speculative, so a dead
 // backend must not start a background retry loop — the real switch owns retry

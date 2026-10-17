@@ -594,7 +594,7 @@ async function resolveConnectionForProfile(profile: string): Promise<HermesConne
       `Timed out resolving the connection descriptor for profile "${profile}"`
     )
   } catch (err) {
-    console.warn(`[profile] descriptor lookup for "${profile}" failed; keeping the previous connection`, err)
+    console.warn('[profile] descriptor lookup for "%s" failed; keeping the previous connection', profile, err)
 
     return null
   }
@@ -756,7 +756,9 @@ async function resolveConnectionForAgent(connectionId: string, profile: string):
     )
   } catch (err) {
     console.warn(
-      `[profile] descriptor lookup for agent "${connectionId}:${profile}" failed; keeping the previous connection`,
+      '[profile] descriptor lookup for agent "%s:%s" failed; keeping the previous connection',
+      connectionId,
+      profile,
       err
     )
 

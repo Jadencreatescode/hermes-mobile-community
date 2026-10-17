@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { markerPath, parseUpdateMarker } from '../update-marker'
 import { claimantChild, cleanupMarkerFixtures, deadPid, killAndReap } from '../update-marker.test-helpers'
 import * as updaterProcess from '../updater-process'
+import { windowsCmdPath } from '../windows-powershell'
 
 import { type CheckoutStrategyDeps, createCheckoutStrategy } from './checkout'
 import type { SourceUpdate } from './checkout-source'
@@ -19,6 +20,7 @@ const NO_GATEWAY_FLAG: string = IS_WINDOWS ? '-NoGateway' : '--no-gateway'
 
 afterEach((): void => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
   cleanupMarkerFixtures()
 })
 
@@ -97,15 +99,33 @@ it.each([true, false])(
       expect(await createCheckoutStrategy(deps).apply()).toMatchObject({ ok: true, handedOff: true })
       expect(spawned).toHaveLength(1)
       const args: string[] = spawned[0]!
+      const handoffParameters: Array<{ kind: string; name: string; value?: string }> = IS_WINDOWS
+        ? JSON.parse(
+            Buffer.from(
+              String(spawnOptions[0]?.env?.[updaterProcess.WINDOWS_HANDOFF_PAYLOAD_ENV]),
+              'base64'
+            ).toString('utf8')
+          ).parameters
+        : []
       // The Windows cmd wrapper must inherit its hidden console; the POSIX
       // script needs to outlive Electron as a detached child (#116161).
       expect(spawnOptions[0]?.detached).toBe(!IS_WINDOWS)
-      expect(args).toContain(IS_WINDOWS ? '-Branch' : '--branch')
+      expect(
+        IS_WINDOWS ? handoffParameters.some(parameter => parameter.name === 'Branch') : args.includes('--branch')
+      ).toBe(true)
 
       if (remote) {
-        expect(args).toContain(NO_GATEWAY_FLAG)
+        expect(
+          IS_WINDOWS
+            ? handoffParameters.some(parameter => parameter.name === 'NoGateway' && parameter.kind === 'switch')
+            : args.includes(NO_GATEWAY_FLAG)
+        ).toBe(true)
       } else {
-        expect(args).not.toContain(NO_GATEWAY_FLAG)
+        expect(
+          IS_WINDOWS
+            ? handoffParameters.some(parameter => parameter.name === 'NoGateway')
+            : args.includes(NO_GATEWAY_FLAG)
+        ).toBe(false)
       }
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
@@ -140,8 +160,29 @@ it('the Windows hand-off wrapper is spawned non-detached so the script shares it
   try {
     expect(await createCheckoutStrategy({ ...deps, isWindows: true }).apply()).toMatchObject({ ok: true })
     expect(spawned).toHaveLength(1)
-    expect(spawned[0]).toMatchObject({ command: 'cmd.exe', detached: false })
+    expect(spawned[0]).toMatchObject({ command: windowsCmdPath(), detached: false })
     expect(spawned[0]!.args.slice(0, 6)).toEqual(['/d', '/s', '/c', 'start', '', '/b'])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+it('an invalid Windows root returns the normal apply failure without spawning', async (): Promise<void> => {
+  const { root, deps } = handoffFixture(false)
+  fs.writeFileSync(path.join(root, 'scripts', 'desktop-update', 'windows.ps1'), '')
+  vi.stubEnv('SystemRoot', String.raw`C:\Program Files\Win`)
+  const resolveHandoff: typeof updaterProcess.resolveUpdateScriptHandoff = updaterProcess.resolveUpdateScriptHandoff
+  vi.spyOn(updaterProcess, 'resolveUpdateScriptHandoff').mockImplementation(
+    (updateRoot: string): updaterProcess.UpdateScriptHandoff | null => resolveHandoff(updateRoot, { isWindows: true })
+  )
+  const spawn = vi.spyOn(updaterProcess, 'spawnUpdaterProcess')
+
+  try {
+    const result = await createCheckoutStrategy({ ...deps, isWindows: true }).apply()
+
+    expect(result).toMatchObject({ ok: false, error: 'updater-spawn-failed', mechanism: 'windows-handoff' })
+    expect(result.message).toMatch(/Invalid Windows system root/)
+    expect(spawn).not.toHaveBeenCalled()
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
@@ -509,30 +550,38 @@ it.skipIf(IS_WINDOWS)('a legacy script gets no bridge and no --handoff-run', asy
   }
 })
 
-// Windows protocol 2: the run id rides the wrapped PowerShell argv.
-it('the Windows protocol-2 hand-off passes -HandoffRun with the bridged run id', async (): Promise<void> => {
-  const { root, deps } = handoffFixture(false)
+// Windows protocol 2: named values and switches ride the structured PowerShell payload.
+it('the Windows protocol-2 hand-off passes -HandoffRun and -NoGateway by name', async (): Promise<void> => {
+  const { root, deps } = handoffFixture(true)
   fs.writeFileSync(path.join(root, 'scripts', 'desktop-update', 'windows.ps1'), '# hermes-handoff-protocol: 2\r\n')
   const resolveHandoff: typeof updaterProcess.resolveUpdateScriptHandoff = updaterProcess.resolveUpdateScriptHandoff
   vi.spyOn(updaterProcess, 'resolveUpdateScriptHandoff').mockImplementation(
     (updateRoot: string): updaterProcess.UpdateScriptHandoff | null => resolveHandoff(updateRoot, { isWindows: true })
   )
   const helper = vi.fn(async () => ({ kind: 'withdrawn' as const }))
-  const runs: string[][] = []
+  const runs: Array<Array<{ kind: string; name: string; value?: string }>> = []
   let bridge: string | null = null
-  vi.spyOn(updaterProcess, 'spawnUpdaterProcess').mockImplementation((_command: string, args: string[]) => {
-    runs.push(args)
-    bridge = fs.readFileSync(markerPath(deps.hermesHome), 'utf8')
+  vi.spyOn(updaterProcess, 'spawnUpdaterProcess').mockImplementation(
+    (_command: string, _args: string[], options: Parameters<typeof updaterProcess.spawnUpdaterProcess>[2]) => {
+      const encoded = String(options.env?.[updaterProcess.WINDOWS_HANDOFF_PAYLOAD_ENV])
+      const payload = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'))
+      runs.push(payload.parameters)
+      bridge = fs.readFileSync(markerPath(deps.hermesHome), 'utf8')
 
-    return { unref: (): void => {} }
-  })
+      return { unref: (): void => {} }
+    }
+  )
 
   try {
     await createCheckoutStrategy({ ...deps, isWindows: true, markerHelper: helper, handoffClaimTimeoutMs: 200 }).apply()
-    const runId = argAfter(runs[0]!, '-HandoffRun')
+    const runId = runs[0]!.find(parameter => parameter.name === 'HandoffRun')?.value
     expect(runId).toMatch(/^desk-\d+-[0-9a-z]+-[0-9a-f]{4}$/)
     expect(parseUpdateMarker(bridge ?? '')?.run).toBe(runId)
-    expect(argAfter(runs[0]!, '-DesktopPid')).toBe(String(process.pid))
+    expect(runs[0]!.find(parameter => parameter.name === 'DesktopPid')?.value).toBe(String(process.pid))
+    expect(runs[0]!.find(parameter => parameter.name === 'NoGateway')).toEqual({
+      kind: 'switch',
+      name: 'NoGateway'
+    })
     // Nothing adopted it: the bridge is withdrawn through the helper, with the run.
     expect(helper).toHaveBeenCalledWith(
       'withdraw',

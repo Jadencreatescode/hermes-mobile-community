@@ -22,6 +22,7 @@ export function resolveVenvDir(updateRoot: string): string {
 
 import { platformDefaultHermesHome } from './data-paths'
 import { hiddenWindowsChildOptions } from './windows-child-options'
+import { windowsCmdPath, windowsPowerShellPath, windowsTaskkillPath } from './windows-powershell'
 
 /** Exact installation identity; PATH may refer to another checkout. */
 export function resolveInstallationLauncher(
@@ -112,6 +113,24 @@ export function launcherTargetsInstallation(launcher: string, root: string): boo
   }
 }
 
+/** Fixed invocation for probing a launcher without consulting cwd or PATH on Windows. */
+export function installationLauncherInvocation(
+  launcher: string,
+  isWindows: boolean = process.platform === 'win32'
+): { args: string[]; command: string; viaCmd: boolean } {
+  const viaCmd: boolean = isWindows && /\.cmd$/i.test(launcher)
+
+  if (viaCmd && CMD_UNSAFE_PATH.test(launcher)) {
+    throw new Error('The installation launcher contains an unsafe Windows command argument.')
+  }
+
+  return {
+    command: viaCmd ? windowsCmdPath() : launcher,
+    args: viaCmd ? ['/d', '/s', '/c', `""${launcher}" --version"`] : ['--version'],
+    viaCmd
+  }
+}
+
 /** The real install directory a launcher's `--version` reports, or null. */
 function launcherInstallDirectory(launcher: string, root?: string): string | null {
   try {
@@ -119,14 +138,7 @@ function launcherInstallDirectory(launcher: string, root?: string): string | nul
     // would hand an interpolated path to cmd.exe wholesale. Invoke cmd.exe
     // explicitly instead: a fixed argv, the path quoted verbatim and screened
     // for cmd metacharacters, and nothing else for the shell to interpret.
-    const viaCmd: boolean = process.platform === 'win32' && /\.cmd$/i.test(launcher)
-
-    if (viaCmd && CMD_UNSAFE_PATH.test(launcher)) {
-      return null
-    }
-
-    const command: string = viaCmd ? (process.env.ComSpec ?? 'cmd.exe') : launcher
-    const args: string[] = viaCmd ? ['/d', '/s', '/c', `""${launcher}" --version"`] : ['--version']
+    const { args, command, viaCmd } = installationLauncherInvocation(launcher)
 
     const probe: SpawnSyncReturns<string> = spawnSync(command, args, {
       cwd: root,
@@ -224,7 +236,7 @@ export function resolveUpdateScriptHandoff(
   ]) {
     if (exists(candidate)) {
       return {
-        command: 'powershell',
+        command: windowsPowerShellPath(),
         args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', candidate],
         scriptPath: candidate
       }
@@ -270,6 +282,115 @@ export function resolvePosixScriptHandoff(
   }
 }
 
+export const WINDOWS_HANDOFF_PAYLOAD_ENV = '__HERMES_DESKTOP_UPDATE_HANDOFF_B64'
+export const WINDOWS_HANDOFF_PID_MARKER = '-HermesDesktopPidMarker'
+
+export interface WindowsHandoffValueParameter {
+  kind: 'value'
+  name: string
+  value: string
+}
+
+export interface WindowsHandoffSwitchParameter {
+  kind: 'switch'
+  name: string
+}
+
+export type WindowsHandoffParameter = WindowsHandoffSwitchParameter | WindowsHandoffValueParameter
+
+export interface WindowsHandoffPayload {
+  parameters: WindowsHandoffParameter[]
+  scriptPath: string
+}
+
+const POWERSHELL_PARAMETER_NAME: RegExp = /^[A-Za-z][A-Za-z0-9]*$/
+
+export const WINDOWS_HANDOFF_BOOTSTRAP = [
+  'param([Parameter(Mandatory = $true)][string]$HermesDesktopPidMarker)',
+  "$ErrorActionPreference = 'Stop'",
+  'try {',
+  "  if ($HermesDesktopPidMarker -cnotmatch '^[1-9][0-9]{0,9}$') { throw 'Invalid updater hand-off desktop pid marker.' }",
+  `  $encoded = [Environment]::GetEnvironmentVariable('${WINDOWS_HANDOFF_PAYLOAD_ENV}', 'Process')`,
+  `  [Environment]::SetEnvironmentVariable('${WINDOWS_HANDOFF_PAYLOAD_ENV}', $null, 'Process')`,
+  "  if ([string]::IsNullOrWhiteSpace($encoded)) { throw 'Missing updater hand-off payload.' }",
+  '  $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))',
+  '  $payload = ConvertFrom-Json -InputObject $json',
+  '  $scriptPath = [string]$payload.scriptPath',
+  "  if ([string]::IsNullOrWhiteSpace($scriptPath) -or -not [IO.Path]::IsPathRooted($scriptPath)) { throw 'Invalid updater hand-off script path.' }",
+  "  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw 'Updater hand-off script was not found.' }",
+  "  $desktopPidParameters = @($payload.parameters | Where-Object { [string]$_.name -ceq 'DesktopPid' })",
+  "  if ($desktopPidParameters.Count -gt 0 -and ($desktopPidParameters.Count -ne 1 -or [string]$desktopPidParameters[0].value -cne $HermesDesktopPidMarker)) { throw 'Updater hand-off desktop pid marker does not match its payload.' }",
+  '  $named = @{}',
+  '  foreach ($parameter in @($payload.parameters)) {',
+  '    $name = [string]$parameter.name',
+  "    if ($name -cnotmatch '^[A-Za-z][A-Za-z0-9]*$') { throw 'Invalid updater hand-off parameter name.' }",
+  '    $kind = [string]$parameter.kind',
+  "    if ($kind -eq 'switch') { $named[$name] = $true }",
+  "    elseif ($kind -eq 'value') { $named[$name] = [string]$parameter.value }",
+  "    else { throw 'Invalid updater hand-off parameter kind.' }",
+  '  }',
+  '  $global:LASTEXITCODE = 0',
+  '  & $scriptPath @named',
+  '  exit [int]$global:LASTEXITCODE',
+  '} catch {',
+  '  [Console]::Error.WriteLine(($_ | Out-String).Trim())',
+  '  exit 1',
+  '}'
+].join('\n')
+
+function validatedDesktopPid(desktopPid: number): string {
+  const value: string = String(desktopPid)
+
+  if (!Number.isInteger(desktopPid) || !/^[1-9][0-9]{0,9}$/.test(value)) {
+    throw new Error('The updater hand-off desktop pid is not a valid integer marker.')
+  }
+
+  return value
+}
+
+function validatedPowerShellCommand(command: string): string {
+  const segments: string[] = command.slice(3).split('\\')
+
+  if (
+    !/^[A-Za-z]:\\/.test(command) ||
+    command.includes('/') ||
+    path.win32.normalize(command) !== command ||
+    !/\\powershell\.exe$/i.test(command) ||
+    /[\s"%&|<>[\]{}^()=;!'+,`~]/.test(command) ||
+    segments.some((segment: string): boolean =>
+      segment.length === 0 || segment === '.' || segment === '..' || /[:*?]/.test(segment) || /[. ]$/.test(segment)
+    )
+  ) {
+    throw new Error('The updater hand-off command is not a safe PowerShell executable path.')
+  }
+
+  return command
+}
+
+/** Pure structured equivalent of `powershell -File script.ps1 -Name value -Switch`. */
+export function buildWindowsHandoffPayload(
+  handoff: UpdateScriptHandoff,
+  parameters: WindowsHandoffParameter[]
+): WindowsHandoffPayload {
+  const scriptPathIndex = handoff.args.indexOf(handoff.scriptPath)
+
+  if (scriptPathIndex < 1 || handoff.args[scriptPathIndex - 1]?.toLowerCase() !== '-file') {
+    throw new Error('The updater hand-off arguments do not contain its -File script path.')
+  }
+
+  if (handoff.args.length !== scriptPathIndex + 1) {
+    throw new Error('The updater hand-off must express script parameters as structured named values.')
+  }
+
+  for (const parameter of parameters) {
+    if (!POWERSHELL_PARAMETER_NAME.test(parameter.name)) {
+      throw new Error(`Invalid PowerShell parameter name: ${parameter.name}`)
+    }
+  }
+
+  return { scriptPath: handoff.scriptPath, parameters: parameters.map(parameter => ({ ...parameter })) }
+}
+
 /**
  * Wrap a PowerShell hand-off invocation so it survives a hidden spawn from
  * Electron without ever showing a console window (#116161).
@@ -302,36 +423,54 @@ export function resolvePosixScriptHandoff(
  * callers that cancel the process tree or read the script's exit code: cmd then
  * runs the command directly in the same hidden console, stays alive until it
  * exits and returns its exit code (`start /wait` always returns 0).
+ *
+ * Hand-off data crosses the cmd.exe boundary through a base64 JSON environment
+ * value; the only dynamic argv value is a strictly validated integer pid marker
+ * used to cancel a timed-out grandchild. The executable is restricted to a
+ * normalized local drive path ending in powershell.exe. Script paths and named
+ * values are never reparsed as shell syntax. The bootstrap clears the payload,
+ * verifies its DesktopPid against the marker, then hashtable-splats validated
+ * names, preserving `-File` binding under Windows PowerShell 5.1.
  */
 export function wrapHandoffForDetachedConsole(
   handoff: UpdateScriptHandoff,
-  extraArgs: string[],
-  waitForExit = false
+  parameters: WindowsHandoffParameter[],
+  waitForExit = false,
+  desktopPid: number = Number(process.pid)
 ): {
   command: string
   args: string[]
+  handoffEnv: Record<string, string>
   /** Spawn NON-detached so the wrapper gets a hidden console the script inherits. */
   detached: false
 } {
-  const commandArgs: string[] = [handoff.command, ...handoff.args, ...extraArgs]
-
-  // cmd.exe reparses every argument after /c. Keep the fixed wrapper while
-  // failing closed on every value that could become cmd syntax.
-  for (const value of commandArgs) {
-    if (CMD_UNSAFE_PATH.test(value)) {
-      throw new Error('The updater hand-off contains an unsafe Windows command argument.')
-    }
-  }
+  const powershellCommand = validatedPowerShellCommand(handoff.command)
+  const desktopPidMarker: string = validatedDesktopPid(desktopPid)
+  const encodedBootstrap: string = Buffer.from(WINDOWS_HANDOFF_BOOTSTRAP, 'utf16le').toString('base64')
+  const invoker: string = `& ([ScriptBlock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodedBootstrap}'))))`
+  const payload = Buffer.from(JSON.stringify(buildWindowsHandoffPayload(handoff, parameters)), 'utf8').toString(
+    'base64'
+  )
 
   return {
-    command: 'cmd.exe',
+    command: windowsCmdPath(),
     args: [
       '/d',
       '/s',
       '/c',
       ...(waitForExit ? [] : ['start', '', '/b']),
-      ...commandArgs
+      powershellCommand,
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      invoker,
+      WINDOWS_HANDOFF_PID_MARKER,
+      desktopPidMarker
     ],
+    handoffEnv: { [WINDOWS_HANDOFF_PAYLOAD_ENV]: payload },
     detached: false
   }
 }
@@ -563,8 +702,9 @@ export function spawnUpdaterProcess(
  * POSIX: the detached launcher leads its own process group — kill the group.
  * Windows: the `cmd start /b` wrapper exits at once and PowerShell outlives it,
  * so stop the wrapper's recorded children that carry this Desktop's
- * `-DesktopPid` (a reused pid never matches both), then the wrapper's tree if
- * it is still running. Best effort; the script is adopt-only besides (A4).
+ * exact `-HermesDesktopPidMarker` (a reused pid never matches both), then the
+ * wrapper's tree if it is still running. Best effort; the script is adopt-only
+ * besides (A4).
  */
 export function killHandoffTree(
   child: UpdaterChild & { exitCode?: number | null; signalCode?: string | null },
@@ -602,20 +742,29 @@ export function killHandoffTree(
 
   const wrapperRunning = child.exitCode == null && child.signalCode == null
 
-  const command =
-    `Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | ` +
-    `Where-Object { $_.CommandLine -match '-DesktopPid\\s+${desktopPid}(\\s|$)' } | ` +
-    `ForEach-Object { taskkill.exe /PID $_.ProcessId /T /F | Out-Null }` +
-    (wrapperRunning ? `; taskkill.exe /PID ${pid} /T /F | Out-Null` : '')
-
   try {
-    spawnProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+    const powershellPath: string = windowsPowerShellPath()
+    const taskkillPath: string = windowsTaskkillPath()
+    const taskkillInvocation = `& '${taskkillPath}'`
+    const command =
+      `Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | ` +
+      `Where-Object { $_.CommandLine -match '${windowsHandoffPidMarkerPattern(desktopPid)}' } | ` +
+      `ForEach-Object { ${taskkillInvocation} /PID $_.ProcessId /T /F | Out-Null }` +
+      (wrapperRunning ? `; ${taskkillInvocation} /PID ${pid} /T /F | Out-Null` : '')
+
+    spawnProcess(powershellPath, ['-NoProfile', '-NonInteractive', '-Command', command], {
       stdio: 'ignore',
       windowsHide: true
     }).on('error', () => {})
   } catch {
     // Best effort.
   }
+}
+
+export function windowsHandoffPidMarkerPattern(desktopPid: number): string {
+  const value: string = validatedDesktopPid(desktopPid)
+
+  return `(?:^|\\s)${WINDOWS_HANDOFF_PID_MARKER}\\s+${value}(?:\\s|$)`
 }
 
 export interface UpdaterHandoffOutcome {

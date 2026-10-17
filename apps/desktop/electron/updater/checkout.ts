@@ -23,6 +23,8 @@ import {
   sandboxFallbackFromEnv,
   spawnUpdaterProcess,
   stagedUpdaterSupportsPrewrittenMarker,
+  type UpdateScriptHandoff,
+  type WindowsHandoffParameter,
   windowsUpdatePrerequisiteError,
   wrapHandoffForDetachedConsole
 } from '../updater-process'
@@ -408,6 +410,54 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): CheckoutStra
 
   return { mechanism, check, apply }
 
+  function windowsPathFailure(error: unknown): UpdaterApplyResultWire {
+    const detail: string = error instanceof Error ? error.message : String(error)
+    const message =
+      'The updater did not start, so nothing was changed. Hermes keeps running on the previous version — try the update again.\n\n' +
+      `Details: ${detail}`
+
+    deps.rememberLog(`[updates] Windows updater path resolution failed: ${detail}`)
+    deps.emitUpdateProgress({ stage: 'error', message, percent: null })
+
+    return { ok: false, error: 'updater-spawn-failed', message }
+  }
+
+  function prepareWindowsHandoff(
+    scriptHandoff: UpdateScriptHandoff,
+    updateRoot: string,
+    status: UpdaterStatusWire,
+    branch: string,
+    plan: HandoffPlan
+  ):
+    | { failure: UpdaterApplyResultWire }
+    | { wrapped: ReturnType<typeof wrapHandoffForDetachedConsole> } {
+    const desktopPid: number = Number(process.pid)
+    const wrappedParameters: WindowsHandoffParameter[] = [
+      { kind: 'value', name: 'InstallRoot', value: updateRoot },
+      status.channel
+        ? { kind: 'value', name: 'Channel', value: status.channel }
+        : { kind: 'value', name: 'Branch', value: branch },
+      { kind: 'value', name: 'DesktopPid', value: String(desktopPid) },
+      { kind: 'value', name: 'RelaunchExe', value: process.execPath }
+    ]
+
+    // Same remote-ownership rule as the posix hand-off (#117529): a
+    // remote-served Desktop owns no local messaging gateway.
+    if (deps.remoteGatewayActive()) {
+      wrappedParameters.push({ kind: 'switch', name: 'NoGateway' })
+    }
+
+    if (plan.runId) {
+      wrappedParameters.push({ kind: 'value', name: 'HandoffRun', value: plan.runId })
+    }
+
+    try {
+      return { wrapped: wrapHandoffForDetachedConsole(scriptHandoff, wrappedParameters, false, desktopPid) }
+    } catch (error) {
+      return { failure: windowsPathFailure(error) }
+    }
+  }
+
   async function applyBody(): Promise<UpdaterApplyResultWire> {
     const status: UpdaterStatusWire = await check({ force: true })
 
@@ -466,7 +516,15 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): CheckoutStra
       // we surface the manual one-liner.
       const updateRoot = deps.resolveUpdateRoot()
 
-      if (!resolveUpdateScriptHandoff(updateRoot)) {
+      let scriptHandoff: UpdateScriptHandoff | null
+
+      try {
+        scriptHandoff = resolveUpdateScriptHandoff(updateRoot)
+      } catch (error) {
+        return windowsPathFailure(error)
+      }
+
+      if (!scriptHandoff) {
         const command: string = manualCommand
 
         deps.rememberLog(
@@ -514,7 +572,15 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): CheckoutStra
     // anything.  Runs while the backend is still alive.
     await deps.preflightStateDb(deps.hermesHome, deps.rememberLog)
 
-    if (deps.isWindows && resolveUpdateScriptHandoff(updateRoot)) {
+    let scriptHandoff: UpdateScriptHandoff | null
+
+    try {
+      scriptHandoff = resolveUpdateScriptHandoff(updateRoot)
+    } catch (error) {
+      return windowsPathFailure(error)
+    }
+
+    if (deps.isWindows && scriptHandoff) {
       const message = windowsUpdatePrerequisiteError(updateRoot, deps.hermesHome)
 
       if (message) {
@@ -539,7 +605,6 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): CheckoutStra
     // checkout, so each `hermes update` refreshes the code that drives the
     // next one. Checkouts that predate the script fall back to the binary
     // path unchanged.
-    const scriptHandoff = resolveUpdateScriptHandoff(updateRoot)
     const handoffStartedAt = Date.now()
     let child
     let plan: HandoffPlan | null = null
@@ -563,33 +628,20 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): CheckoutStra
       // PowerShell; the script still outlives us. The wrapper exits at once,
       // so its pid means nothing: the bridge marker above names THIS process,
       // and the script takes it over (adopting -DesktopPid) as its first act.
-      const wrappedArgs: string[] = [
-        '-InstallRoot',
-        updateRoot,
-        ...(status.channel ? ['-Channel', status.channel] : ['-Branch', branch]),
-        '-DesktopPid',
-        String(process.pid),
-        '-RelaunchExe',
-        process.execPath
-      ]
+      const prepared = prepareWindowsHandoff(scriptHandoff, updateRoot, status, branch, plan)
 
-      // Same remote-ownership rule as the posix hand-off (#117529): a
-      // remote-served Desktop owns no local messaging gateway.
-      if (deps.remoteGatewayActive()) {
-        wrappedArgs.push('-NoGateway')
+      if ('failure' in prepared) {
+        return prepared.failure
       }
 
-      if (plan.runId) {
-        wrappedArgs.push('-HandoffRun', plan.runId)
-      }
-
-      const wrapped = wrapHandoffForDetachedConsole(scriptHandoff, wrappedArgs)
+      const { wrapped } = prepared
 
       child = spawnUpdaterProcess(wrapped.command, wrapped.args, {
         cwd: deps.hermesHome,
         env: {
           ...sourceUpdateEnvironment(updateRoot, deps.hermesHome),
-          HERMES_UPDATE_STARTED_AT: String(updateStartedAt)
+          HERMES_UPDATE_STARTED_AT: String(updateStartedAt),
+          ...wrapped.handoffEnv
         },
         // Never `true` here: DETACHED_PROCESS leaves the wrapper console-less, so
         // `start /b` hands PowerShell a new VISIBLE console whose QuickEdit

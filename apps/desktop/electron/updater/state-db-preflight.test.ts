@@ -8,7 +8,29 @@ import { fileURLToPath } from 'node:url'
 
 import { test } from 'vitest'
 
-import { preflightStateDb } from './state-db-preflight'
+import { windowsCmdPath } from '../windows-powershell'
+
+import { guardedStateDbCmdArgs, preflightStateDb, stateDbPreflightInvocation } from './state-db-preflight'
+
+test('the legacy cmd preflight preserves safe argv and rejects shell syntax', (): void => {
+  const command = String.raw`C:\Program Files\Hermes\hermes.cmd`
+  const args = ['--run-module', 'hermes_cli.backup_sqlite', String.raw`C:\Users\Jane Doe\.hermes`]
+
+  assert.deepEqual(guardedStateDbCmdArgs(command, args), [
+    '/d',
+    '/v:off',
+    '/s',
+    '/c',
+    `""${command}" "--run-module" "hermes_cli.backup_sqlite" "C:\\Users\\Jane Doe\\.hermes""`
+  ])
+  assert.equal(stateDbPreflightInvocation(command, args).command, windowsCmdPath())
+
+  for (const unsafe of ['bad&arg', 'bad|arg', 'bad%PATH%', 'bad\rarg', 'bad\narg', 'bad"arg', 'bad<arg', 'bad>arg', 'bad^arg']) {
+    assert.throws((): void => {
+      guardedStateDbCmdArgs(command, [unsafe])
+    }, /unsafe Windows command argument/)
+  }
+})
 
 test('the desktop preflight publishes committed WAL rows before its caller can stop the backend', async (): Promise<void> => {
   const home: string = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-db-'))
