@@ -15,10 +15,11 @@ const signUrl = pathToFileURL(path.join(supplier, 'index.js')).href
 
 function run(root, body, { patched = true, limit = 64 } = {}) {
   const script = path.join(root, 'probe.mjs')
+  const limiter = path.join(root, 'run-with-fd-limit.sh')
   fs.writeFileSync(script, body)
+  fs.writeFileSync(limiter, '#!/bin/sh\nset -eu\nulimit -S -n "$1"\nulimit -H -n "$1"\nshift\nexec "$@"\n')
   const args = [...(patched ? ['--import', adapter] : []), script]
-  const result = spawnSync('/bin/sh', ['-c',
-    `ulimit -S -n ${limit} && ulimit -H -n ${limit} && exec "$@"`, 'signing-probe', process.execPath, ...args], {
+  const result = spawnSync('/bin/sh', [limiter, String(limit), process.execPath, ...args], {
     encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '', DEBUG: '' }, timeout: 30000
   })
   assert.ifError(result.error)

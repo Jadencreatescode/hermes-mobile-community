@@ -54,7 +54,7 @@ describe('actOnActivePreview (drive_preview tool)', () => {
     withRunner(code => {
       // Stand in for the guest page: run the script's own settle/rescan shape
       // by answering each act() call in order.
-      actions.push(...(code.match(/"kind":"(\w+)"/g) ?? []))
+      actions.push(...(code.match(/hermes-locate/g) ?? []))
 
       return Promise.resolve(
         JSON.stringify({
@@ -137,6 +137,26 @@ describe('actOnActivePreview (drive_preview tool)', () => {
     expect((await actOnActivePreview({ kind: 'click', ref: '@e1' })).error).toContain('did not answer')
   })
 
+  it('encodes action data without copying it into executable guest source', async () => {
+    const tabId = openBrowserTab()
+    const payload = `'); globalThis.__previewInjected = true; //`
+    let injected = ''
+
+    cleanups.push(
+      registerPreviewScriptRunner(tabId, async code => {
+        injected = code
+
+        return JSON.stringify({ acted: 'clicked safely', success: true })
+      })
+    )
+
+    await actOnActivePreview({ kind: 'click', selector: payload })
+
+    expect(injected).toContain('JSON.parse(')
+    expect(injected).not.toContain(payload)
+    expect(injected).not.toContain('__previewInjected')
+  })
+
   /** A pane that answers the locate trip with a fixed on-screen point, and the
    *  read-back trip with an empty inventory. Returns the input spy. */
   const withDrivenPane = () => {
@@ -149,7 +169,7 @@ describe('actOnActivePreview (drive_preview tool)', () => {
           return JSON.stringify({ focused: true, success: true, tag: 'INPUT' })
         }
 
-        return code.includes('"kind":"locate"')
+        return code.includes('hermes-locate')
           ? JSON.stringify({ acted: 'looking at button "Save"', point: { x: 120, y: 80 }, success: true })
           : // `hit` is the page's witness that the real pointerdown arrived.
             JSON.stringify({ elements: [], hit: { tag: 'BUTTON', trusted: true }, success: true })
@@ -195,7 +215,7 @@ describe('actOnActivePreview (drive_preview tool)', () => {
           return JSON.stringify({ focused: focus.focused, success: true, tag: focus.tag ?? 'BODY' })
         }
 
-        return code.includes('"kind":"locate"')
+        return code.includes('hermes-locate')
           ? JSON.stringify({
               acted: 'looking at textbox "Comment"',
               point: { x: 40, y: 20 },
@@ -356,7 +376,7 @@ describe('actOnActivePreview (drive_preview tool)', () => {
           ? JSON.stringify({ focused: true, success: true, tag: 'INPUT' })
           : code.includes('document.activeElement')
             ? JSON.stringify({ success: true, field: true, len: fieldLen })
-            : code.includes('"kind":"locate"')
+            : code.includes('hermes-locate')
               ? JSON.stringify({
                   acted: 'looking at textbox "Price"',
                   point: { x: 120, y: 80 },
@@ -417,7 +437,7 @@ describe('actOnActivePreview (drive_preview tool)', () => {
     // direct-set fallback reports failure too — so the action must hard-stop.
     cleanups.push(
       registerPreviewScriptRunner(tabId, async code =>
-        code.includes('"kind":"locate"')
+        code.includes('hermes-locate')
           ? JSON.stringify({
               acted: 'looking at textbox "Price"',
               point: { x: 120, y: 80 },
@@ -450,7 +470,7 @@ describe('actOnActivePreview (drive_preview tool)', () => {
         async code =>
           code.includes('hermes-focus-probe')
             ? JSON.stringify({ focused: true, success: true, tag: 'INPUT' })
-            : code.includes('"kind":"locate"')
+            : code.includes('hermes-locate')
               ? JSON.stringify({
                   acted: 'looking at textbox "Price"',
                   point: { x: 120, y: 80 },
@@ -494,7 +514,7 @@ describe('actOnActivePreview (drive_preview tool)', () => {
 
     cleanups.push(
       registerPreviewScriptRunner(tabId, async code =>
-        code.includes('"kind":"locate"')
+        code.includes('hermes-locate')
           ? JSON.stringify({ acted: 'looking at textbox "Search"', point: { x: 40, y: 20 }, success: true })
           : JSON.stringify({ elements: [], hit: null, success: true })
       )
@@ -557,7 +577,7 @@ describe('actOnActivePreview (drive_preview tool)', () => {
 
     cleanups.push(
       registerPreviewScriptRunner(tabId, async code =>
-        code.includes('"kind":"locate"')
+        code.includes('hermes-locate')
           ? JSON.stringify({ acted: 'looking at button "Save"', point: { x: 12, y: 8 }, success: true })
           : JSON.stringify({ elements: [], hit: null, success: true })
       )
@@ -598,7 +618,7 @@ describe('actOnActivePreview (drive_preview tool)', () => {
 
     cleanups.push(
       registerPreviewScriptRunner(tabId, async code =>
-        code.includes('"kind":"locate"')
+        code.includes('hermes-locate')
           ? JSON.stringify({ acted: 'looking at button "Save"', point: { x: 12, y: 8 }, success: true })
           : JSON.stringify({ elements: [], hit: { tag: 'HERMES-WATCH', trusted: true }, success: true })
       )
@@ -620,8 +640,8 @@ describe('actOnActivePreview (drive_preview tool)', () => {
     await actOnActivePreview({ kind: 'click', ref: '@e1' })
 
     // The one-trip shape: the engine both acts and re-reads, no locate handshake.
-    expect(injected).toContain('"kind":"click"')
-    expect(injected).not.toContain('"kind":"locate"')
+    expect(injected).toContain('JSON.parse(')
+    expect(injected).not.toContain('hermes-locate')
   })
 
   it('routes history verbs to the pane instead of the guest page', async () => {
@@ -700,7 +720,7 @@ describe('actOnActivePreview (drive_preview tool)', () => {
 
     cleanups.push(
       registerPreviewScriptRunner(tabId, async code =>
-        code.includes('"kind":"locate"')
+        code.includes('hermes-locate')
           ? JSON.stringify({ acted: `looking at ${tag}`, point: { x: 8, y: 8 }, success: true, tag })
           : JSON.stringify({ elements: [], success: true })
       )

@@ -1,4 +1,10 @@
 name: Hermes Mobile Actions surface
 
 paths:
-  - .github
+  # Mirror the complete Actions surface in codeql-mobile.yml's trigger list.
+  # Generic upstream workflow changes do not trigger this mobile scanner and
+  # are outside its release boundary; broadening this config to all of .github
+  # would silently scan unrelated core workflows only when a mobile file also
+  # happened to change. The public mobile release invokes no local action.
+  - .github/workflows/hermes-mobile-release.yml
+  - .github/workflows/codeql-mobile.yml

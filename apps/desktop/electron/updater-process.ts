@@ -313,6 +313,16 @@ export function wrapHandoffForDetachedConsole(
   /** Spawn NON-detached so the wrapper gets a hidden console the script inherits. */
   detached: false
 } {
+  const commandArgs: string[] = [handoff.command, ...handoff.args, ...extraArgs]
+
+  // cmd.exe reparses every argument after /c. Keep the fixed wrapper while
+  // failing closed on every value that could become cmd syntax.
+  for (const value of commandArgs) {
+    if (CMD_UNSAFE_PATH.test(value)) {
+      throw new Error('The updater hand-off contains an unsafe Windows command argument.')
+    }
+  }
+
   return {
     command: 'cmd.exe',
     args: [
@@ -320,9 +330,7 @@ export function wrapHandoffForDetachedConsole(
       '/s',
       '/c',
       ...(waitForExit ? [] : ['start', '', '/b']),
-      handoff.command,
-      ...handoff.args,
-      ...extraArgs
+      ...commandArgs
     ],
     detached: false
   }

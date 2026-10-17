@@ -89,6 +89,31 @@ const DRIVEN: readonly string[] = ['click', 'hover', 'press', 'type']
  *  from them would report every one of them as a failure. */
 const CLICKS: readonly string[] = ['click', 'type']
 
+/**
+ * Encode host data as JSON without copying any host-controlled character into
+ * executable source. JSON.stringify alone protects a string literal, but it is
+ * still the wrong boundary for source construction: static analysis cannot
+ * distinguish the resulting data from code, and future edits can accidentally
+ * move it into an executable position. Every UTF-16 code unit becomes a fixed
+ * Unicode escape, so the emitted source alphabet is only hexadecimal digits,
+ * backslashes, and the static JSON.parse wrapper.
+ */
+function scriptJson(value: unknown): string {
+  const json = JSON.stringify(value)
+
+  if (json === undefined) {
+    throw new TypeError('Preview script data must be JSON serializable.')
+  }
+
+  let encoded = ''
+
+  for (let index = 0; index < json.length; index += 1) {
+    encoded += `\\u${json.charCodeAt(index).toString(16).padStart(4, '0')}`
+  }
+
+  return `JSON.parse("${encoded}")`
+}
+
 const NOTHING_OPEN = 'No live page is open in the in-app browser — open one with open_preview first.'
 
 const NAVIGATED =
@@ -172,7 +197,8 @@ function buildLocateScript(action: PreviewActAction, focus: boolean): string {
 
   return `(function () {
 ${preamble()}
-  var locate = ${JSON.stringify(locate)};
+  // hermes-locate
+  var locate = ${scriptJson(locate)};
   var found = act(locate);
   if (!found.success) { return Promise.resolve(JSON.stringify(found)); }
   watch('aim');
@@ -232,9 +258,10 @@ function buildPinScript(action: PreviewActAction, label: string): string {
 
   return `(function () {
 ${preamble()}
-  var found = act(${JSON.stringify(locate)});
+  // hermes-locate
+  var found = act(${scriptJson(locate)});
   if (!found.success) { return JSON.stringify(found); }
-  watch('pin', ${JSON.stringify(label)});
+  watch('pin', ${scriptJson(label)});
   return JSON.stringify({ acted: 'pinned ' + String(found.acted || 'it').replace(/^looking at /, ''), success: true });
 })()`
 }
@@ -274,7 +301,8 @@ function buildUnpinScript(action: PreviewActAction): string {
 ${preamble()}
 ${
   one
-    ? `  var found = act(${JSON.stringify(locate)});
+    ? `  // hermes-locate
+  var found = act(${scriptJson(locate)});
   if (!found.success) { return JSON.stringify(found); }
   var gone = 'unpinned ' + String(found.acted || 'it').replace(/^looking at /, '');`
     : `  holder.aimed = null;
@@ -318,7 +346,7 @@ ${preamble()}
 function buildScriptedScript(action: PreviewActAction, settleMs: number): string {
   return `(function () {
 ${preamble()}
-  var result = act(${JSON.stringify(action)});
+  var result = act(${scriptJson(action)});
   ${action.kind === 'elements' ? "if (result.success) { watch('strobe'); }" : ''}
   if (!result.success || ${settleMs} <= 0) { return Promise.resolve(JSON.stringify(result)); }
   return wait(${settleMs}).then(function () {
@@ -442,9 +470,9 @@ function buildDirectSetScript(text: string): string {
       var setVal = null;
       if (el.tagName === 'TEXTAREA') { setVal = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; }
       else if (el.tagName === 'INPUT') { setVal = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; }
-      if (setVal) { setVal.call(el, ${JSON.stringify(text)}); }
-      else if ('value' in el) { el.value = ${JSON.stringify(text)}; }
-      else if (el.isContentEditable) { el.textContent = ${JSON.stringify(text)}; }
+      if (setVal) { setVal.call(el, ${scriptJson(text)}); }
+      else if ('value' in el) { el.value = ${scriptJson(text)}; }
+      else if (el.isContentEditable) { el.textContent = ${scriptJson(text)}; }
       else { return JSON.stringify({ success: false, error: 'not a text field' }); }
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));

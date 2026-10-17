@@ -276,6 +276,21 @@ test('wrapHandoffForDetachedConsole runs the script inside a non-detached hidden
   ])
 })
 
+test('wrapHandoffForDetachedConsole rejects every cmd metacharacter before spawning', () => {
+  const handoff = {
+    args: ['-NoProfile', '-File', String.raw`C:\Hermes\update.ps1`],
+    command: 'powershell',
+    scriptPath: String.raw`C:\Hermes\update.ps1`
+  }
+
+  for (const unsafe of ['bad&arg', 'bad|arg', 'bad%PATH%', 'bad\rarg', 'bad\narg', 'bad"arg', 'bad<arg', 'bad>arg', 'bad^arg']) {
+    assert.throws(
+      () => wrapHandoffForDetachedConsole(handoff, ['-InstallRoot', unsafe]),
+      /unsafe Windows command argument/
+    )
+  }
+})
+
 test('resolvePosixScriptHandoff returns the bash recipe when the script exists', () => {
   const root = '/home/hermes/.hermes/hermes-agent'
   const expected = path.join(root, 'scripts', 'desktop-update', 'posix.sh')

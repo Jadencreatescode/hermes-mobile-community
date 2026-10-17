@@ -33,8 +33,12 @@ export function preflightStateDb({ python, script, home, log, launcher = null }:
     // closed instead.
     const viaCmd: boolean = process.platform === 'win32' && /\.cmd$/i.test(command)
 
-    if (viaCmd && [command, ...args].some((value: string): boolean => /["%&|<>^\r\n]/.test(value))) {
-      throw new Error('The pre-flight snapshot contains an unsafe Windows command argument.')
+    if (viaCmd) {
+      for (const value of [command, ...args]) {
+        if (/["%&|<>^\r\n]/.test(value)) {
+          throw new Error('The pre-flight snapshot contains an unsafe Windows command argument.')
+        }
+      }
     }
 
     const result: string = execFileSync(
