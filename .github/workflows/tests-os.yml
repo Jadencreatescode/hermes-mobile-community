@@ -92,9 +92,12 @@ jobs:
             runner: macos-latest
             marker: macos
             slice: 2/2
+          # The Windows lane normally takes ~26 min; slower hosted runners pushed it past
+          # the 30 min default and cancelled it with zero failures, so give it headroom.
           - name: Windows-only tests
             runner: windows-latest
             marker: windows
+            timeout: 45
     steps:
       - name: Checkout code
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
