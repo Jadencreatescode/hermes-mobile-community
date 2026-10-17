@@ -234,9 +234,7 @@ describe('host.state.subagents', () => {
     const subagents = await import('@/store/subagents')
 
     subagents.$subagentsBySession.set({
-      'runtime-operations': [
-        { id: 'worker-1', goal: 'Review release', status: 'running' }
-      ] as never
+      'runtime-operations': [{ id: 'worker-1', goal: 'Review release', status: 'running' }] as never
     })
 
     expect(host.state.subagents.get()).toEqual(subagents.$subagentsBySession.get())

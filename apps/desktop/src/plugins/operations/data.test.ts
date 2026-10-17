@@ -41,7 +41,13 @@ describe('loadOperationsSnapshot', () => {
     const host = {
       agents: vi.fn().mockResolvedValue({
         agents: [
-          { connectionId: 'gateway-a', connectionKind: 'remote', connectionLabel: 'Gateway A', handle: 'release', profile: 'release' }
+          {
+            connectionId: 'gateway-a',
+            connectionKind: 'remote',
+            connectionLabel: 'Gateway A',
+            handle: 'release',
+            profile: 'release'
+          }
         ],
         sources: [
           { connectionId: 'gateway-a', kind: 'remote', label: 'Gateway A', reachable: true },
@@ -72,7 +78,15 @@ describe('loadOperationsSnapshot', () => {
   it('maps a live delegated agent to the owning Operations agent', async () => {
     const host = {
       agents: vi.fn().mockResolvedValue({
-        agents: [{ connectionId: 'gateway-a', connectionKind: 'remote', connectionLabel: 'Gateway A', handle: 'ops', profile: 'ops' }],
+        agents: [
+          {
+            connectionId: 'gateway-a',
+            connectionKind: 'remote',
+            connectionLabel: 'Gateway A',
+            handle: 'ops',
+            profile: 'ops'
+          }
+        ],
         sources: [{ connectionId: 'gateway-a', kind: 'remote', label: 'Gateway A', reachable: true }]
       }),
       requestProfile: vi.fn(async (_route, method: string) => {
@@ -101,7 +115,15 @@ describe('loadOperationsSnapshot', () => {
   it('keeps a reachable identity unknown when its detail request fails', async () => {
     const host = {
       agents: vi.fn().mockResolvedValue({
-        agents: [{ connectionId: 'gateway-a', connectionKind: 'remote', connectionLabel: 'Gateway A', handle: 'ops', profile: 'ops' }],
+        agents: [
+          {
+            connectionId: 'gateway-a',
+            connectionKind: 'remote',
+            connectionLabel: 'Gateway A',
+            handle: 'ops',
+            profile: 'ops'
+          }
+        ],
         sources: [{ connectionId: 'gateway-a', kind: 'remote', label: 'Gateway A', reachable: true }]
       }),
       requestProfile: vi.fn().mockRejectedValue(new Error('detail timeout')),
@@ -128,8 +150,12 @@ describe('A2A harness agent data layer', () => {
       agents: [
         { agent_id: 'a2a:abc123', name: 'Test Agent', status: 'pending', capabilities: ['chat'] },
         {
-          agent_id: 'a2a:def456', name: 'Other Agent', status: 'verified', capabilities: [],
-          runtime_state: 'working', supported_operations: ['get_state', 'interrupt']
+          agent_id: 'a2a:def456',
+          name: 'Other Agent',
+          status: 'verified',
+          capabilities: [],
+          runtime_state: 'working',
+          supported_operations: ['get_state', 'interrupt']
         }
       ]
     })
@@ -139,8 +165,18 @@ describe('A2A harness agent data layer', () => {
 
     expect(rest).toHaveBeenCalledWith('/agents/a2a')
     expect(agents).toHaveLength(2)
-    expect(agents[0]).toMatchObject({ agentId: 'a2a:abc123', name: 'Test Agent', status: 'pending', capabilities: ['chat'] })
-    expect(agents[1]).toMatchObject({ agentId: 'a2a:def456', name: 'Other Agent', status: 'verified', capabilities: [] })
+    expect(agents[0]).toMatchObject({
+      agentId: 'a2a:abc123',
+      name: 'Test Agent',
+      status: 'pending',
+      capabilities: ['chat']
+    })
+    expect(agents[1]).toMatchObject({
+      agentId: 'a2a:def456',
+      name: 'Other Agent',
+      status: 'verified',
+      capabilities: []
+    })
     expect(agents[1]).toMatchObject({ runtimeState: 'working', supportedOperations: ['get_state', 'interrupt'] })
   })
 
@@ -156,7 +192,12 @@ describe('A2A harness agent data layer', () => {
     const agent = await getA2AAgentStatus('a2a:status1')
 
     expect(rest).toHaveBeenCalledWith('/agents/a2a/a2a%3Astatus1/status')
-    expect(agent).toMatchObject({ agentId: 'a2a:status1', name: 'Status Agent', status: 'verified', capabilities: ['send'] })
+    expect(agent).toMatchObject({
+      agentId: 'a2a:status1',
+      name: 'Status Agent',
+      status: 'verified',
+      capabilities: ['send']
+    })
   })
 
   it('registers an agent with URL validation', async () => {

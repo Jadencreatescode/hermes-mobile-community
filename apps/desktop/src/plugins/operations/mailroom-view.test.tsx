@@ -86,13 +86,17 @@ describe('MailroomView', () => {
     expect(approve.disabled).toBe(false)
     fireEvent.click(approve)
 
-    await waitFor(() => expect(rest).toHaveBeenCalledWith('/mailroom/critical-policy', expect.objectContaining({ method: 'PUT' })))
+    await waitFor(() =>
+      expect(rest).toHaveBeenCalledWith('/mailroom/critical-policy', expect.objectContaining({ method: 'PUT' }))
+    )
     expect(await screen.findByText(/Critical route approved until/i)).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Mailroom message'), { target: { value: 'Please checkpoint.' } })
     const send = screen.getByRole('button', { name: 'Send through Mailroom' }) as HTMLButtonElement
     expect(send.disabled).toBe(false)
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(61_000) })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000)
+    })
 
     expect(screen.getByRole('status').textContent).toMatch(/Critical route approval expired/i)
     expect(send.disabled).toBe(true)

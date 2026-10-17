@@ -99,14 +99,15 @@ it.each([true, false])(
       expect(await createCheckoutStrategy(deps).apply()).toMatchObject({ ok: true, handedOff: true })
       expect(spawned).toHaveLength(1)
       const args: string[] = spawned[0]!
+
       const handoffParameters: Array<{ kind: string; name: string; value?: string }> = IS_WINDOWS
         ? JSON.parse(
-            Buffer.from(
-              String(spawnOptions[0]?.env?.[updaterProcess.WINDOWS_HANDOFF_PAYLOAD_ENV]),
-              'base64'
-            ).toString('utf8')
+            Buffer.from(String(spawnOptions[0]?.env?.[updaterProcess.WINDOWS_HANDOFF_PAYLOAD_ENV]), 'base64').toString(
+              'utf8'
+            )
           ).parameters
         : []
+
       // The Windows cmd wrapper must inherit its hidden console; the POSIX
       // script needs to outlive Electron as a detached child (#116161).
       expect(spawnOptions[0]?.detached).toBe(!IS_WINDOWS)

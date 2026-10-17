@@ -25,11 +25,7 @@ import {
   treePanesWithPrefix,
   treeTabCloseTargets
 } from '@/components/pane-shell/tree/store'
-import {
-  ActionsContextMenu,
-  type MenuKit,
-  renderActionItem
-} from '@/components/ui/actions-menu'
+import { ActionsContextMenu, type MenuKit, renderActionItem } from '@/components/ui/actions-menu'
 import { FileTypeIcon } from '@/components/ui/file-type-icon'
 import { paneTabCloseItems } from '@/components/ui/pane-tab'
 import { ToolIcon } from '@/components/ui/tool-icon'
@@ -405,9 +401,7 @@ const watchPreviewTileMirror = paneMirror<{ id: string }>({
   tabWrap: (tabId, tab) => {
     const paneId = `${PREVIEW_TILE_PREFIX}:${tabId}`
 
-    return (
-      <PreviewTabMenu paneId={paneId}>{tab}</PreviewTabMenu>
-    )
+    return <PreviewTabMenu paneId={paneId}>{tab}</PreviewTabMenu>
   },
   close: tabId => {
     forgetBrowserPage(tabId)

@@ -59,7 +59,10 @@ const ago = (seconds?: null | number): null | string => (seconds ? new Date(seco
 
 /** Deterministic initials for an unavatar'd assignee. */
 function initials(name: string): string {
-  const parts = name.trim().split(/[\s_\-./]+/).filter(Boolean)
+  const parts = name
+    .trim()
+    .split(/[\s_\-./]+/)
+    .filter(Boolean)
 
   return `${parts[0]?.[0] ?? '?'}${parts[1]?.[0] ?? ''}`.toUpperCase()
 }
@@ -100,9 +103,7 @@ function Card({ task }: { task: ForgeTask }) {
         {task.title || task.id}
       </span>
       {summary && (
-        <span className="line-clamp-2 text-[0.6875rem] leading-snug text-(--ui-text-tertiary)">
-          {summary}
-        </span>
+        <span className="line-clamp-2 text-[0.6875rem] leading-snug text-(--ui-text-tertiary)">{summary}</span>
       )}
       <div className="mt-auto flex items-center gap-2 whitespace-nowrap text-[0.625rem] text-(--ui-text-tertiary)">
         {typeof task.priority === 'number' && task.priority > 0 && (
@@ -140,12 +141,8 @@ function Column({ name, tasks }: { name: string; tasks: ForgeTask[] }) {
     >
       <header className="mb-1.5 flex items-center gap-1.5 px-1 pb-1.5">
         <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: meta.tone }} />
-        <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-(--ui-text-tertiary)">
-          {label}
-        </span>
-        <span className="ml-auto text-[0.625rem] tabular-nums text-(--ui-text-quaternary)">
-          {tasks.length}
-        </span>
+        <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-(--ui-text-tertiary)">{label}</span>
+        <span className="ml-auto text-[0.625rem] tabular-nums text-(--ui-text-quaternary)">{tasks.length}</span>
       </header>
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
         {tasks.map(task => (
@@ -258,7 +255,10 @@ export function ForgeView() {
 
     // Canonical order first, then any extra columns the backend added.
     const byName = new Map(data.columns.map(col => [col.name, col.tasks]))
-    const ordered = [...FORGE_COLUMNS.filter(name => byName.has(name)), ...data.columns.map(col => col.name).filter(name => !FORGE_COLUMNS.includes(name as never))]
+    const ordered = [
+      ...FORGE_COLUMNS.filter(name => byName.has(name)),
+      ...data.columns.map(col => col.name).filter(name => !FORGE_COLUMNS.includes(name as never))
+    ]
 
     return ordered.map(name => ({ name, tasks: byName.get(name) ?? [] }))
   }, [data])
@@ -286,10 +286,7 @@ export function ForgeView() {
     }
 
     return (
-      <ErrorState
-        description={error.message}
-        title="Forge board could not load"
-      >
+      <ErrorState description={error.message} title="Forge board could not load">
         <Button className="min-h-11" onClick={() => window.location.reload()} variant="outline">
           Retry
         </Button>

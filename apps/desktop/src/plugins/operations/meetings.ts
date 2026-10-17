@@ -5,7 +5,14 @@
 import * as meetingModel from '../hermes-bots/meeting-model.mjs'
 // @ts-expect-error The sibling ESM runner has no declaration file.
 // eslint-disable-next-line no-restricted-imports
-import { filterMeetingHistory, meetingMarker, meetingRoleRestrictions as meetingRoleRestrictionsEsm, runRoleTurn, runStructuredMeetingRound, stripMeetingMarkers } from '../hermes-bots/meeting-runner.mjs'
+import {
+  filterMeetingHistory,
+  meetingMarker,
+  meetingRoleRestrictions as meetingRoleRestrictionsEsm,
+  runRoleTurn,
+  runStructuredMeetingRound,
+  stripMeetingMarkers
+} from '../hermes-bots/meeting-runner.mjs'
 
 import { operationsApi } from './api'
 import { getA2AChatHistory, type OperationsAgentModel, sendA2AChatMessage } from './data'
@@ -112,19 +119,21 @@ export function isMeetingRoundRunFresh(meeting: MeetingRecord, nowMs = Date.now(
   const marker = meeting.roundRun
 
   if (
-    meeting.state !== 'running'
-    || !marker
-    || marker.round !== meeting.currentRound
-    || !Number.isFinite(marker.startedAt)
-    || !Number.isInteger(marker.startedAt)
-    || marker.startedAt <= 0
-    || marker.startedAt > nowMs
-    || nowMs - marker.startedAt >= MEETING_ROUND_RUN_LEASE_MS
-  ) {return false}
+    meeting.state !== 'running' ||
+    !marker ||
+    marker.round !== meeting.currentRound ||
+    !Number.isFinite(marker.startedAt) ||
+    !Number.isInteger(marker.startedAt) ||
+    marker.startedAt <= 0 ||
+    marker.startedAt > nowMs ||
+    nowMs - marker.startedAt >= MEETING_ROUND_RUN_LEASE_MS
+  ) {
+    return false
+  }
 
-  return meeting.participants.some(participant =>
-    participant.connectionId === marker.participant.connectionId
-    && participant.profile === marker.participant.profile
+  return meeting.participants.some(
+    participant =>
+      participant.connectionId === marker.participant.connectionId && participant.profile === marker.participant.profile
   )
 }
 
@@ -159,9 +168,7 @@ export interface MeetingAttachment {
 }
 
 function objectRow(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
 function routeFromWire(value: unknown): RouteIdentity {
@@ -178,7 +185,9 @@ function routeToWire(value: RouteIdentity): { connection: string; profile: strin
 }
 
 function roundRunFromWire(value: unknown): MeetingRoundRun | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {return undefined}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
 
   const row = objectRow(value)
   const participantRow = objectRow(row.participant)
@@ -188,15 +197,17 @@ function roundRunFromWire(value: unknown): MeetingRoundRun | undefined {
   const startedAt = row.startedAt ?? row.started_at
 
   if (
-    typeof connectionId !== 'string'
-    || !connectionId
-    || typeof profile !== 'string'
-    || !profile
-    || !Number.isSafeInteger(round)
-    || Number(round) < 1
-    || !Number.isSafeInteger(startedAt)
-    || Number(startedAt) < 1
-  ) {return undefined}
+    typeof connectionId !== 'string' ||
+    !connectionId ||
+    typeof profile !== 'string' ||
+    !profile ||
+    !Number.isSafeInteger(round) ||
+    Number(round) < 1 ||
+    !Number.isSafeInteger(startedAt) ||
+    Number(startedAt) < 1
+  ) {
+    return undefined
+  }
 
   return Object.freeze({
     participant: Object.freeze({ connectionId, profile }),
@@ -232,9 +243,9 @@ function freezeJson(value: unknown): unknown {
   }
 
   if (value && typeof value === 'object') {
-    return Object.freeze(Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, freezeJson(item)])
-    ))
+    return Object.freeze(
+      Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, freezeJson(item)]))
+    )
   }
 
   return value
@@ -313,30 +324,43 @@ export function meetingFromWire(value: unknown): MeetingRecord {
     ...(row.orchestrator != null ? { orchestrator: routeFromWire(row.orchestrator) } : {}),
     ...(row.producer != null ? { producer: routeFromWire(row.producer) } : {}),
     ...(row.seats != null ? { seats: array(row.seats).map(seatFromWire) } : {}),
-    ...(row.productKind != null ? { productKind: row.productKind } :
-        row.product_kind != null ? { productKind: row.product_kind } : {}),
-    ...(row.outputTitle != null ? { outputTitle: row.outputTitle } :
-        row.output_title != null ? { outputTitle: row.output_title } : {}),
-    ...(row.acceptanceStatement != null ? { acceptanceStatement: row.acceptanceStatement } :
-        row.acceptance_statement != null ? { acceptanceStatement: row.acceptance_statement } : {}),
-    ...(row.productionStage != null ? { productionStage: row.productionStage } :
-        row.production_stage != null ? { productionStage: row.production_stage } : {}),
-    ...(row.artifactBinding != null ? { artifactBinding: renameKeys(row.artifactBinding, BINDING_KEYS) } :
-        row.artifact_binding != null ? { artifactBinding: renameKeys(row.artifact_binding, BINDING_KEYS) } : {})
+    ...(row.productKind != null
+      ? { productKind: row.productKind }
+      : row.product_kind != null
+        ? { productKind: row.product_kind }
+        : {}),
+    ...(row.outputTitle != null
+      ? { outputTitle: row.outputTitle }
+      : row.output_title != null
+        ? { outputTitle: row.output_title }
+        : {}),
+    ...(row.acceptanceStatement != null
+      ? { acceptanceStatement: row.acceptanceStatement }
+      : row.acceptance_statement != null
+        ? { acceptanceStatement: row.acceptance_statement }
+        : {}),
+    ...(row.productionStage != null
+      ? { productionStage: row.productionStage }
+      : row.production_stage != null
+        ? { productionStage: row.production_stage }
+        : {}),
+    ...(row.artifactBinding != null
+      ? { artifactBinding: renameKeys(row.artifactBinding, BINDING_KEYS) }
+      : row.artifact_binding != null
+        ? { artifactBinding: renameKeys(row.artifact_binding, BINDING_KEYS) }
+        : {})
   }
 
   const hydrated = hydrateMeeting(JSON.stringify(normalized)) as MeetingRecord
 
-  const pending = row.pending === undefined
-    ? undefined
-    : freezeJson(nestedRoute(row.pending, 'participant', 'participant'))
+  const pending =
+    row.pending === undefined ? undefined : freezeJson(nestedRoute(row.pending, 'participant', 'participant'))
 
   const roundRun = roundRunFromWire(row.roundRun ?? row.round_run)
   const rawSessions = row.runnerSessions ?? row.runner_sessions
 
-  const runnerSessions = rawSessions === undefined
-    ? undefined
-    : freezeJson(objectRow(rawSessions)) as Readonly<Record<string, string>>
+  const runnerSessions =
+    rawSessions === undefined ? undefined : (freezeJson(objectRow(rawSessions)) as Readonly<Record<string, string>>)
 
   // The hydrated record already carries orchestrator, producer, seats,
   // productionStage, and artifactBinding (restored by hydrateMeeting/createMeeting),
@@ -433,9 +457,7 @@ export function meetingToWire(meeting: MeetingRecord): Record<string, unknown> {
       : { seats: meeting.seats.map(seat => ({ ...seat, bot: routeToWire(seat.bot) })) }),
     ...(meeting.productKind !== undefined ? { product_kind: meeting.productKind } : {}),
     ...(meeting.outputTitle !== undefined ? { output_title: meeting.outputTitle } : {}),
-    ...(meeting.acceptanceStatement !== undefined
-      ? { acceptance_statement: meeting.acceptanceStatement }
-      : {}),
+    ...(meeting.acceptanceStatement !== undefined ? { acceptance_statement: meeting.acceptanceStatement } : {}),
     ...(meeting.productionStage !== undefined ? { production_stage: meeting.productionStage } : {}),
     ...(meeting.artifactBinding !== undefined
       ? { artifact_binding: wireKeys(meeting.artifactBinding, BINDING_WIRE) }
@@ -463,10 +485,7 @@ export async function getMeeting(value: string): Promise<VersionedMeeting> {
   return versioned(await operationsApi()<unknown>(`/meetings/${meetingId(value)}`))
 }
 
-export async function putMeeting(
-  meeting: MeetingRecord,
-  expectedVersion: number
-): Promise<VersionedMeeting> {
+export async function putMeeting(meeting: MeetingRecord, expectedVersion: number): Promise<VersionedMeeting> {
   if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
     throw new Error('Meeting version is invalid')
   }
@@ -578,10 +597,7 @@ function assertMeetingParticipant(meeting: MeetingRecord, participant: RouteIden
   }
 }
 
-function meetingParticipantRoute(
-  participant: RouteIdentity,
-  connectionModes: Record<string, 'local' | 'remote'>
-) {
+function meetingParticipantRoute(participant: RouteIdentity, connectionModes: Record<string, 'local' | 'remote'>) {
   const mode = connectionModes[participant.connectionId]
 
   if (!mode) {
@@ -600,66 +616,76 @@ function meetingMessageContent(value: unknown): string {
   const row = objectRow(value)
   const content = row.content ?? row.text
 
-  if (typeof content === 'string') {return content.trim()}
+  if (typeof content === 'string') {
+    return content.trim()
+  }
 
-  if (!Array.isArray(content)) {return ''}
+  if (!Array.isArray(content)) {
+    return ''
+  }
 
-  return content.map(part => {
-    if (typeof part === 'string') {return part}
-    const partRow = objectRow(part)
+  return content
+    .map(part => {
+      if (typeof part === 'string') {
+        return part
+      }
+      const partRow = objectRow(part)
 
-    return typeof partRow.text === 'string' ? partRow.text : ''
-  }).join('').trim()
+      return typeof partRow.text === 'string' ? partRow.text : ''
+    })
+    .join('')
+    .trim()
 }
 
 function meetingMessages(value: unknown): MeetingConversationMessage[] {
-  if (!Array.isArray(value)) {return []}
+  if (!Array.isArray(value)) {
+    return []
+  }
 
   return value.slice(-100).flatMap(message => {
     const row = objectRow(message)
     const role = row.role
     const content = meetingMessageContent(row)
 
-    if (!content || !['assistant', 'system', 'user'].includes(String(role))) {return []}
+    if (!content || !['assistant', 'system', 'user'].includes(String(role))) {
+      return []
+    }
 
     return [{ content, role: role as MeetingConversationMessage['role'] }]
   })
 }
 
 function durableParticipantMessages(meeting: MeetingRecord, participant: RouteIdentity): MeetingConversationMessage[] {
-  return meeting.contributions.flatMap(value => {
-    const row = objectRow(value)
+  return meeting.contributions
+    .flatMap(value => {
+      const row = objectRow(value)
 
-    if (
-      meetingParticipantKey(routeFromWire(row.participant)) !== meetingParticipantKey(participant)
-      || row.kind !== 'speak'
-      || typeof row.text !== 'string'
-      || !row.text.trim()
-    ) {return []}
+      if (
+        meetingParticipantKey(routeFromWire(row.participant)) !== meetingParticipantKey(participant) ||
+        row.kind !== 'speak' ||
+        typeof row.text !== 'string' ||
+        !row.text.trim()
+      ) {
+        return []
+      }
 
-    return [{ content: row.text.trim(), role: 'assistant' as const }]
-  }).slice(-100)
+      return [{ content: row.text.trim(), role: 'assistant' as const }]
+    })
+    .slice(-100)
 }
 
-function publicA2AAgent(
-  participant: RouteIdentity,
-  agents: OperationsAgentModel[]
-): OperationsAgentModel | undefined {
-  return agents.find(agent =>
-    agent.sourceKind === 'a2a'
-    && agent.sourceId === 'a2a'
-    && agent.sourceId === participant.connectionId
-    && agent.profile === participant.profile
+function publicA2AAgent(participant: RouteIdentity, agents: OperationsAgentModel[]): OperationsAgentModel | undefined {
+  return agents.find(
+    agent =>
+      agent.sourceKind === 'a2a' &&
+      agent.sourceId === 'a2a' &&
+      agent.sourceId === participant.connectionId &&
+      agent.profile === participant.profile
   )
 }
 
 function meetingRequestIdentity(meeting: MeetingRecord, participant: RouteIdentity): string {
-  const input = JSON.stringify([
-    meeting.id,
-    meeting.currentRound,
-    participant.connectionId,
-    participant.profile
-  ])
+  const input = JSON.stringify([meeting.id, meeting.currentRound, participant.connectionId, participant.profile])
 
   let hash = 0xcbf29ce484222325n
 
@@ -701,11 +727,14 @@ export async function getMeetingParticipantConversation(
     }
   }
 
-  if (agents.some(agent =>
-    agent.sourceKind === 'connected'
-    && agent.sourceId === participant.connectionId
-    && agent.profile === participant.profile
-  )) {
+  if (
+    agents.some(
+      agent =>
+        agent.sourceKind === 'connected' &&
+        agent.sourceId === participant.connectionId &&
+        agent.profile === participant.profile
+    )
+  ) {
     throw new Error('Generic connected meeting participants are unsupported.')
   }
 
@@ -713,10 +742,8 @@ export async function getMeetingParticipantConversation(
     return { messages: [], runtimeSessionId: null, status: 'not-started', storedSessionId: null }
   }
 
-  const state = objectRow(await host.requestProfile<unknown>(
-    meetingParticipantRoute(participant, connectionModes),
-    'session.resume',
-    {
+  const state = objectRow(
+    await host.requestProfile<unknown>(meetingParticipantRoute(participant, connectionModes), 'session.resume', {
       enabled_toolsets: ['clarify'],
       profile: participant.profile,
       session_id: storedSessionId,
@@ -724,17 +751,21 @@ export async function getMeetingParticipantConversation(
       skip_context_files: true,
       skip_memory: true,
       source: 'meeting'
-    }
-  ))
+    })
+  )
 
   const messages = meetingMessages(stripMeetingMarkers(state.messages, meeting.id))
 
   return {
     messages: messages.length ? messages : durableParticipantMessages(meeting, participant),
-    runtimeSessionId: typeof state.session_id === 'string' && state.session_id.trim() ? state.session_id : storedSessionId,
-    status: state.pending_clarify || state.pending_approval
-      ? 'waiting'
-      : state.inflight || state.running ? 'working' : 'ready',
+    runtimeSessionId:
+      typeof state.session_id === 'string' && state.session_id.trim() ? state.session_id : storedSessionId,
+    status:
+      state.pending_clarify || state.pending_approval
+        ? 'waiting'
+        : state.inflight || state.running
+          ? 'working'
+          : 'ready',
     storedSessionId
   }
 }
@@ -779,37 +810,23 @@ export async function injectMeetingParticipantPrompt(
 
     const requestIdentity = requestId || crypto.randomUUID()
 
-    await sendA2AChatMessage(
-      a2aAgent.profile,
-      `${meetingMarker(meeting.id)}\n${prompt}`,
-      requestIdentity
-    )
+    await sendA2AChatMessage(a2aAgent.profile, `${meetingMarker(meeting.id)}\n${prompt}`, requestIdentity)
 
-    return getMeetingParticipantConversation(
-      host,
-      authoritative,
-      participant,
-      connectionModes,
-      agents,
-      requestIdentity
-    )
+    return getMeetingParticipantConversation(host, authoritative, participant, connectionModes, agents, requestIdentity)
   }
 
-  if (agents.some(agent =>
-    agent.sourceKind === 'connected'
-    && agent.sourceId === participant.connectionId
-    && agent.profile === participant.profile
-  )) {
+  if (
+    agents.some(
+      agent =>
+        agent.sourceKind === 'connected' &&
+        agent.sourceId === participant.connectionId &&
+        agent.profile === participant.profile
+    )
+  ) {
     throw new Error('Generic connected meeting participants are unsupported.')
   }
 
-  const before = await getMeetingParticipantConversation(
-    host,
-    authoritative,
-    participant,
-    connectionModes,
-    agents
-  )
+  const before = await getMeetingParticipantConversation(host, authoritative, participant, connectionModes, agents)
 
   const runtimeSessionId = before.runtimeSessionId
 
@@ -818,26 +835,16 @@ export async function injectMeetingParticipantPrompt(
   }
 
   try {
-    await host.requestProfile(
-      meetingParticipantRoute(participant, connectionModes),
-      'prompt.submit',
-      {
-        queued: true,
-        session_id: runtimeSessionId,
-        text: `${meetingMarker(meeting.id)}\n${prompt}`
-      }
-    )
+    await host.requestProfile(meetingParticipantRoute(participant, connectionModes), 'prompt.submit', {
+      queued: true,
+      session_id: runtimeSessionId,
+      text: `${meetingMarker(meeting.id)}\n${prompt}`
+    })
   } catch {
     throw new Error('Your prompt may have been submitted, but delivery could not be confirmed. It was not retried.')
   }
 
-  const refreshed = await getMeetingParticipantConversation(
-    host,
-    authoritative,
-    participant,
-    connectionModes,
-    agents
-  )
+  const refreshed = await getMeetingParticipantConversation(host, authoritative, participant, connectionModes, agents)
 
   if (refreshed.messages.some(message => message.role === 'user' && message.content === prompt)) {
     return refreshed
@@ -862,19 +869,23 @@ export function meetingRouteKind(
   connectionModes: Record<string, 'local' | 'remote'>,
   agents: OperationsAgentModel[] = []
 ): MeetingRouteKind {
-  if (agents.some(agent =>
-    agent.sourceKind === 'a2a'
-    && agent.sourceId === route.connectionId
-    && agent.profile === route.profile
-  )) {
+  if (
+    agents.some(
+      agent => agent.sourceKind === 'a2a' && agent.sourceId === route.connectionId && agent.profile === route.profile
+    )
+  ) {
     return 'a2a'
   }
 
   const mode = connectionModes[route.connectionId]
 
-  if (mode === 'local') {return 'local'}
+  if (mode === 'local') {
+    return 'local'
+  }
 
-  if (mode === 'remote') {return 'remote'}
+  if (mode === 'remote') {
+    return 'remote'
+  }
 
   return 'unknown'
 }
@@ -941,7 +952,7 @@ export async function runMeetingRoleTurn(
 
   let latest: VersionedMeeting = { meeting, version }
 
-  const result = await runRoleTurn({
+  const result = (await runRoleTurn({
     role: input.role,
     ...(input.cwd ? { cwd: input.cwd } : {}),
     ...(input.cwdIdentity ? { cwdIdentity: input.cwdIdentity } : {}),
@@ -965,17 +976,18 @@ export async function runMeetingRoleTurn(
       void discardedRoundRun
       void discardedSessions
 
-      latest = await putMeeting(Object.freeze({
-        ...meetingWithoutRunState,
-        runnerSessions: Object.freeze({ ...checkpoint.sessions })
-      }) as MeetingRecord, latest.version)
-      await input.onSessionBound?.(
-        checkpoint.sessions[meetingParticipantKey(participant)] ?? ''
+      latest = await putMeeting(
+        Object.freeze({
+          ...meetingWithoutRunState,
+          runnerSessions: Object.freeze({ ...checkpoint.sessions })
+        }) as MeetingRecord,
+        latest.version
       )
+      await input.onSessionBound?.(checkpoint.sessions[meetingParticipantKey(participant)] ?? '')
     },
     request: async (route: RouteIdentity, method: string, params: Record<string, unknown>) =>
       host.requestProfile(meetingParticipantRoute(route, connectionModes), method, params)
-  }) as {
+  })) as {
     status: MeetingRoleTurnResult['status']
     text: string
     pending: unknown
@@ -1009,35 +1021,39 @@ export async function runMeetingRound(
   const now = options.now ?? Date.now
   const nowMs = now()
 
-  const runnableMeeting = meeting.state === 'waiting'
-    ? resumeMeeting(meeting) as MeetingRecord
-    : meeting
+  const runnableMeeting = meeting.state === 'waiting' ? (resumeMeeting(meeting) as MeetingRecord) : meeting
 
   if (isMeetingRoundRunFresh(runnableMeeting, nowMs)) {
     throw new Error('Meeting round is already running.')
   }
 
-  const nextParticipant = runnableMeeting.participants.find(participant =>
-    !runnableMeeting.contributions.some(value => {
-      const row = objectRow(value)
+  const nextParticipant = runnableMeeting.participants.find(
+    participant =>
+      !runnableMeeting.contributions.some(value => {
+        const row = objectRow(value)
 
-      return row.round === runnableMeeting.currentRound
-        && meetingParticipantKey(routeFromWire(row.participant)) === meetingParticipantKey(participant)
-    })
+        return (
+          row.round === runnableMeeting.currentRound &&
+          meetingParticipantKey(routeFromWire(row.participant)) === meetingParticipantKey(participant)
+        )
+      })
   )
 
   let latest: VersionedMeeting = { meeting: runnableMeeting, version }
 
   if (nextParticipant && runnableMeeting.pending === undefined) {
     try {
-      latest = await putMeeting(Object.freeze({
-        ...runnableMeeting,
-        roundRun: Object.freeze({
-          participant: Object.freeze({ ...nextParticipant }),
-          round: runnableMeeting.currentRound,
-          startedAt: nowMs
-        })
-      }), version)
+      latest = await putMeeting(
+        Object.freeze({
+          ...runnableMeeting,
+          roundRun: Object.freeze({
+            participant: Object.freeze({ ...nextParticipant }),
+            round: runnableMeeting.currentRound,
+            startedAt: nowMs
+          })
+        }),
+        version
+      )
     } catch (error) {
       const row = error as { message?: unknown; status?: unknown }
 
@@ -1059,133 +1075,135 @@ export async function runMeetingRound(
 
   try {
     const result = await runStructuredMeetingRound(latest.meeting, {
-    sessions: latest.meeting.runnerSessions ?? {},
-    onParticipantStart: async (participant: RouteIdentity) => {
-      const marker = latest.meeting.roundRun
+      sessions: latest.meeting.runnerSessions ?? {},
+      onParticipantStart: async (participant: RouteIdentity) => {
+        const marker = latest.meeting.roundRun
 
-      const identicalMarker = marker?.round === latest.meeting.currentRound
-        && meetingParticipantKey(marker.participant) === meetingParticipantKey(participant)
+        const identicalMarker =
+          marker?.round === latest.meeting.currentRound &&
+          meetingParticipantKey(marker.participant) === meetingParticipantKey(participant)
 
-      if (!identicalMarker) {
-        latest = await putMeeting(Object.freeze({
-          ...latest.meeting,
-          roundRun: Object.freeze({
-            participant: Object.freeze({ ...participant }),
-            round: latest.meeting.currentRound,
-            startedAt: now()
-          })
-        }), latest.version)
+        if (!identicalMarker) {
+          latest = await putMeeting(
+            Object.freeze({
+              ...latest.meeting,
+              roundRun: Object.freeze({
+                participant: Object.freeze({ ...participant }),
+                round: latest.meeting.currentRound,
+                startedAt: now()
+              })
+            }),
+            latest.version
+          )
+        }
+
+        await options.onParticipantStart?.(participant)
+      },
+      onCheckpoint: async (checkpoint: {
+        meeting: MeetingRecord
+        pending: unknown
+        sessions: Readonly<Record<string, string>>
+      }) => {
+        const {
+          pending: discardedPending,
+          roundRun: discardedRoundRun,
+          runnerSessions: discardedSessions,
+          ...meetingWithoutRunState
+        } = checkpoint.meeting
+
+        void discardedPending
+        void discardedRoundRun
+        void discardedSessions
+
+        const durableMeeting = Object.freeze({
+          ...meetingWithoutRunState,
+          ...(checkpoint.pending == null ? {} : { pending: checkpoint.pending }),
+          runnerSessions: Object.freeze({ ...checkpoint.sessions })
+        }) as MeetingRecord
+
+        latest = await putMeeting(durableMeeting, latest.version)
+        lastCheckpointMeeting = checkpoint.meeting
+        await options.onProgress?.(latest)
+      },
+      request: async (participant: RouteIdentity, method: string, params: Record<string, unknown>) => {
+        const agents = options.agents ?? []
+        const a2aAgent = publicA2AAgent(participant, agents)
+
+        if (a2aAgent) {
+          const requestId = meetingRequestIdentity(latest.meeting, participant)
+
+          if (method === 'session.create') {
+            return { session_id: a2aAgent.profile, stored_session_id: a2aAgent.profile }
+          }
+
+          if (method === 'prompt.submit') {
+            await sendA2AChatMessage(a2aAgent.profile, String(params.text ?? ''), requestId)
+
+            return { ok: true }
+          }
+
+          if (method === 'session.resume') {
+            const history = await getA2AChatHistory(a2aAgent.profile, requestId)
+            const messages = filterMeetingHistory(history.messages, latest.meeting.id)
+            const requestStatus = history.request_status ?? null
+            const active = requestStatus === 'pending' || requestStatus === 'running'
+
+            return {
+              inflight: active,
+              messages,
+              ...(requestStatus === 'waiting'
+                ? {
+                    pending_clarify: {
+                      participant: { ...participant },
+                      requestId
+                    }
+                  }
+                : {}),
+              running: active,
+              session_id: a2aAgent.profile
+            }
+          }
+
+          throw new Error(`Unsupported public A2A meeting method: ${method}`)
+        }
+
+        if (
+          agents.some(
+            agent =>
+              agent.sourceKind === 'connected' &&
+              agent.sourceId === participant.connectionId &&
+              agent.profile === participant.profile
+          )
+        ) {
+          throw new Error('Generic connected meeting participants are unsupported.')
+        }
+
+        return host.requestProfile(meetingParticipantRoute(participant, connectionModes), method, params)
       }
+    })
 
-      await options.onParticipantStart?.(participant)
-    },
-    onCheckpoint: async (checkpoint: {
-      meeting: MeetingRecord
-      pending: unknown
-      sessions: Readonly<Record<string, string>>
-    }) => {
+    if (result.meeting !== lastCheckpointMeeting) {
       const {
         pending: discardedPending,
         roundRun: discardedRoundRun,
         runnerSessions: discardedSessions,
         ...meetingWithoutRunState
-      } = checkpoint.meeting
+      } = result.meeting
 
       void discardedPending
       void discardedRoundRun
       void discardedSessions
 
-      const durableMeeting = Object.freeze({
-        ...meetingWithoutRunState,
-        ...(checkpoint.pending == null ? {} : { pending: checkpoint.pending }),
-        runnerSessions: Object.freeze({ ...checkpoint.sessions })
-      }) as MeetingRecord
-
-      latest = await putMeeting(durableMeeting, latest.version)
-      lastCheckpointMeeting = checkpoint.meeting
-      await options.onProgress?.(latest)
-    },
-    request: async (participant: RouteIdentity, method: string, params: Record<string, unknown>) => {
-      const agents = options.agents ?? []
-      const a2aAgent = publicA2AAgent(participant, agents)
-
-      if (a2aAgent) {
-        const requestId = meetingRequestIdentity(latest.meeting, participant)
-
-        if (method === 'session.create') {
-          return { session_id: a2aAgent.profile, stored_session_id: a2aAgent.profile }
-        }
-
-        if (method === 'prompt.submit') {
-          await sendA2AChatMessage(
-            a2aAgent.profile,
-            String(params.text ?? ''),
-            requestId
-          )
-
-          return { ok: true }
-        }
-
-        if (method === 'session.resume') {
-          const history = await getA2AChatHistory(a2aAgent.profile, requestId)
-          const messages = filterMeetingHistory(history.messages, latest.meeting.id)
-          const requestStatus = history.request_status ?? null
-          const active = requestStatus === 'pending' || requestStatus === 'running'
-
-          return {
-            inflight: active,
-            messages,
-            ...(requestStatus === 'waiting'
-              ? {
-                  pending_clarify: {
-                    participant: { ...participant },
-                    requestId
-                  }
-                }
-              : {}),
-            running: active,
-            session_id: a2aAgent.profile
-          }
-        }
-
-        throw new Error(`Unsupported public A2A meeting method: ${method}`)
-      }
-
-      if (agents.some(agent =>
-        agent.sourceKind === 'connected'
-        && agent.sourceId === participant.connectionId
-        && agent.profile === participant.profile
-      )) {
-        throw new Error('Generic connected meeting participants are unsupported.')
-      }
-
-      return host.requestProfile(
-        meetingParticipantRoute(participant, connectionModes),
-        method,
-        params
+      latest = await putMeeting(
+        Object.freeze({
+          ...meetingWithoutRunState,
+          ...(result.pending == null ? {} : { pending: result.pending }),
+          runnerSessions: Object.freeze({ ...result.sessions })
+        }) as MeetingRecord,
+        latest.version
       )
+      await options.onProgress?.(latest)
     }
-  })
-
-  if (result.meeting !== lastCheckpointMeeting) {
-    const {
-      pending: discardedPending,
-      roundRun: discardedRoundRun,
-      runnerSessions: discardedSessions,
-      ...meetingWithoutRunState
-    } = result.meeting
-
-    void discardedPending
-    void discardedRoundRun
-    void discardedSessions
-
-    latest = await putMeeting(Object.freeze({
-      ...meetingWithoutRunState,
-      ...(result.pending == null ? {} : { pending: result.pending }),
-      runnerSessions: Object.freeze({ ...result.sessions })
-    }) as MeetingRecord, latest.version)
-    await options.onProgress?.(latest)
-  }
 
     return { ...latest, conflict: false, pending: result.pending }
   } catch (error) {
@@ -1215,21 +1233,31 @@ export async function convertMeetingActions(
     request: { assignee: string; body: string; idempotency_key: string; priority: number; title: string }
   }>
 
-  const results = await Promise.all(payloads.map(payload => host.requestProfile<{ code?: number; stdout?: string }>(
-    meetingParticipantRoute(payload.route, connectionModes),
-    'cli.exec',
-    {
-      argv: [
-        'kanban', 'create', payload.request.title,
-        '--body', payload.request.body,
-        '--assignee', payload.request.assignee,
-        '--priority', String(payload.request.priority),
-        '--idempotency-key', payload.request.idempotency_key,
-        '--json'
-      ],
-      timeout: 30
-    }
-  )))
+  const results = await Promise.all(
+    payloads.map(payload =>
+      host.requestProfile<{ code?: number; stdout?: string }>(
+        meetingParticipantRoute(payload.route, connectionModes),
+        'cli.exec',
+        {
+          argv: [
+            'kanban',
+            'create',
+            payload.request.title,
+            '--body',
+            payload.request.body,
+            '--assignee',
+            payload.request.assignee,
+            '--priority',
+            String(payload.request.priority),
+            '--idempotency-key',
+            payload.request.idempotency_key,
+            '--json'
+          ],
+          timeout: 30
+        }
+      )
+    )
+  )
 
   const failed = results.find(result => result.code !== undefined && result.code !== 0)
 

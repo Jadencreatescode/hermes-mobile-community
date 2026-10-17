@@ -37,9 +37,7 @@ test('includes local and every registry connection', () => {
 
 test('appends tailscale peers that are not already in the registry', () => {
   const registry = normalizeRegistry({
-    connections: [
-      { id: 'local', kind: 'local', label: 'This device' }
-    ]
+    connections: [{ id: 'local', kind: 'local', label: 'This device' }]
   })
 
   const { machines } = buildMachineRoster(registry, [
@@ -65,9 +63,7 @@ test('deduplicates tailscale peers by label when a registry connection shares th
     ]
   })
 
-  const { machines } = buildMachineRoster(registry, [
-    { id: 'tailscale:homelab', label: 'homelab', online: true }
-  ])
+  const { machines } = buildMachineRoster(registry, [{ id: 'tailscale:homelab', label: 'homelab', online: true }])
 
   assert.equal(machines.length, 2)
   assert.ok(machines.every(m => m.id !== 'tailscale:homelab'))
@@ -81,9 +77,7 @@ test('deduplication is case-insensitive', () => {
     ]
   })
 
-  const { machines } = buildMachineRoster(registry, [
-    { id: 'tailscale:homelab', label: 'homelab', online: true }
-  ])
+  const { machines } = buildMachineRoster(registry, [{ id: 'tailscale:homelab', label: 'homelab', online: true }])
 
   assert.equal(machines.length, 2)
 })
@@ -102,9 +96,7 @@ test('preserves an offline tailscale peer as offline', () => {
     connections: [{ id: 'local', kind: 'local', label: 'This device' }]
   })
 
-  const { machines } = buildMachineRoster(registry, [
-    { id: 'tailscale:oldbox', label: 'oldbox', online: false }
-  ])
+  const { machines } = buildMachineRoster(registry, [{ id: 'tailscale:oldbox', label: 'oldbox', online: false }])
 
   const oldbox = machines.find(m => m.id === 'tailscale:oldbox')
 

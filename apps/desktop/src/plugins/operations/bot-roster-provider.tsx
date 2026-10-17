@@ -1,8 +1,4 @@
-import {
-  type BotsRosterProvider,
-  type BotsRosterProviderAgent,
-  host
-} from '@hermes/plugin-sdk'
+import { type BotsRosterProvider, type BotsRosterProviderAgent, host } from '@hermes/plugin-sdk'
 
 import { ConnectedAgentChatSurface } from './connected-agent-chat'
 import { getA2AAgentStatus, type HarnessAgent, listA2AAgents } from './data'
@@ -40,9 +36,8 @@ function toHarnessAgent(agent: BotsRosterProviderAgent): HarnessAgent {
 }
 
 export const a2aBotRosterProvider: BotsRosterProvider = {
-  list_verified_agents: async () => (await listA2AAgents())
-    .map(toProviderAgent)
-    .filter((agent): agent is BotsRosterProviderAgent => agent !== null),
+  list_verified_agents: async () =>
+    (await listA2AAgents()).map(toProviderAgent).filter((agent): agent is BotsRosterProviderAgent => agent !== null),
 
   open_bot_chat: agent => {
     const workspaceId = `connected-a2a-agent:${agent.id}`

@@ -52,7 +52,9 @@ export function createBrowserFileRegistry(): BrowserFileRegistry {
   const register = (file: File): string => {
     const existing = pathByFile.get(file)
 
-    if (existing) {return existing}
+    if (existing) {
+      return existing
+    }
 
     const id = crypto.randomUUID()
     const path = `browser-file://${id}/${encodeURIComponent(file.name || 'attachment')}`
@@ -65,7 +67,9 @@ export function createBrowserFileRegistry(): BrowserFileRegistry {
   const requireFile = (path: string): File => {
     const file = files.get(path)
 
-    if (!file) {throw new Error('The selected browser file is no longer available. Attach it again.')}
+    if (!file) {
+      throw new Error('The selected browser file is no longer available. Attach it again.')
+    }
 
     return file
   }
@@ -83,31 +87,41 @@ export function createBrowserFileRegistry(): BrowserFileRegistry {
   }
 
   const selectPaths = (options: HermesSelectPathsOptions = {}): Promise<string[]> => {
-    if (options.directories) {return Promise.resolve([])}
+    if (options.directories) {
+      return Promise.resolve([])
+    }
 
     return new Promise(resolve => {
       const input = document.createElement('input')
       input.type = 'file'
       input.multiple = options.multiple !== false
-      input.accept = (options.filters ?? []).flatMap(filter => filter.extensions).map(ext => `.${extension(ext)}`).join(',')
+      input.accept = (options.filters ?? [])
+        .flatMap(filter => filter.extensions)
+        .map(ext => `.${extension(ext)}`)
+        .join(',')
       input.setAttribute('aria-label', options.title || 'Choose files')
       input.style.display = 'none'
 
       let settled = false
 
       const finish = (paths: string[]) => {
-        if (settled) {return}
+        if (settled) {
+          return
+        }
         settled = true
         input.remove()
         resolve(paths)
       }
 
-      input.addEventListener('change', () => finish([...input.files ?? []].map(register)), { once: true })
+      input.addEventListener('change', () => finish([...(input.files ?? [])].map(register)), { once: true })
       window.addEventListener(
         'focus',
-        () => window.setTimeout(() => {
-          if (!input.files?.length) {finish([])}
-        }, 300),
+        () =>
+          window.setTimeout(() => {
+            if (!input.files?.length) {
+              finish([])
+            }
+          }, 300),
         { once: true }
       )
       document.body.append(input)
@@ -129,12 +143,16 @@ export function createBrowserFileRegistry(): BrowserFileRegistry {
   }
 
   const saveClipboardImage = async (): Promise<string> => {
-    if (!navigator.clipboard?.read) {return ''}
+    if (!navigator.clipboard?.read) {
+      return ''
+    }
 
     for (const item of await navigator.clipboard.read()) {
       const type = item.types.find(candidate => candidate.startsWith('image/'))
 
-      if (!type) {continue}
+      if (!type) {
+        continue
+      }
       const blob = await item.getType(type)
       const ext = type.split('/')[1] || 'png'
 

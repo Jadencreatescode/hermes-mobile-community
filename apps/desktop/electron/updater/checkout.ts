@@ -412,6 +412,7 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): CheckoutStra
 
   function windowsPathFailure(error: unknown): UpdaterApplyResultWire {
     const detail: string = error instanceof Error ? error.message : String(error)
+
     const message =
       'The updater did not start, so nothing was changed. Hermes keeps running on the previous version — try the update again.\n\n' +
       `Details: ${detail}`
@@ -428,10 +429,9 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): CheckoutStra
     status: UpdaterStatusWire,
     branch: string,
     plan: HandoffPlan
-  ):
-    | { failure: UpdaterApplyResultWire }
-    | { wrapped: ReturnType<typeof wrapHandoffForDetachedConsole> } {
+  ): { failure: UpdaterApplyResultWire } | { wrapped: ReturnType<typeof wrapHandoffForDetachedConsole> } {
     const desktopPid: number = Number(process.pid)
+
     const wrappedParameters: WindowsHandoffParameter[] = [
       { kind: 'value', name: 'InstallRoot', value: updateRoot },
       status.channel

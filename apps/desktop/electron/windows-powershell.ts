@@ -15,10 +15,12 @@ const UNSAFE_WINDOWS_ROOT_SEGMENT: RegExp = /[\s"'%&|<>^!;,=()`,:*?]/
  */
 export function resolveWindowsSystemPaths(env: NodeJS.ProcessEnv): WindowsSystemPaths {
   const configuredRoot: string = env.SystemRoot ?? env.SYSTEMROOT ?? env.windir ?? 'C:\\Windows'
+
   const root: string =
     configuredRoot.length > 3 && configuredRoot.endsWith('\\') && !configuredRoot.endsWith('\\\\')
       ? configuredRoot.slice(0, -1)
       : configuredRoot
+
   const segments: string[] = root.slice(3).split('\\')
 
   if (

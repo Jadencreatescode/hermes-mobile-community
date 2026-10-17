@@ -219,6 +219,7 @@ export async function resolveMachineRoster(machines: MakeBotMachine[]): Promise<
           models: []
         })
       }
+
       break
     }
 
@@ -229,6 +230,7 @@ export async function resolveMachineRoster(machines: MakeBotMachine[]): Promise<
         harnesses: [],
         models: []
       })
+
       continue
     }
 
@@ -252,6 +254,7 @@ export async function resolveMachineRoster(machines: MakeBotMachine[]): Promise<
 
   // Ensure local is always first
   const localIndex = catalogs.findIndex(m => m.machine.id === 'local')
+
   if (localIndex > 0) {
     const [local] = catalogs.splice(localIndex, 1)
     catalogs.unshift(local)

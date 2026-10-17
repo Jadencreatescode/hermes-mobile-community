@@ -2,10 +2,7 @@ import { Badge, Button, EmptyState, host, StatusDot, type StatusTone } from '@he
 import { useMemo } from 'react'
 
 import type { OperationsAgentModel, OperationsSnapshot } from './data'
-import {
-  operationsRoutineEmptyMessage,
-  type OperationsRoutinesSnapshot
-} from './routines'
+import { operationsRoutineEmptyMessage, type OperationsRoutinesSnapshot } from './routines'
 import type { OperationsAgentState } from './state'
 import { openAgentWorkspace } from './workspace'
 
@@ -54,7 +51,9 @@ function AgentCard({ agent }: { agent: OperationsAgentModel }) {
               {STATE_LABEL[agent.state]}
             </span>
           </div>
-          <p className="mt-0.5 truncate text-xs text-(--ui-text-tertiary)">@{agent.profile} · {agent.sourceLabel}</p>
+          <p className="mt-0.5 truncate text-xs text-(--ui-text-tertiary)">
+            @{agent.profile} · {agent.sourceLabel}
+          </p>
           <p className="mt-2 line-clamp-2 text-xs leading-5 text-(--ui-text-secondary)">{agent.workSummary}</p>
         </div>
         <Button
@@ -104,7 +103,9 @@ export function OperationsOverview({
       </div>
 
       <section aria-label="Hermes sources" className="min-w-0 border border-(--ui-stroke-tertiary)">
-        <div className="border-b border-(--ui-stroke-tertiary) px-3 py-2 text-xs font-medium text-(--ui-text-secondary)">Sources</div>
+        <div className="border-b border-(--ui-stroke-tertiary) px-3 py-2 text-xs font-medium text-(--ui-text-secondary)">
+          Sources
+        </div>
         <div className="flex min-w-0 flex-wrap gap-2 p-3">
           {snapshot.sources.map(source => (
             <Badge key={source.id} variant="outline">
@@ -117,22 +118,34 @@ export function OperationsOverview({
       </section>
 
       {snapshot.partialFailures.length > 0 && (
-        <section aria-label="Partial source failures" className="border border-(--ui-warning-border) bg-(--ui-warning-surface) p-3 text-xs text-(--ui-text-secondary)">
+        <section
+          aria-label="Partial source failures"
+          className="border border-(--ui-warning-border) bg-(--ui-warning-surface) p-3 text-xs text-(--ui-text-secondary)"
+        >
           <p className="font-medium text-(--ui-text-primary)">Some sources are partial</p>
           <ul className="mt-1 list-inside list-disc space-y-1">
-            {snapshot.partialFailures.map(failure => <li key={failure}>{failure}</li>)}
+            {snapshot.partialFailures.map(failure => (
+              <li key={failure}>{failure}</li>
+            ))}
           </ul>
         </section>
       )}
 
       <section aria-label="Bot roster" className="min-w-0 border border-(--ui-stroke-tertiary)">
-        <div className="border-b border-(--ui-stroke-tertiary) px-3 py-2 text-xs font-medium text-(--ui-text-secondary)">Bots</div>
+        <div className="border-b border-(--ui-stroke-tertiary) px-3 py-2 text-xs font-medium text-(--ui-text-secondary)">
+          Bots
+        </div>
         {snapshot.agents.length > 0 ? (
           <div className="grid min-w-0 grid-cols-1 lg:grid-cols-2">
-            {snapshot.agents.map(agent => <AgentCard agent={agent} key={agent.id} />)}
+            {snapshot.agents.map(agent => (
+              <AgentCard agent={agent} key={agent.id} />
+            ))}
           </div>
         ) : (
-          <EmptyState description="Create a Bot profile or connect a reachable Hermes source." title="No Bots available" />
+          <EmptyState
+            description="Create a Bot profile or connect a reachable Hermes source."
+            title="No Bots available"
+          />
         )}
       </section>
 
@@ -142,9 +155,14 @@ export function OperationsOverview({
           {delegations.length > 0 ? (
             <div className="mt-2 space-y-2">
               {delegations.map(item => (
-                <div className="border-l-2 border-(--ui-stroke-secondary) pl-2 text-xs" key={`${item.sessionId}:${item.id}`}>
+                <div
+                  className="border-l-2 border-(--ui-stroke-secondary) pl-2 text-xs"
+                  key={`${item.sessionId}:${item.id}`}
+                >
                   <span className="font-medium">{item.goal || 'Delegated work'}</span>
-                  <p className="text-(--ui-text-tertiary)">{item.status || 'unknown'} · session {item.sessionId.slice(0, 8)}</p>
+                  <p className="text-(--ui-text-tertiary)">
+                    {item.status || 'unknown'} · session {item.sessionId.slice(0, 8)}
+                  </p>
                 </div>
               ))}
             </div>
@@ -160,13 +178,17 @@ export function OperationsOverview({
               {assignments.map(({ agent, task }) => (
                 <div className="text-xs" key={`${agent.id}:${task.id}`}>
                   <span className="font-medium">{task.title}</span>
-                  <p className="text-(--ui-text-tertiary)">{task.status} · {agent.displayName}</p>
+                  <p className="text-(--ui-text-tertiary)">
+                    {task.status} · {agent.displayName}
+                  </p>
                   {task.summary && <p className="line-clamp-2">{task.summary}</p>}
                 </div>
               ))}
             </div>
           ) : (
-            <p className="mt-2 text-xs text-(--ui-text-tertiary)">No Kanban assignments are visible on reachable sources.</p>
+            <p className="mt-2 text-xs text-(--ui-text-tertiary)">
+              No Kanban assignments are visible on reachable sources.
+            </p>
           )}
         </section>
 
@@ -178,14 +200,20 @@ export function OperationsOverview({
                 <div className="text-xs" key={`${routine.connectionId}:${routine.profile}:${routine.jobId}`}>
                   <span className="font-medium">{routine.name}</span>
                   <p className="text-(--ui-text-tertiary)">
-                    {routine.enabled === false ? 'paused' : 'active'}{routine.schedule ? ` · ${routine.schedule}` : ''}
+                    {routine.enabled === false ? 'paused' : 'active'}
+                    {routine.schedule ? ` · ${routine.schedule}` : ''}
                   </p>
-                  <p className="text-(--ui-text-quaternary)">{routine.connectionLabel} / @{routine.profile}</p>
+                  <p className="text-(--ui-text-quaternary)">
+                    {routine.connectionLabel} / @{routine.profile}
+                  </p>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="mt-2 text-xs text-(--ui-text-tertiary)" role={routines.failures.length ? 'status' : undefined}>
+            <p
+              className="mt-2 text-xs text-(--ui-text-tertiary)"
+              role={routines.failures.length ? 'status' : undefined}
+            >
               {operationsRoutineEmptyMessage(routines)}
             </p>
           )}

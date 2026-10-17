@@ -91,8 +91,12 @@ export async function sendMail(input: {
       target_profile: profile(input.targetProfile, 'target profile'),
       body: body(input.body),
       urgency: input.urgency ?? 'normal',
-      ...(optionalReference(input.sessionRef, 'session reference') ? { session_ref: optionalReference(input.sessionRef, 'session reference') } : {}),
-      ...(optionalReference(input.dedupeKey, 'dedupe key') ? { dedupe_key: optionalReference(input.dedupeKey, 'dedupe key') } : {})
+      ...(optionalReference(input.sessionRef, 'session reference')
+        ? { session_ref: optionalReference(input.sessionRef, 'session reference') }
+        : {}),
+      ...(optionalReference(input.dedupeKey, 'dedupe key')
+        ? { dedupe_key: optionalReference(input.dedupeKey, 'dedupe key') }
+        : {})
     }
   })
 
@@ -106,7 +110,9 @@ export async function sendMail(input: {
 }
 
 async function transitionMail(envelopeId: string, action: 'acknowledge' | 'cancel' | 'retry'): Promise<MailEnvelope> {
-  const response = await operationsApi()<{ envelope: unknown }>(`/mailroom/${id(envelopeId)}/${action}`, { method: 'POST' })
+  const response = await operationsApi()<{ envelope: unknown }>(`/mailroom/${id(envelopeId)}/${action}`, {
+    method: 'POST'
+  })
 
   return normalizeMailEnvelope(response.envelope)
 }

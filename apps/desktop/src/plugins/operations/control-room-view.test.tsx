@@ -111,7 +111,9 @@ describe('ControlRoomView visual shell', () => {
 
     expect(screen.getByText('Live visual headquarters')).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Control Room' })).toBeTruthy()
-    expect(screen.getByText('Every room is driven by real session, task, review, input, and source evidence.')).toBeTruthy()
+    expect(
+      screen.getByText('Every room is driven by real session, task, review, input, and source evidence.')
+    ).toBeTruthy()
 
     for (const room of ['Live Floor', 'Needs You', 'Review Desk', 'Blocked Bay', 'Idle Lounge', 'Offline Station']) {
       expect(screen.getByRole('heading', { name: room })).toBeTruthy()

@@ -227,9 +227,7 @@ test('packaging isolates boot metadata and executable names without renaming rel
     assert.notEqual(config.extraMetadata.name, stableIdentity.appNamePascal)
     assert.equal(config.win.executableName, identity.windowsExecutableName)
 
-    const {
-      AppInfo
-    }: { AppInfo: typeof BuilderAppInfo } = require('../node_modules/app-builder-lib/dist/appInfo.js')
+    const { AppInfo }: { AppInfo: typeof BuilderAppInfo } = require('../node_modules/app-builder-lib/dist/appInfo.js')
 
     const appInfo: BuilderAppInfo = new AppInfo(
       { config, metadata: { ...pkg, ...config.extraMetadata } } as Packager,

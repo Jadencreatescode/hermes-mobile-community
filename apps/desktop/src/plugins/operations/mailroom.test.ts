@@ -1,15 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { bindOperationsApi } from './api'
-import {
-  acknowledgeMail,
-  cancelMail,
-  getMail,
-  listMail,
-  putCriticalPolicy,
-  retryMail,
-  sendMail
-} from './mailroom'
+import { acknowledgeMail, cancelMail, getMail, listMail, putCriticalPolicy, retryMail, sendMail } from './mailroom'
 
 const wire = {
   id: 'mail_1',
@@ -66,7 +58,9 @@ describe('Operations Mailroom client', () => {
     expect(rest).toHaveBeenCalledWith('/mailroom/mail_1/retry', { method: 'POST' })
     expect(rest).toHaveBeenCalledWith('/mailroom/mail_1/acknowledge', { method: 'POST' })
     expect(rest).toHaveBeenCalledWith('/mailroom/mail_1/cancel', { method: 'POST' })
-    expect(JSON.stringify(await sendMail({ sourceProfile: 'planner', targetProfile: 'builder', body: 'Again.' }))).not.toContain('process_id')
+    expect(
+      JSON.stringify(await sendMail({ sourceProfile: 'planner', targetProfile: 'builder', body: 'Again.' }))
+    ).not.toContain('process_id')
   })
 
   it('validates ids and bounded input before any request', async () => {

@@ -1,11 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const {
-  createBot,
-  fetchMakeBotCatalog,
-  loadMakeBotState
-} = vi.hoisted(() => ({
+const { createBot, fetchMakeBotCatalog, loadMakeBotState } = vi.hoisted(() => ({
   createBot: vi.fn(),
   fetchMakeBotCatalog: vi.fn(),
   loadMakeBotState: vi.fn()
@@ -28,16 +24,34 @@ afterEach(() => {
 function resolvedState(options: {
   degraded?: boolean
   degradedReason?: 'no_harness' | 'no_machine' | 'no_model'
-  machines?: { machine: { id: string; label: string; kind: 'local' | 'remote' | 'ssh' | 'cloud'; state: 'online' | 'offline' | 'unreachable' }; harnesses: { id: string; label: string; detected: boolean; selectable?: boolean; source: string; downloadUrl?: string | null }[]; models: { id: string; label: string; provider: string }[] }[]
+  machines?: {
+    machine: {
+      id: string
+      label: string
+      kind: 'local' | 'remote' | 'ssh' | 'cloud'
+      state: 'online' | 'offline' | 'unreachable'
+    }
+    harnesses: {
+      id: string
+      label: string
+      detected: boolean
+      selectable?: boolean
+      source: string
+      downloadUrl?: string | null
+    }[]
+    models: { id: string; label: string; provider: string }[]
+  }[]
 }) {
   return {
     degraded: options.degraded ?? false,
     degradedReason: options.degradedReason,
-    machines: options.machines ?? [{
-      machine: { id: 'local', label: 'This machine', kind: 'local' as const, state: 'online' as const },
-      harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
-      models: [{ id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' }]
-    }]
+    machines: options.machines ?? [
+      {
+        machine: { id: 'local', label: 'This machine', kind: 'local' as const, state: 'online' as const },
+        harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+        models: [{ id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' }]
+      }
+    ]
   }
 }
 
@@ -61,15 +75,19 @@ describe('MakeBotDialog', () => {
   })
 
   it('shows missing harness state with install commands and check again', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      degraded: true,
-      degradedReason: 'no_harness',
-      machines: [{
-        machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-        harnesses: [],
-        models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
-      }]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        degraded: true,
+        degradedReason: 'no_harness',
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [],
+            models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
 
@@ -79,15 +97,19 @@ describe('MakeBotDialog', () => {
 
   it('re-fetches catalog when check again is clicked', async () => {
     loadMakeBotState
-      .mockResolvedValueOnce(resolvedState({
-        degraded: true,
-        degradedReason: 'no_harness',
-        machines: [{
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [],
-          models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
-        }]
-      }))
+      .mockResolvedValueOnce(
+        resolvedState({
+          degraded: true,
+          degradedReason: 'no_harness',
+          machines: [
+            {
+              machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+              harnesses: [],
+              models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+            }
+          ]
+        })
+      )
       .mockResolvedValueOnce(resolvedState({}))
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
@@ -100,15 +122,19 @@ describe('MakeBotDialog', () => {
   })
 
   it('shows no-model degraded state', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      degraded: true,
-      degradedReason: 'no_model',
-      machines: [{
-        machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-        harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
-        models: []
-      }]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        degraded: true,
+        degradedReason: 'no_model',
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+            models: []
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
 
@@ -147,26 +173,35 @@ describe('MakeBotDialog', () => {
     fireEvent.change(screen.getByLabelText(/Bot name/i), { target: { value: 'Bad Name!' } })
     fireEvent.click(screen.getByRole('button', { name: /Create Bot/i }))
 
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('lowercase letters, numbers, dashes, or underscores'))
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('lowercase letters, numbers, dashes, or underscores')
+    )
   })
 
   it('submits createBot with selected harness, model, and machine', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [
-            { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
-            { id: 'claude_code', label: 'Claude Code', detected: true, selectable: true, source: 'native' }
-          ],
-          models: [
-            { id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' },
-            { id: 'gpt-4', label: 'gpt-4', provider: 'openai' }
-          ]
-        }
-      ]
-    }))
-    createBot.mockResolvedValue({ name: 'testbot', path: '/home/user/.hermes/profiles/testbot', harness: 'claude_code', model: 'gpt-4' })
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [
+              { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
+              { id: 'claude_code', label: 'Claude Code', detected: true, selectable: true, source: 'native' }
+            ],
+            models: [
+              { id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' },
+              { id: 'gpt-4', label: 'gpt-4', provider: 'openai' }
+            ]
+          }
+        ]
+      })
+    )
+    createBot.mockResolvedValue({
+      name: 'testbot',
+      path: '/home/user/.hermes/profiles/testbot',
+      harness: 'claude_code',
+      model: 'gpt-4'
+    })
 
     const onCreated = vi.fn()
     const onOpenChange = vi.fn()
@@ -181,12 +216,16 @@ describe('MakeBotDialog', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Create Bot/i }))
 
-    await waitFor(() => expect(createBot).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'testbot',
-      harness: 'claude_code',
-      model: 'gpt-4',
-      connectionId: 'local'
-    })))
+    await waitFor(() =>
+      expect(createBot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'testbot',
+          harness: 'claude_code',
+          model: 'gpt-4',
+          connectionId: 'local'
+        })
+      )
+    )
 
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith('testbot'))
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
@@ -232,20 +271,22 @@ describe('MakeBotDialog', () => {
   })
 
   it('shows the machine list with all machines and their states', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
-          models: []
-        },
-        {
-          machine: { id: 'homelab', label: 'Homelab', kind: 'remote', state: 'unreachable' },
-          harnesses: [],
-          models: []
-        }
-      ]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+            models: []
+          },
+          {
+            machine: { id: 'homelab', label: 'Homelab', kind: 'remote', state: 'unreachable' },
+            harnesses: [],
+            models: []
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
     await waitFor(() => expect(screen.getByLabelText(/Machine/i)).toBeTruthy())
@@ -259,18 +300,20 @@ describe('MakeBotDialog', () => {
   })
 
   it('shows harness list for the selected machine', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [
-            { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
-            { id: 'claude_code', label: 'Claude Code', detected: false, selectable: false, source: 'native' }
-          ],
-          models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
-        }
-      ]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [
+              { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
+              { id: 'claude_code', label: 'Claude Code', detected: false, selectable: false, source: 'native' }
+            ],
+            models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
     await waitFor(() => expect(screen.getByLabelText(/Harness/i)).toBeTruthy())
@@ -282,19 +325,35 @@ describe('MakeBotDialog', () => {
   })
 
   it('shows non-selectable harnesses outside the select with download links', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [
-            { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
-            { id: 'codex', label: 'Codex', detected: false, selectable: false, source: 'none', downloadUrl: 'https://www.npmjs.com/package/@openai/codex' },
-            { id: 'cursor', label: 'Cursor', detected: false, selectable: false, source: 'none', downloadUrl: 'https://cursor.com' }
-          ],
-          models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
-        }
-      ]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [
+              { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
+              {
+                id: 'codex',
+                label: 'Codex',
+                detected: false,
+                selectable: false,
+                source: 'none',
+                downloadUrl: 'https://www.npmjs.com/package/@openai/codex'
+              },
+              {
+                id: 'cursor',
+                label: 'Cursor',
+                detected: false,
+                selectable: false,
+                source: 'none',
+                downloadUrl: 'https://cursor.com'
+              }
+            ],
+            models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
     await waitFor(() => expect(screen.getByLabelText(/Harness/i)).toBeTruthy())
@@ -312,17 +371,19 @@ describe('MakeBotDialog', () => {
   })
 
   it('does not show download link when downloadUrl is missing', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [
-            { id: 'generic_a2a', label: 'Generic A2A', detected: false, selectable: false, source: 'none' }
-          ],
-          models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
-        }
-      ]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [
+              { id: 'generic_a2a', label: 'Generic A2A', detected: false, selectable: false, source: 'none' }
+            ],
+            models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
     await waitFor(() => expect(screen.getByText(/Available to download/i)).toBeTruthy())
@@ -331,17 +392,26 @@ describe('MakeBotDialog', () => {
   })
 
   it('shows no selectable harness placeholder when none are selectable', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [
-            { id: 'codex', label: 'Codex', detected: false, selectable: false, source: 'none', downloadUrl: 'https://www.npmjs.com/package/@openai/codex' }
-          ],
-          models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
-        }
-      ]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [
+              {
+                id: 'codex',
+                label: 'Codex',
+                detected: false,
+                selectable: false,
+                source: 'none',
+                downloadUrl: 'https://www.npmjs.com/package/@openai/codex'
+              }
+            ],
+            models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
     await waitFor(() => expect(screen.getByLabelText(/Harness/i)).toBeTruthy())
@@ -352,17 +422,26 @@ describe('MakeBotDialog', () => {
   })
 
   it('re-fetches catalog when refresh is clicked', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [
-            { id: 'codex', label: 'Codex', detected: false, selectable: false, source: 'none', downloadUrl: 'https://www.npmjs.com/package/@openai/codex' }
-          ],
-          models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
-        }
-      ]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [
+              {
+                id: 'codex',
+                label: 'Codex',
+                detected: false,
+                selectable: false,
+                source: 'none',
+                downloadUrl: 'https://www.npmjs.com/package/@openai/codex'
+              }
+            ],
+            models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
     await waitFor(() => expect(screen.getByText(/Available to download/i)).toBeTruthy())
@@ -373,18 +452,27 @@ describe('MakeBotDialog', () => {
   })
 
   it('states that Hermes never installs a harness automatically', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [
-            { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
-            { id: 'codex', label: 'Codex', detected: false, selectable: false, source: 'none', downloadUrl: 'https://www.npmjs.com/package/@openai/codex' }
-          ],
-          models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
-        }
-      ]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [
+              { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' },
+              {
+                id: 'codex',
+                label: 'Codex',
+                detected: false,
+                selectable: false,
+                source: 'none',
+                downloadUrl: 'https://www.npmjs.com/package/@openai/codex'
+              }
+            ],
+            models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
     await waitFor(() => expect(screen.getByLabelText(/Harness/i)).toBeTruthy())
@@ -393,18 +481,20 @@ describe('MakeBotDialog', () => {
   })
 
   it('shows model list grouped by provider', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
-          models: [
-            { id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' },
-            { id: 'gpt-4', label: 'gpt-4', provider: 'openai' }
-          ]
-        }
-      ]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+            models: [
+              { id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' },
+              { id: 'gpt-4', label: 'gpt-4', provider: 'openai' }
+            ]
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
     await waitFor(() => expect(screen.getByLabelText(/Model/i)).toBeTruthy())
@@ -458,15 +548,17 @@ describe('MakeBotDialog', () => {
   })
 
   it('stacks form fields vertically on narrow viewports', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
-          models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
-        }
-      ]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+            models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
     await waitFor(() => expect(screen.getByLabelText(/Bot name/i)).toBeTruthy())
@@ -477,20 +569,22 @@ describe('MakeBotDialog', () => {
   })
 
   it('switches harness and model lists when machine is changed', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
-          models: [{ id: 'gpt-4', label: 'gpt-4', provider: 'openai' }]
-        },
-        {
-          machine: { id: 'homelab', label: 'Homelab', kind: 'remote', state: 'online' },
-          harnesses: [{ id: 'codex', label: 'Codex', detected: true, selectable: true, source: 'native' }],
-          models: [{ id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' }]
-        }
-      ]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+            models: [{ id: 'gpt-4', label: 'gpt-4', provider: 'openai' }]
+          },
+          {
+            machine: { id: 'homelab', label: 'Homelab', kind: 'remote', state: 'online' },
+            harnesses: [{ id: 'codex', label: 'Codex', detected: true, selectable: true, source: 'native' }],
+            models: [{ id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' }]
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
     await waitFor(() => expect(screen.getByLabelText(/Machine/i)).toBeTruthy())
@@ -504,21 +598,28 @@ describe('MakeBotDialog', () => {
   })
 
   it('passes the selected machine connectionId to createBot', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
-          models: [{ id: 'gpt-4', label: 'gpt-4', provider: 'openai' }]
-        },
-        {
-          machine: { id: 'homelab', label: 'Homelab', kind: 'remote', state: 'online' },
-          harnesses: [{ id: 'codex', label: 'Codex', detected: true, selectable: true, source: 'native' }],
-          models: [{ id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' }]
-        }
-      ]
-    }))
-    createBot.mockResolvedValue({ name: 'remotebot', path: '/home/user/.hermes/profiles/remotebot', harness: 'codex', model: 'claude-sonnet-4' })
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+            models: [{ id: 'gpt-4', label: 'gpt-4', provider: 'openai' }]
+          },
+          {
+            machine: { id: 'homelab', label: 'Homelab', kind: 'remote', state: 'online' },
+            harnesses: [{ id: 'codex', label: 'Codex', detected: true, selectable: true, source: 'native' }],
+            models: [{ id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' }]
+          }
+        ]
+      })
+    )
+    createBot.mockResolvedValue({
+      name: 'remotebot',
+      path: '/home/user/.hermes/profiles/remotebot',
+      harness: 'codex',
+      model: 'claude-sonnet-4'
+    })
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
     await waitFor(() => expect(screen.getByLabelText(/Machine/i)).toBeTruthy())
@@ -532,29 +633,35 @@ describe('MakeBotDialog', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Create Bot/i }))
 
-    await waitFor(() => expect(createBot).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'remotebot',
-      harness: 'codex',
-      model: 'claude-sonnet-4',
-      connectionId: 'homelab'
-    })))
+    await waitFor(() =>
+      expect(createBot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'remotebot',
+          harness: 'codex',
+          model: 'claude-sonnet-4',
+          connectionId: 'homelab'
+        })
+      )
+    )
   })
 
   it('marks unreachable machines honestly in the selector', async () => {
-    loadMakeBotState.mockResolvedValue(resolvedState({
-      machines: [
-        {
-          machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
-          harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
-          models: [{ id: 'gpt-4', label: 'gpt-4', provider: 'openai' }]
-        },
-        {
-          machine: { id: 'homelab', label: 'Homelab', kind: 'remote', state: 'unreachable' },
-          harnesses: [],
-          models: []
-        }
-      ]
-    }))
+    loadMakeBotState.mockResolvedValue(
+      resolvedState({
+        machines: [
+          {
+            machine: { id: 'local', label: 'This machine', kind: 'local', state: 'online' },
+            harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native' }],
+            models: [{ id: 'gpt-4', label: 'gpt-4', provider: 'openai' }]
+          },
+          {
+            machine: { id: 'homelab', label: 'Homelab', kind: 'remote', state: 'unreachable' },
+            harnesses: [],
+            models: []
+          }
+        ]
+      })
+    )
 
     render(<MakeBotDialog onOpenChange={vi.fn()} open />)
     await waitFor(() => expect(screen.getByLabelText(/Machine/i)).toBeTruthy())

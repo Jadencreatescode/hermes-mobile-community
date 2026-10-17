@@ -33,8 +33,11 @@ function readProfile(): null | string {
 
 function writeProfile(profile: null | string): void {
   try {
-    if (profile) {localStorage.setItem(PROFILE_KEY, profile)}
-    else {localStorage.removeItem(PROFILE_KEY)}
+    if (profile) {
+      localStorage.setItem(PROFILE_KEY, profile)
+    } else {
+      localStorage.removeItem(PROFILE_KEY)
+    }
   } catch {
     // Browser storage may be unavailable in private browsing.
   }
@@ -42,8 +45,10 @@ function writeProfile(profile: null | string): void {
 
 function readConnectionId(runtimeDescriptor: BrowserRuntimeDescriptor): string {
   try {
-    return selectableBrowserNodes(runtimeDescriptor).find(node => node.id === localStorage.getItem(CONNECTION_KEY))?.id
-      ?? runtimeDescriptor.backend.id
+    return (
+      selectableBrowserNodes(runtimeDescriptor).find(node => node.id === localStorage.getItem(CONNECTION_KEY))?.id ??
+      runtimeDescriptor.backend.id
+    )
   } catch {
     return runtimeDescriptor.backend.id
   }
@@ -62,7 +67,6 @@ function writeConnectionId(runtimeDescriptor: BrowserRuntimeDescriptor, connecti
     // Browser storage may be unavailable in private browsing.
   }
 }
-
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -102,7 +106,10 @@ export function createBrowserBridge(options: BrowserBridgeOptions = {}): Window[
     window.setTimeout(() => URL.revokeObjectURL(url), 0)
   }
 
-  const connection = (connectionId: null | string = readConnectionId(runtimeDescriptor), profile?: null | string): HermesConnection => {
+  const connection = (
+    connectionId: null | string = readConnectionId(runtimeDescriptor),
+    profile?: null | string
+  ): HermesConnection => {
     const node = resolveBrowserNode(runtimeDescriptor, connectionId)
 
     const baseUrl = nodeBaseUrl(location, runtimeDescriptor, node.id)
@@ -110,19 +117,19 @@ export function createBrowserBridge(options: BrowserBridgeOptions = {}): Window[
     wsBase.protocol = wsBase.protocol === 'https:' ? 'wss:' : 'ws:'
 
     return {
-    authMode: 'oauth',
-    baseUrl,
-    connectionId: node.id,
-    isFullscreen: false,
-    logs: [],
-    mode: 'remote',
-    nativeOverlayWidth: 0,
-    profile: profile ?? readProfile() ?? undefined,
-    registryScoped: true,
-    source: 'settings',
-    token: '',
-    windowButtonPosition: null,
-    wsUrl: `${wsBase.origin}${wsBase.pathname.replace(/\/$/, '')}/api/ws`
+      authMode: 'oauth',
+      baseUrl,
+      connectionId: node.id,
+      isFullscreen: false,
+      logs: [],
+      mode: 'remote',
+      nativeOverlayWidth: 0,
+      profile: profile ?? readProfile() ?? undefined,
+      registryScoped: true,
+      source: 'settings',
+      token: '',
+      windowButtonPosition: null,
+      wsUrl: `${wsBase.origin}${wsBase.pathname.replace(/\/$/, '')}/api/ws`
     }
   }
 
@@ -133,7 +140,9 @@ export function createBrowserBridge(options: BrowserBridgeOptions = {}): Window[
 
     const url = new URL(nodeRequestUrl(location, runtimeDescriptor, connectionId, request.path))
 
-    if (request.profile) {url.searchParams.set('profile', request.profile)}
+    if (request.profile) {
+      url.searchParams.set('profile', request.profile)
+    }
 
     const hasBody = request.body !== undefined && method !== 'GET' && method !== 'HEAD'
 
@@ -172,7 +181,9 @@ export function createBrowserBridge(options: BrowserBridgeOptions = {}): Window[
 
       const payload = await response.json().catch(() => null)
 
-      if (!payload?.ticket) {return { error: 'Gateway returned no WebSocket ticket.', ok: false as const }}
+      if (!payload?.ticket) {
+        return { error: 'Gateway returned no WebSocket ticket.', ok: false as const }
+      }
 
       return {
         ok: true as const,
@@ -209,17 +220,27 @@ export function createBrowserBridge(options: BrowserBridgeOptions = {}): Window[
         version: 2
       }),
       onChanged: noSubscription,
-      remove: async () => { throw new Error('Mobile node registry is managed by the relay') },
-      save: async () => { throw new Error('Mobile node registry is managed by the relay') },
-      setLaunchMode: async () => { throw new Error('Mobile node registry is managed by the relay') },
+      remove: async () => {
+        throw new Error('Mobile node registry is managed by the relay')
+      },
+      save: async () => {
+        throw new Error('Mobile node registry is managed by the relay')
+      },
+      setLaunchMode: async () => {
+        throw new Error('Mobile node registry is managed by the relay')
+      },
       setLastUsed: async (id: string) => {
         writeConnectionId(runtimeDescriptor, id)
 
         return { ok: true, registry: await bridge.connections.list() }
       },
-      setPrimary: async () => { throw new Error('Mobile node registry is managed by the relay') },
+      setPrimary: async () => {
+        throw new Error('Mobile node registry is managed by the relay')
+      },
       test: async (id: string) => {
-        const response = await fetcher(`${nodeBaseUrl(location, runtimeDescriptor, id)}/api/status`, { credentials: 'include' })
+        const response = await fetcher(`${nodeBaseUrl(location, runtimeDescriptor, id)}/api/status`, {
+          credentials: 'include'
+        })
 
         return { ok: response.ok, reachable: response.ok }
       }
@@ -228,7 +249,9 @@ export function createBrowserBridge(options: BrowserBridgeOptions = {}): Window[
       const sources = await Promise.all(
         selectableBrowserNodes(runtimeDescriptor).map(async node => {
           try {
-            const response = await fetcher(`${nodeBaseUrl(location, runtimeDescriptor, node.id)}/api/status`, { credentials: 'include' })
+            const response = await fetcher(`${nodeBaseUrl(location, runtimeDescriptor, node.id)}/api/status`, {
+              credentials: 'include'
+            })
             const status = response.ok ? await response.json() : null
 
             return {
@@ -283,19 +306,21 @@ export function createBrowserBridge(options: BrowserBridgeOptions = {}): Window[
       connection(request?.connectionId, request?.profile),
     getGatewayWsUrl,
     getGatewayWsUrlFor: getGatewayWsUrl,
-    gatewayMediaStreamUrl: (payload: {
-      connectionId?: null | string
-      path: string
-      profile?: null | string
-    }) => {
-      const url = new URL(nodeRequestUrl(
-        location,
-        runtimeDescriptor,
-        payload.connectionId ?? readConnectionId(runtimeDescriptor),
-        '/api/files/stream'
-      ))
+    gatewayMediaStreamUrl: (payload: { connectionId?: null | string; path: string; profile?: null | string }) => {
+      const url = new URL(
+        nodeRequestUrl(
+          location,
+          runtimeDescriptor,
+          payload.connectionId ?? readConnectionId(runtimeDescriptor),
+          '/api/files/stream'
+        )
+      )
+
       url.searchParams.set('path', payload.path)
-      if (payload.profile) {url.searchParams.set('profile', payload.profile)}
+
+      if (payload.profile) {
+        url.searchParams.set('profile', payload.profile)
+      }
 
       return url.toString()
     },
@@ -373,15 +398,20 @@ export function createBrowserBridge(options: BrowserBridgeOptions = {}): Window[
       profile?: null | string
       suggestedName?: string
     }) => {
-      const url = new URL(nodeRequestUrl(
-        location,
-        runtimeDescriptor,
-        payload.connectionId ?? readConnectionId(runtimeDescriptor),
-        '/api/fs/download'
-      ))
+      const url = new URL(
+        nodeRequestUrl(
+          location,
+          runtimeDescriptor,
+          payload.connectionId ?? readConnectionId(runtimeDescriptor),
+          '/api/fs/download'
+        )
+      )
+
       url.searchParams.set('path', payload.path)
 
-      if (payload.profile) {url.searchParams.set('profile', payload.profile)}
+      if (payload.profile) {
+        url.searchParams.set('profile', payload.profile)
+      }
       const response = await fetcher(url, { credentials: 'include' })
 
       if (!response.ok) {
@@ -397,7 +427,9 @@ export function createBrowserBridge(options: BrowserBridgeOptions = {}): Window[
     saveImageFromUrl: async (url: string) => {
       const response = await fetcher(url, { credentials: 'include' })
 
-      if (!response.ok) {return false}
+      if (!response.ok) {
+        return false
+      }
       downloadBlob(await response.blob(), url.split('/').pop() || 'image')
 
       return true

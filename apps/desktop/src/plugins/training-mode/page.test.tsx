@@ -42,7 +42,9 @@ describe('Training Mode page', () => {
 
   it('saves only the server-generated draft after the exact hash-bound approval phrase', async () => {
     const rest = vi.fn(async (path: string) => {
-      if (path === '/draft') {return draftResponse}
+      if (path === '/draft') {
+        return draftResponse
+      }
 
       if (path === '/approve') {
         return { saved: true, idempotent: false, name: draftResponse.name, draft_hash: draftResponse.draft_hash }

@@ -19,6 +19,7 @@ describe('renameA2AAgent', () => {
       status: 'verified',
       warnings: []
     })
+
     unbind = bindOperationsApi(rest)
 
     const result = await renameA2AAgent('a2a:one', '  Darrell  ')
@@ -50,12 +51,14 @@ describe('renameA2AAgent', () => {
 
   it('carries the duplicate name warning back to the caller', async () => {
     const warning = 'another Bot already uses this name (laptop), so the two are hard to tell apart'
+
     const rest = vi.fn().mockResolvedValue({
       agent_id: 'a2a:one',
       name: 'Darrell',
       status: 'verified',
       warnings: [warning, 42, null]
     })
+
     unbind = bindOperationsApi(rest)
 
     const result = await renameA2AAgent('a2a:one', 'Darrell')
@@ -72,17 +75,24 @@ describe('renameA2AAgent', () => {
   })
 
   it('reports a refused name from the backend as a human reason', async () => {
-    const rest = vi.fn().mockRejectedValue(
-      new Error('400: {"detail":{"error":"a2a_name_rejected","reason":"agent name must use letters, spaces, apostrophes, or hyphens"}}')
-    )
+    const rest = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          '400: {"detail":{"error":"a2a_name_rejected","reason":"agent name must use letters, spaces, apostrophes, or hyphens"}}'
+        )
+      )
+
     unbind = bindOperationsApi(rest)
 
     let caught: unknown
+
     try {
       await renameA2AAgent('a2a:one', 'Darrell!')
     } catch (e) {
       caught = e
     }
+
     expect(caught).toBeInstanceOf(Error)
     expect((caught as Error).message).toBe('agent name must use letters, spaces, apostrophes, or hyphens')
     expect((caught as Error).message).not.toMatch(/^\d+:/)
@@ -94,11 +104,13 @@ describe('renameA2AAgent', () => {
     unbind = bindOperationsApi(rest)
 
     let caught: unknown
+
     try {
       await renameA2AAgent('a2a:one', 'Darrell')
     } catch (e) {
       caught = e
     }
+
     expect(caught).toBeInstanceOf(Error)
     expect((caught as Error).message).toBe('a2a_agent_not_found')
     expect((caught as Error).message).not.toMatch(/^\d+:/)
@@ -110,11 +122,13 @@ describe('renameA2AAgent', () => {
     unbind = bindOperationsApi(rest)
 
     let caught: unknown
+
     try {
       await renameA2AAgent('a2a:one', 'Darrell')
     } catch (e) {
       caught = e
     }
+
     expect(caught).toBeInstanceOf(Error)
     expect((caught as Error).message).toBe('plain error text')
   })

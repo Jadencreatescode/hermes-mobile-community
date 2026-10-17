@@ -152,9 +152,7 @@ export function checkBotName(value: string, otherBotNames: string[] = []): BotNa
     .filter(candidate => botNameKey(candidate) === key)
 
   if (duplicates.length) {
-    warnings.push(
-      `Another Bot already uses the name ${name}, so the two look the same in the roster and the rooms.`
-    )
+    warnings.push(`Another Bot already uses the name ${name}, so the two look the same in the roster and the rooms.`)
   }
 
   if (name.includes("'") || name.includes('-')) {

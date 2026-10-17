@@ -8,9 +8,11 @@ function showMobileSetupError(): void {
   const detail = document.createElement('p')
 
   main.setAttribute('role', 'alert')
-  main.style.cssText = 'box-sizing:border-box;max-width:42rem;margin:12vh auto;padding:2rem;font:16px/1.5 system-ui,sans-serif;color:#f5f5f5;background:#171717;border:1px solid #444;border-radius:16px'
+  main.style.cssText =
+    'box-sizing:border-box;max-width:42rem;margin:12vh auto;padding:2rem;font:16px/1.5 system-ui,sans-serif;color:#f5f5f5;background:#171717;border:1px solid #444;border-radius:16px'
   title.textContent = 'Hermes mobile setup is incomplete'
-  detail.textContent = 'This private mobile address is not connected to a configured Hermes backend. Run the installer again on the Hermes computer.'
+  detail.textContent =
+    'This private mobile address is not connected to a configured Hermes backend. Run the installer again on the Hermes computer.'
   main.append(title, detail)
   root.replaceChildren(main)
 }

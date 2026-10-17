@@ -38,11 +38,7 @@ const reviewerAgent: OperationsAgentModel = {
  *  seated participant, so a route change has to move the seat with it. */
 function withProducer(route: { connection: string; profile: string }) {
   return {
-    participants: [
-      { connection: 'local', profile: 'chair' },
-      route,
-      { connection: 'local', profile: 'reviewer' }
-    ],
+    participants: [{ connection: 'local', profile: 'chair' }, route, { connection: 'local', profile: 'reviewer' }],
     producer: route,
     seats: [
       { bot: { connection: 'local', profile: 'chair' }, role: 'specialist', label: 'Orchestrator' },
@@ -132,19 +128,21 @@ const output: MeetingOutput = Object.freeze({
 
 /** One scripted dispatcher: the real REST surface plus the host RPC, with an
  *  ordered call log so the ordering guarantees are checkable. */
-function harness(options: {
-  activeRunId?: string | null
-  activePromptClaim?: boolean
-  promptClaimExpiresAt?: number
-  promptClaimRenewals?: number
-  recoveryObservedAt?: number
-  claimActive?: boolean
-  claimRenewals?: number
-  dispatchInHistory?: string
-  revision?: boolean
-  reviewerText?: string
-  working?: boolean
-} = {}) {
+function harness(
+  options: {
+    activeRunId?: string | null
+    activePromptClaim?: boolean
+    promptClaimExpiresAt?: number
+    promptClaimRenewals?: number
+    recoveryObservedAt?: number
+    claimActive?: boolean
+    claimRenewals?: number
+    dispatchInHistory?: string
+    revision?: boolean
+    reviewerText?: string
+    working?: boolean
+  } = {}
+) {
   const runId = options.revision ? 'mrun_2' : 'mrun_1'
   const calls: string[] = []
 
@@ -155,123 +153,120 @@ function harness(options: {
       ]
     : []
 
-// health: allow CC -- the test harness intentionally models every production dispatch route in one protocol stub
-  const rest = vi.fn(async (
-    path: string,
-    init?: { body?: unknown; headers?: Record<string, string>; method?: string }
-  ) => {
-    calls.push(`rest ${path}`)
+  // health: allow CC -- the test harness intentionally models every production dispatch route in one protocol stub
+  const rest = vi.fn(
+    async (path: string, init?: { body?: unknown; headers?: Record<string, string>; method?: string }) => {
+      calls.push(`rest ${path}`)
 
-    if (path.endsWith('/recovery')) {
-      return {
-        output: outputWire,
-        observed_at: options.recoveryObservedAt ?? 100,
-        active_run: options.activeRunId ? { run_id: options.activeRunId, kind: 'production' } : null,
-        active_review: null,
-        active_prompt_claim: options.activePromptClaim ? {
-          claim_id: 'mclaim_recovery',
-          scope: options.activeRunId ?? runId,
-          session_id: 'stored-session-1',
-          expires_at: options.promptClaimExpiresAt ?? 200,
-          renewals: options.promptClaimRenewals ?? 0
-        } : null,
-        receipt: null
-      }
-    }
-
-    if (path.endsWith('/review-runs')) {
-      return {
-        request_id: 'mrev_1',
-        artifact_version: 1,
-        checks: { ok: true, checks: { package_available: true }, failed_checks: [] },
-        manifest: [{ path: 'index.txt' }]
-      }
-    }
-
-    if (path.endsWith('/production-runs') || path.endsWith('/revision-runs')) {
-      return {
-        run_id: runId,
-        output_id: 'mout_1',
-        kind: options.revision ? 'revision' : 'production',
-        meeting_id: 'meeting-1',
-        meeting_version: 3,
-        parent_artifact_version: options.revision ? 1 : null,
-        cwd: `/server/owned/workspaces/${runId}`
-      }
-    }
-
-    if (path === '/meeting-output-review-runs/mrev_1/claim') {
-      if (options.claimActive) {
-        throw new Error('409: {"detail":{"error":"operations_claim_active"}}')
+      if (path.endsWith('/recovery')) {
+        return {
+          output: outputWire,
+          observed_at: options.recoveryObservedAt ?? 100,
+          active_run: options.activeRunId ? { run_id: options.activeRunId, kind: 'production' } : null,
+          active_review: null,
+          active_prompt_claim: options.activePromptClaim
+            ? {
+                claim_id: 'mclaim_recovery',
+                scope: options.activeRunId ?? runId,
+                session_id: 'stored-session-1',
+                expires_at: options.promptClaimExpiresAt ?? 200,
+                renewals: options.promptClaimRenewals ?? 0
+              }
+            : null,
+          receipt: null
+        }
       }
 
-      return { request_id: 'mrev_1', claim: { claim_id: 'mclaim_review', renewals: 0 } }
-    }
-
-    if (path.endsWith('/claim')) {
-      if (options.claimActive) {
-        throw new Error('409: {"detail":{"error":"operations_claim_active"}}')
+      if (path.endsWith('/review-runs')) {
+        return {
+          request_id: 'mrev_1',
+          artifact_version: 1,
+          checks: { ok: true, checks: { package_available: true }, failed_checks: [] },
+          manifest: [{ path: 'index.txt' }]
+        }
       }
 
-      return {
-        run_id: runId,
-        output_id: 'mout_1',
-        kind: options.revision ? 'revision' : 'production',
-        session_id: 'stored-session-1',
-        claim: { claim_id: 'mclaim_1', renewals: options.claimRenewals ?? 0, expires_at: 10 },
-        producer: { connection: 'local', profile: 'producer' },
-        workspace: { cwd: `/server/owned/workspaces/${runId}` },
-        collection_claim: 'collection-claim-token-value',
-        brief: 'Produce the guide.',
-        brief_hash: 'd'.repeat(64),
-        acceptance_statement: 'A reviewer confirms every step is reproducible.',
-        parent_artifact_version: options.revision ? 1 : null
-      }
-    }
-
-    if (path.endsWith('/collect')) {
-      return {
-        receipt: {
+      if (path.endsWith('/production-runs') || path.endsWith('/revision-runs')) {
+        return {
           run_id: runId,
           output_id: 'mout_1',
-          artifact_version: options.revision ? 2 : 1,
+          kind: options.revision ? 'revision' : 'production',
+          meeting_id: 'meeting-1',
+          meeting_version: 3,
           parent_artifact_version: options.revision ? 1 : null,
-          game_sha256: 'a'.repeat(64),
-          manifest_sha256: 'b'.repeat(64),
-          zip_sha256: 'c'.repeat(64),
-          total_byte_size: 31,
-          collected_at: 9
-        },
-        output: outputWire,
-        eligibility: { review: true, preview: true, download: true }
+          cwd: `/server/owned/workspaces/${runId}`
+        }
       }
-    }
 
-    if (path === '/meeting-output-review-runs/mrev_1/complete') {
-      return {
-        review: { request_id: 'mrev_1', artifact_version: 1 },
-        output: { ...outputWire, state: 'verified', verified_artifact_version: 1 }
+      if (path === '/meeting-output-review-runs/mrev_1/claim') {
+        if (options.claimActive) {
+          throw new Error('409: {"detail":{"error":"operations_claim_active"}}')
+        }
+
+        return { request_id: 'mrev_1', claim: { claim_id: 'mclaim_review', renewals: 0 } }
       }
+
+      if (path.endsWith('/claim')) {
+        if (options.claimActive) {
+          throw new Error('409: {"detail":{"error":"operations_claim_active"}}')
+        }
+
+        return {
+          run_id: runId,
+          output_id: 'mout_1',
+          kind: options.revision ? 'revision' : 'production',
+          session_id: 'stored-session-1',
+          claim: { claim_id: 'mclaim_1', renewals: options.claimRenewals ?? 0, expires_at: 10 },
+          producer: { connection: 'local', profile: 'producer' },
+          workspace: { cwd: `/server/owned/workspaces/${runId}` },
+          collection_claim: 'collection-claim-token-value',
+          brief: 'Produce the guide.',
+          brief_hash: 'd'.repeat(64),
+          acceptance_statement: 'A reviewer confirms every step is reproducible.',
+          parent_artifact_version: options.revision ? 1 : null
+        }
+      }
+
+      if (path.endsWith('/collect')) {
+        return {
+          receipt: {
+            run_id: runId,
+            output_id: 'mout_1',
+            artifact_version: options.revision ? 2 : 1,
+            parent_artifact_version: options.revision ? 1 : null,
+            game_sha256: 'a'.repeat(64),
+            manifest_sha256: 'b'.repeat(64),
+            zip_sha256: 'c'.repeat(64),
+            total_byte_size: 31,
+            collected_at: 9
+          },
+          output: outputWire,
+          eligibility: { review: true, preview: true, download: true }
+        }
+      }
+
+      if (path === '/meeting-output-review-runs/mrev_1/complete') {
+        return {
+          review: { request_id: 'mrev_1', artifact_version: 1 },
+          output: { ...outputWire, state: 'verified', verified_artifact_version: 1 }
+        }
+      }
+
+      // getMeetingOutput: the revision path re-reads the authoritative version.
+      if (path === '/meeting-outputs/mout_1') {
+        return { output: outputWire, eligibility: { revise: true }, versions: [], reviews: [] }
+      }
+
+      // The durable session checkpoint (putMeeting) written before any prompt.
+      if (path.startsWith('/meetings/') && init?.method === 'PUT') {
+        return { meeting: (init.body as { record?: unknown })?.record, version: 4 }
+      }
+
+      throw new Error(`Unexpected REST call: ${path} ${init?.method ?? 'GET'}`)
     }
+  )
 
-    // getMeetingOutput: the revision path re-reads the authoritative version.
-    if (path === '/meeting-outputs/mout_1') {
-      return { output: outputWire, eligibility: { revise: true }, versions: [], reviews: [] }
-    }
-
-    // The durable session checkpoint (putMeeting) written before any prompt.
-    if (path.startsWith('/meetings/') && init?.method === 'PUT') {
-      return { meeting: (init.body as { record?: unknown })?.record, version: 4 }
-    }
-
-    throw new Error(`Unexpected REST call: ${path} ${init?.method ?? 'GET'}`)
-  })
-
-  const requestProfile = vi.fn(async (
-    _route: unknown,
-    method: string,
-    params?: Record<string, unknown>
-  ) => {
+  const requestProfile = vi.fn(async (_route: unknown, method: string, params?: Record<string, unknown>) => {
     calls.push(`rpc ${method}`)
 
     if (method === 'session.create') {
@@ -330,8 +325,10 @@ function base(h: ReturnType<typeof harness>, overrides: Record<string, unknown> 
 
 describe('producer dispatch eligibility', () => {
   it('accepts a local producer seat', () => {
-    expect(producerDispatchEligibility(productionMeeting(), LOCAL_MODES, [producerAgent]))
-      .toEqual({ eligible: true, reason: '' })
+    expect(producerDispatchEligibility(productionMeeting(), LOCAL_MODES, [producerAgent])).toEqual({
+      eligible: true,
+      reason: ''
+    })
   })
 
   it('refuses a remote producer seat by name', () => {
@@ -417,10 +414,14 @@ describe('the production dispatch', () => {
     const h = harness()
     unbind = bindOperationsApi(h.rest as never)
 
-    await expect(runProductionDispatch(base(h, {
-      connectionModes: { local: 'local', 'remote-1': 'remote' },
-      meeting: productionMeeting(withProducer({ connection: 'remote-1', profile: 'producer' }))
-    }))).rejects.toThrow(/remote Bot/)
+    await expect(
+      runProductionDispatch(
+        base(h, {
+          connectionModes: { local: 'local', 'remote-1': 'remote' },
+          meeting: productionMeeting(withProducer({ connection: 'remote-1', profile: 'producer' }))
+        })
+      )
+    ).rejects.toThrow(/remote Bot/)
 
     expect(h.rest).not.toHaveBeenCalled()
     expect(h.requestProfile).not.toHaveBeenCalled()
@@ -438,8 +439,10 @@ describe('the production dispatch', () => {
     expect(created).toBeGreaterThanOrEqual(0)
     expect(session).toBeGreaterThan(created)
 
-    const params = h.requestProfile.mock.calls.find(call => call[1] === 'session.create')?.[2] as
-      Record<string, unknown>
+    const params = h.requestProfile.mock.calls.find(call => call[1] === 'session.create')?.[2] as Record<
+      string,
+      unknown
+    >
 
     expect(params.cwd).toBe('/server/owned/workspaces/mrun_1')
     expect(params.hidden).toBe(true)
@@ -488,10 +491,8 @@ describe('the production dispatch', () => {
     const collect = h.rest.mock.calls.find(([path]) => String(path).endsWith('/collect'))!
 
     expect(collect[0]).toBe('/meeting-output-runs/mrun_1/collect')
-    expect((collect[1] as { body: unknown }).body)
-      .toEqual({ collection_claim: 'collection-claim-token-value' })
-    expect((collect[1] as { headers: Record<string, string> }).headers)
-      .toEqual({ 'Idempotency-Key': 'collect-mrun_1' })
+    expect((collect[1] as { body: unknown }).body).toEqual({ collection_claim: 'collection-claim-token-value' })
+    expect((collect[1] as { headers: Record<string, string> }).headers).toEqual({ 'Idempotency-Key': 'collect-mrun_1' })
   })
 
   it('never submits a second prompt when the dispatch is already in history', async () => {
@@ -501,8 +502,8 @@ describe('the production dispatch', () => {
     await runProductionDispatch(base(seeded))
 
     const sent = String(
-      (seeded.requestProfile.mock.calls.find(call => call[1] === 'prompt.submit')?.[2] as
-        Record<string, unknown>)?.text ?? ''
+      (seeded.requestProfile.mock.calls.find(call => call[1] === 'prompt.submit')?.[2] as Record<string, unknown>)
+        ?.text ?? ''
     )
 
     expect(sent).not.toBe('')
@@ -523,10 +524,12 @@ describe('the production dispatch', () => {
     const h = harness({ activeRunId: 'mrun_1' })
     unbind = bindOperationsApi(h.rest as never)
 
-    const result = await runProductionDispatch(base(h, {
-      meeting: productionMeeting({ runner_sessions: { 'local::producer': 'stored-session-1' } }),
-      output
-    }))
+    const result = await runProductionDispatch(
+      base(h, {
+        meeting: productionMeeting({ runner_sessions: { 'local::producer': 'stored-session-1' } }),
+        output
+      })
+    )
 
     expect(h.calls).toContain('rest /meeting-outputs/mout_1/recovery')
     expect(h.rest.mock.calls.some(([path]) => String(path).endsWith('/production-runs'))).toBe(false)
@@ -544,10 +547,12 @@ describe('the production dispatch', () => {
 
     unbind = bindOperationsApi(h.rest as never)
 
-    await runProductionDispatch(base(h, {
-      meeting: productionMeeting({ runner_sessions: { 'local::producer': 'stored-session-1' } }),
-      output
-    }))
+    await runProductionDispatch(
+      base(h, {
+        meeting: productionMeeting({ runner_sessions: { 'local::producer': 'stored-session-1' } }),
+        output
+      })
+    )
 
     const claim = h.rest.mock.calls.find(([path]) => String(path).endsWith('/claim'))
     expect(claim?.[1]).toMatchObject({
@@ -584,23 +589,28 @@ describe('the revision dispatch', () => {
     const h = harness({ revision: true })
     unbind = bindOperationsApi(h.rest as never)
 
-    const result = await runProductionDispatch(base(h, {
-      findings: output.findings,
-      kind: 'revision',
-      output
-    }))
+    const result = await runProductionDispatch(
+      base(h, {
+        findings: output.findings,
+        kind: 'revision',
+        output
+      })
+    )
 
     const restOnly = h.calls.filter(entry => entry.startsWith('rest '))
 
     expect(restOnly).toContain('rest /meeting-outputs/mout_1/revision-runs')
     expect(restOnly).toContain('rest /meeting-output-revision-runs/mrun_2/claim')
     expect(restOnly).toContain('rest /meeting-output-revision-runs/mrun_2/collect')
-    expect(h.calls.indexOf('rpc prompt.submit'))
-      .toBeGreaterThan(h.calls.indexOf('rest /meeting-output-revision-runs/mrun_2/claim'))
+    expect(h.calls.indexOf('rpc prompt.submit')).toBeGreaterThan(
+      h.calls.indexOf('rest /meeting-output-revision-runs/mrun_2/claim')
+    )
     expect(result).toMatchObject({ artifactVersion: 2, runId: 'mrun_2', status: 'done' })
 
-    const params = h.requestProfile.mock.calls.find(call => call[1] === 'session.create')?.[2] as
-      Record<string, unknown>
+    const params = h.requestProfile.mock.calls.find(call => call[1] === 'session.create')?.[2] as Record<
+      string,
+      unknown
+    >
 
     expect(params.cwd).toBe('/server/owned/workspaces/mrun_2')
   })
@@ -644,13 +654,10 @@ describe('the independent review dispatch', () => {
     expect(complete).toBeGreaterThan(prompt)
     expect(result).toMatchObject({ status: 'done', verdict: 'verified', artifactVersion: 1 })
 
-    const claimBody = h.rest.mock.calls.find(([path]) =>
-      path === '/meeting-output-review-runs/mrev_1/claim'
-    )?.[1]?.body
+    const claimBody = h.rest.mock.calls.find(([path]) => path === '/meeting-output-review-runs/mrev_1/claim')?.[1]?.body
 
-    const verdictBody = h.rest.mock.calls.find(([path]) =>
-      path === '/meeting-output-review-runs/mrev_1/complete'
-    )?.[1]?.body
+    const verdictBody = h.rest.mock.calls.find(([path]) => path === '/meeting-output-review-runs/mrev_1/complete')?.[1]
+      ?.body
 
     expect(claimBody).toEqual({
       request_id: 'review-dispatch-mrev_1',

@@ -82,16 +82,18 @@ function versionWire(artifactVersion: number, parent: number | null = null) {
   }
 }
 
-function detail(overrides: {
-  state?: string
-  eligibility?: Record<string, boolean>
-  versions?: unknown[]
-  reviews?: unknown[]
-  findings?: unknown[]
-  verified?: number
-  approved?: number
-  current?: number
-} = {}) {
+function detail(
+  overrides: {
+    state?: string
+    eligibility?: Record<string, boolean>
+    versions?: unknown[]
+    reviews?: unknown[]
+    findings?: unknown[]
+    verified?: number
+    approved?: number
+    current?: number
+  } = {}
+) {
   return outputDetailFromWire({
     output: {
       output_id: 'mout_1',
@@ -173,8 +175,13 @@ describe('DeliverablePackageOutput', () => {
     )
 
     for (const label of [
-      /output id/i, /artifact version \(/i, /game sha/i, /manifest sha/i,
-      /zip sha/i, /approved by/i, /approved at/i
+      /output id/i,
+      /artifact version \(/i,
+      /game sha/i,
+      /manifest sha/i,
+      /zip sha/i,
+      /approved by/i,
+      /approved at/i
     ]) {
       expect(screen.queryByLabelText(label)).toBeNull()
     }
@@ -291,11 +298,18 @@ describe('DeliverablePackageOutput', () => {
     render(
       <DeliverablePackageOutput
         detail={detail({
-          reviews: [{
-            request_id: 'mrev_1', artifact_version: 1, state: 'open', verdict: '',
-            reviewer: { connection: 'local', profile: 'reviewer' },
-            findings: [], checks: { ok: true, checks: {}, failed_checks: [] }, created_at: 1
-          }]
+          reviews: [
+            {
+              request_id: 'mrev_1',
+              artifact_version: 1,
+              state: 'open',
+              verdict: '',
+              reviewer: { connection: 'local', profile: 'reviewer' },
+              findings: [],
+              checks: { ok: true, checks: {}, failed_checks: [] },
+              created_at: 1
+            }
+          ]
         })}
         meeting={productionMeeting()}
         meetingVersion={7}
@@ -315,7 +329,9 @@ describe('DeliverablePackageOutput', () => {
       <DeliverablePackageOutput
         detail={detail({
           state: 'changes_requested',
-          findings: [{ severity: 'critical', code: 'unsafe_preview', detail: 'Inline script found.', path: 'page.html' }]
+          findings: [
+            { severity: 'critical', code: 'unsafe_preview', detail: 'Inline script found.', path: 'page.html' }
+          ]
         })}
         meeting={productionMeeting()}
         meetingVersion={7}
@@ -331,7 +347,8 @@ describe('DeliverablePackageOutput', () => {
   })
 
   it('approves by echoing the server verified version and hashes', async () => {
-    const rest = vi.fn()
+    const rest = vi
+      .fn()
       .mockResolvedValueOnce({
         output: detail({ state: 'verified', verified: 1 }).output,
         eligibility: { approve: true },
@@ -408,9 +425,7 @@ describe('DeliverablePackageOutput', () => {
 
     unbind = bindOperationsApi(rest as never)
 
-    render(
-      <DeliverablePackageOutput detail={detail()} meeting={productionMeeting()} meetingVersion={7} />
-    )
+    render(<DeliverablePackageOutput detail={detail()} meeting={productionMeeting()} meetingVersion={7} />)
 
     // The download-only HTML member offers no preview affordance at all.
     expect(screen.queryByRole('button', { name: 'Preview page.html' })).toBeNull()
@@ -434,9 +449,7 @@ describe('DeliverablePackageOutput', () => {
 
     unbind = bindOperationsApi(rest as never)
 
-    render(
-      <DeliverablePackageOutput detail={detail()} meeting={productionMeeting()} meetingVersion={7} />
-    )
+    render(<DeliverablePackageOutput detail={detail()} meeting={productionMeeting()} meetingVersion={7} />)
 
     fireEvent.click(screen.getByRole('button', { name: /Download artifact version 1/ }))
 

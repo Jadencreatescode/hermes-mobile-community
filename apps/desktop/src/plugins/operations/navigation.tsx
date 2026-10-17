@@ -33,7 +33,9 @@ export function OperationsNavigation({
           value={active}
         >
           {OPERATIONS_SECTIONS.map(section => (
-            <option key={section.id} value={section.id}>{section.label}</option>
+            <option key={section.id} value={section.id}>
+              {section.label}
+            </option>
           ))}
         </select>
       </label>

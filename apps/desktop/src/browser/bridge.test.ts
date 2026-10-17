@@ -32,10 +32,18 @@ describe('browser Desktop capability bridge', () => {
 
   it('loads a relay descriptor before installing one same-origin backend', async () => {
     delete desktopWindow.hermesDesktop
+
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url.endsWith('/.well-known/hermes-mobile-runtime.json')) {return response(runtimeDescriptor)}
-      if (url.endsWith('/api/auth/ws-ticket')) {return response({ ticket: 'single-use' })}
+
+      if (url.endsWith('/.well-known/hermes-mobile-runtime.json')) {
+        return response(runtimeDescriptor)
+      }
+
+      if (url.endsWith('/api/auth/ws-ticket')) {
+        return response({ ticket: 'single-use' })
+      }
+
       return response({ ok: true })
     })
 
@@ -43,12 +51,17 @@ describe('browser Desktop capability bridge', () => {
       fetcher,
       location: new URL('https://mobile.example.test/app/')
     })
+
     const registry = await bridge.connections.list()
     const connection = await bridge.getConnection()
     const ws = await bridge.getGatewayWsUrl?.()
 
     expect(registry.connections).toHaveLength(1)
-    expect(registry.connections[0]).toMatchObject({ id: 'strix-halo', label: 'Strix Halo', url: 'https://mobile.example.test' })
+    expect(registry.connections[0]).toMatchObject({
+      id: 'strix-halo',
+      label: 'Strix Halo',
+      url: 'https://mobile.example.test'
+    })
     expect(registry.primary).toBe('strix-halo')
     expect(registry.lastUsed).toBe('strix-halo')
     expect(connection).toMatchObject({
@@ -63,16 +76,22 @@ describe('browser Desktop capability bridge', () => {
 
   it('fails closed without installing a bridge when the descriptor is invalid', async () => {
     delete desktopWindow.hermesDesktop
-    const fetcher = vi.fn(async () => response({ version: 1, backend: { id: 'unknown-gateway', label: 'Unknown Gateway', url: 'https://invalid.example' } }))
+    const fetcher = vi.fn(async () =>
+      response({
+        version: 1,
+        backend: { id: 'unknown-gateway', label: 'Unknown Gateway', url: 'https://invalid.example' }
+      })
+    )
 
-    await expect(
-      installBrowserBridge({ fetcher, location: new URL('https://mobile.example.test/') })
-    ).rejects.toThrow(/runtime descriptor/i)
+    await expect(installBrowserBridge({ fetcher, location: new URL('https://mobile.example.test/') })).rejects.toThrow(
+      /runtime descriptor/i
+    )
     expect(desktopWindow.hermesDesktop).toBeUndefined()
   })
 
   it('rejects stale or unknown connection ids instead of falling back', async () => {
     localStorage.setItem('hermes-mobile-connection-id', 'unknown-gateway')
+
     const bridge = createBrowserBridge({
       location: new URL('https://mobile.example.test/'),
       runtimeDescriptor
@@ -85,6 +104,7 @@ describe('browser Desktop capability bridge', () => {
 
   it('preserves same-origin cookie REST authentication and profile scope', async () => {
     const fetcher = vi.fn(async () => response({ model: 'ornith' }))
+
     const bridge = createBrowserBridge({
       fetcher,
       location: new URL('https://mobile.example.test/'),
@@ -123,9 +143,7 @@ describe('browser Desktop capability bridge', () => {
         path: '/home/me/voice memo.m4a',
         profile: 'voice reviewer'
       })
-    ).toBe(
-      'https://mobile.example.test/api/files/stream?path=%2Fhome%2Fme%2Fvoice+memo.m4a&profile=voice+reviewer'
-    )
+    ).toBe('https://mobile.example.test/api/files/stream?path=%2Fhome%2Fme%2Fvoice+memo.m4a&profile=voice+reviewer')
     expect(() =>
       bridge.gatewayMediaStreamUrl({ connectionId: 'stale-node', path: '/tmp/a.m4a', profile: 'voice' })
     ).toThrow(/unavailable/i)
@@ -133,6 +151,7 @@ describe('browser Desktop capability bridge', () => {
 
   it('mints a fresh same-origin WebSocket ticket with cookie credentials', async () => {
     const fetcher = vi.fn(async () => response({ ticket: 'fresh-ticket' }))
+
     const bridge = createBrowserBridge({
       fetcher,
       location: new URL('https://mobile.example.test/'),
@@ -151,6 +170,7 @@ describe('browser Desktop capability bridge', () => {
 
   it('flags a 401 ws-ticket response as needing an oauth login', async () => {
     const fetcher = vi.fn(async () => new Response('session expired', { status: 401 }))
+
     const bridge = createBrowserBridge({
       fetcher,
       location: new URL('https://mobile.example.test/'),
@@ -163,6 +183,7 @@ describe('browser Desktop capability bridge', () => {
   it('clears the stale browser session and opens same-tab sign in', async () => {
     const fetcher = vi.fn(async () => new Response(null, { status: 302 }))
     const navigate = vi.fn()
+
     const bridge = createBrowserBridge({
       fetcher,
       location: new URL('https://mobile.example.test/app/'),

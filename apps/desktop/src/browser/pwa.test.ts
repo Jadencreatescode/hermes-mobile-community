@@ -51,7 +51,12 @@ describe('mobile service worker registration', () => {
     const notify = vi.fn()
     const waiting = { postMessage: vi.fn() }
     const registration = { waiting } as unknown as ServiceWorkerRegistration
-    bindMobileUpdatePrompt({ eventTarget, notify, reload, serviceWorker: serviceWorker as unknown as ServiceWorkerContainer })
+    bindMobileUpdatePrompt({
+      eventTarget,
+      notify,
+      reload,
+      serviceWorker: serviceWorker as unknown as ServiceWorkerContainer
+    })
 
     eventTarget.dispatchEvent(new CustomEvent(MOBILE_UPDATE_READY_EVENT, { detail: { registration } }))
     const action = notify.mock.calls[0][0].action

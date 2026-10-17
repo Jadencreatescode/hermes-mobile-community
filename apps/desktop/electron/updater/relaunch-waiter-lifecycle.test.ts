@@ -65,6 +65,7 @@ for (const mode of [
       const payloadReadyFile: string | undefined = payload.parameters.find(
         parameter => parameter.name === 'ReadyFile'
       )?.value
+
       assert.ok(payloadReadyFile, 'the waiter payload must contain the ready-file value')
       const candidateStage: string = path.dirname(payloadReadyFile)
       assert.equal(isWaiterStage(candidateStage), true, 'the waiter stage must be a direct child of the OS temp dir')

@@ -357,8 +357,9 @@ function validatedPowerShellCommand(command: string): string {
     path.win32.normalize(command) !== command ||
     !/\\powershell\.exe$/i.test(command) ||
     /[\s"%&|<>[\]{}^()=;!'+,`~]/.test(command) ||
-    segments.some((segment: string): boolean =>
-      segment.length === 0 || segment === '.' || segment === '..' || /[:*?]/.test(segment) || /[. ]$/.test(segment)
+    segments.some(
+      (segment: string): boolean =>
+        segment.length === 0 || segment === '.' || segment === '..' || /[:*?]/.test(segment) || /[. ]$/.test(segment)
     )
   ) {
     throw new Error('The updater hand-off command is not a safe PowerShell executable path.')
@@ -448,6 +449,7 @@ export function wrapHandoffForDetachedConsole(
   const desktopPidMarker: string = validatedDesktopPid(desktopPid)
   const encodedBootstrap: string = Buffer.from(WINDOWS_HANDOFF_BOOTSTRAP, 'utf16le').toString('base64')
   const invoker: string = `& ([ScriptBlock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodedBootstrap}'))))`
+
   const payload = Buffer.from(JSON.stringify(buildWindowsHandoffPayload(handoff, parameters)), 'utf8').toString(
     'base64'
   )
@@ -746,6 +748,7 @@ export function killHandoffTree(
     const powershellPath: string = windowsPowerShellPath()
     const taskkillPath: string = windowsTaskkillPath()
     const taskkillInvocation = `& '${taskkillPath}'`
+
     const command =
       `Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | ` +
       `Where-Object { $_.CommandLine -match '${windowsHandoffPidMarkerPattern(desktopPid)}' } | ` +

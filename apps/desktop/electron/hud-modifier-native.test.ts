@@ -12,9 +12,10 @@ import { macosSysroot, xcrunClangArgv } from '../scripts/macos-sysroot.mjs'
 // Linux XI2 (-x11.c) helpers both include. Compile its C contract and run it
 // wherever a C toolchain ships with the runner: Linux (the JS CI lane) and
 // macOS. Windows uses the separate C# port.
-const compilerProbe = process.platform === 'darwin'
-  ? spawnSync('xcrun', ['--find', 'clang'], { stdio: 'ignore' })
-  : spawnSync('cc', ['--version'], { stdio: 'ignore' })
+const compilerProbe =
+  process.platform === 'darwin'
+    ? spawnSync('xcrun', ['--find', 'clang'], { stdio: 'ignore' })
+    : spawnSync('cc', ['--version'], { stdio: 'ignore' })
 
 const hasNativeCompiler = process.platform !== 'win32' && compilerProbe.status === 0
 

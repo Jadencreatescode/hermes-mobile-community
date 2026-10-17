@@ -2,14 +2,7 @@ import { Button, Loader, Textarea } from '@hermes/plugin-sdk'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import type { MailEnvelope, MailStatus, MailUrgency } from './contracts'
-import {
-  acknowledgeMail,
-  cancelMail,
-  listMail,
-  putCriticalPolicy,
-  retryMail,
-  sendMail
-} from './mailroom'
+import { acknowledgeMail, cancelMail, listMail, putCriticalPolicy, retryMail, sendMail } from './mailroom'
 
 const STATUS_OPTIONS: Array<{ label: string; value: '' | MailStatus }> = [
   { label: 'All', value: '' },
@@ -159,9 +152,13 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
                 onChange={event => setTarget(event.currentTarget.value)}
                 value={target}
               >
-                {uniqueProfiles.filter(profile => profile !== activeProfile).map(profile => (
-                  <option key={profile} value={profile}>{profile}</option>
-                ))}
+                {uniqueProfiles
+                  .filter(profile => profile !== activeProfile)
+                  .map(profile => (
+                    <option key={profile} value={profile}>
+                      {profile}
+                    </option>
+                  ))}
               </select>
             </label>
             <label className="space-y-1 text-xs">
@@ -199,7 +196,10 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
                   onChange={event => setCriticalConfirmed(event.currentTarget.checked)}
                   type="checkbox"
                 />
-                <span>I approve this exact Critical route for one hour. It requests a cooperative checkpoint and never forcibly cancels work.</span>
+                <span>
+                  I approve this exact Critical route for one hour. It requests a cooperative checkpoint and never
+                  forcibly cancels work.
+                </span>
               </label>
               <Button
                 className="min-h-11 w-full"
@@ -212,9 +212,7 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
               {criticalExpiry > 0 && !criticalExpired && (
                 <p>Critical route approved until {new Date(criticalExpiry * 1000).toLocaleTimeString()}.</p>
               )}
-              {criticalExpired && (
-                <p role="status">Critical route approval expired. Approve this exact route again.</p>
-              )}
+              {criticalExpired && <p role="status">Critical route approval expired. Approve this exact route again.</p>}
             </div>
           )}
           <Button
@@ -237,27 +235,73 @@ export function MailroomView({ activeProfile, profiles }: { activeProfile: strin
               onChange={event => setStatus(event.currentTarget.value as '' | MailStatus)}
               value={status}
             >
-              {STATUS_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              {STATUS_OPTIONS.map(option => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </label>
-          <Button className="min-h-11" disabled={loading} onClick={() => void refresh()} variant="ghost">Refresh</Button>
+          <Button className="min-h-11" disabled={loading} onClick={() => void refresh()} variant="ghost">
+            Refresh
+          </Button>
         </header>
-        {error && <p className="border-b border-destructive/40 p-3 text-sm text-destructive" role="alert">{error}</p>}
+        {error && (
+          <p className="border-b border-destructive/40 p-3 text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        )}
         {loading ? (
-          <div className="grid min-h-40 place-items-center"><Loader label="Loading Mailroom" /></div>
+          <div className="grid min-h-40 place-items-center">
+            <Loader label="Loading Mailroom" />
+          </div>
         ) : error ? null : rows.length > 0 ? (
           <div className="max-h-[60vh] overflow-y-auto">
             {rows.map(row => (
               <article className="min-w-0 border-b border-(--ui-stroke-tertiary) p-3 last:border-b-0" key={row.id}>
                 <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs">
-                  <span className="font-medium">@{row.sourceProfile} → @{row.targetProfile}</span>
-                  <span>{row.urgency} · {row.status}</span>
+                  <span className="font-medium">
+                    @{row.sourceProfile} → @{row.targetProfile}
+                  </span>
+                  <span>
+                    {row.urgency} · {row.status}
+                  </span>
                 </div>
                 <p className="mt-2 break-words text-sm">{row.body}</p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {row.status === 'failed' && <Button className="min-h-11" disabled={busy} onClick={() => void transition(row, 'retry')} size="sm" variant="outline">Retry</Button>}
-                  {row.status === 'queued' && <Button className="min-h-11" disabled={busy} onClick={() => void transition(row, 'cancel')} size="sm" variant="outline">Cancel</Button>}
-                  {row.status === 'delivered' && <Button className="min-h-11" disabled={busy} onClick={() => void transition(row, 'acknowledge')} size="sm" variant="outline">Acknowledge</Button>}
+                  {row.status === 'failed' && (
+                    <Button
+                      className="min-h-11"
+                      disabled={busy}
+                      onClick={() => void transition(row, 'retry')}
+                      size="sm"
+                      variant="outline"
+                    >
+                      Retry
+                    </Button>
+                  )}
+                  {row.status === 'queued' && (
+                    <Button
+                      className="min-h-11"
+                      disabled={busy}
+                      onClick={() => void transition(row, 'cancel')}
+                      size="sm"
+                      variant="outline"
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                  {row.status === 'delivered' && (
+                    <Button
+                      className="min-h-11"
+                      disabled={busy}
+                      onClick={() => void transition(row, 'acknowledge')}
+                      size="sm"
+                      variant="outline"
+                    >
+                      Acknowledge
+                    </Button>
+                  )}
                 </div>
               </article>
             ))}

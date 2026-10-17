@@ -37,7 +37,9 @@ export function normalizeRoom(value: unknown): OperationsRoom | null {
   const row = record(value)
   const id = text(row.id)
 
-  if (!id) {return null}
+  if (!id) {
+    return null
+  }
   const members = strings(row.members)
 
   return {
@@ -54,7 +56,9 @@ export function normalizeRoomMessage(value: unknown): OperationsRoomMessage | nu
   const row = record(value)
   const body = text(row.text)
 
-  if (!body.trim()) {return null}
+  if (!body.trim()) {
+    return null
+  }
 
   return {
     at: text(row.at),
@@ -76,7 +80,9 @@ export async function readRoom(roomId: string, limit = 100): Promise<OperationsR
   const row = record(response)
   const room = normalizeRoom(row.room)
 
-  if (!room) {throw new Error('That room is no longer there.')}
+  if (!room) {
+    throw new Error('That room is no longer there.')
+  }
   const transcript = Array.isArray(row.transcript) ? row.transcript : []
 
   return {
@@ -87,19 +93,23 @@ export async function readRoom(roomId: string, limit = 100): Promise<OperationsR
 
 export async function createRoom(name: string): Promise<OperationsRoom> {
   const response = await operationsApi()<unknown>('/rooms', {
-    method: 'POST', body: { confirm: true, name: name.trim() }
+    method: 'POST',
+    body: { confirm: true, name: name.trim() }
   })
 
   const room = normalizeRoom(record(response).room)
 
-  if (!room) {throw new Error('The room did not come back with an identity.')}
+  if (!room) {
+    throw new Error('The room did not come back with an identity.')
+  }
 
   return room
 }
 
 export async function addRoomMember(roomId: string, agentId: string): Promise<void> {
   await operationsApi()(`/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(agentId)}`, {
-    method: 'POST', body: { confirm: true }
+    method: 'POST',
+    body: { confirm: true }
   })
 }
 
@@ -109,15 +119,21 @@ export async function removeRoomMember(roomId: string, agentId: string): Promise
   })
 }
 
-export async function postRoomMessage(roomId: string, message: string, requestId: string = crypto.randomUUID()): Promise<void> {
+export async function postRoomMessage(
+  roomId: string,
+  message: string,
+  requestId: string = crypto.randomUUID()
+): Promise<void> {
   await operationsApi()(`/rooms/${encodeURIComponent(roomId)}/messages`, {
-    method: 'POST', body: { message: message.trim(), request_id: requestId }
+    method: 'POST',
+    body: { message: message.trim(), request_id: requestId }
   })
 }
 
 export async function handoffRoom(roomId: string, agentId: string): Promise<void> {
   await operationsApi()(`/rooms/${encodeURIComponent(roomId)}/handoff`, {
-    method: 'POST', body: { agent_id: agentId, confirm: true }
+    method: 'POST',
+    body: { agent_id: agentId, confirm: true }
   })
 }
 
@@ -128,12 +144,15 @@ export async function runRoomTurn(
   requestId: string = crypto.randomUUID()
 ): Promise<void> {
   await operationsApi()(`/rooms/${encodeURIComponent(roomId)}/turns`, {
-    method: 'POST', body: { agent_id: agentId, message: message.trim(), request_id: requestId }
+    method: 'POST',
+    body: { agent_id: agentId, message: message.trim(), request_id: requestId }
   })
 }
 
 export function roomActorLabel(speaker: string, agents: Array<{ id: string; label: string }>): string {
-  if (!speaker || speaker === 'owner') {return 'You'}
+  if (!speaker || speaker === 'owner') {
+    return 'You'
+  }
 
   return agents.find(agent => agent.id === speaker)?.label ?? speaker
 }

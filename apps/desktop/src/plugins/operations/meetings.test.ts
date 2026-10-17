@@ -63,14 +63,16 @@ describe('Operations structured meeting client', () => {
   ])('rejects a $caseName meeting prompt before any request', async ({ text }) => {
     const requestProfile = vi.fn()
 
-    await expect(injectMeetingParticipantPrompt(
-      { requestProfile } as never,
-      { ...draft(), state: 'running' as const },
-      participants[1],
-      { 'gateway-b': 'remote' },
-      text,
-      []
-    )).rejects.toThrow('1 through 8000')
+    await expect(
+      injectMeetingParticipantPrompt(
+        { requestProfile } as never,
+        { ...draft(), state: 'running' as const },
+        participants[1],
+        { 'gateway-b': 'remote' },
+        text,
+        []
+      )
+    ).rejects.toThrow('1 through 8000')
     expect(requestProfile).not.toHaveBeenCalled()
   })
 
@@ -93,15 +95,17 @@ describe('Operations structured meeting client', () => {
     })
 
     unbind = bindOperationsApi(rest)
-    await expect(injectMeetingParticipantPrompt(
-      { requestProfile: vi.fn() } as never,
-      meeting,
-      a2aParticipant,
-      {},
-      'Continue with the decision.',
-      [a2aAgent],
-      'request-1'
-    )).rejects.toThrow('binding')
+    await expect(
+      injectMeetingParticipantPrompt(
+        { requestProfile: vi.fn() } as never,
+        meeting,
+        a2aParticipant,
+        {},
+        'Continue with the decision.',
+        [a2aAgent],
+        'request-1'
+      )
+    ).rejects.toThrow('binding')
     expect(rest).toHaveBeenCalledTimes(1)
     expect(rest).toHaveBeenCalledWith('/meetings/meeting-1')
   })
@@ -187,7 +191,9 @@ describe('Operations structured meeting client', () => {
     let resumes = 0
 
     const requestProfile = vi.fn(async (_route, method: string) => {
-      if (method === 'prompt.submit') {return { ok: true }}
+      if (method === 'prompt.submit') {
+        return { ok: true }
+      }
 
       resumes += 1
 
@@ -343,13 +349,15 @@ describe('Operations structured meeting client', () => {
       sourceKind: 'connected'
     }
 
-    await expect(getMeetingParticipantConversation(
-      { requestProfile } as never,
-      meeting,
-      participants[1],
-      { 'gateway-b': 'remote' },
-      [connectedAgent]
-    )).rejects.toThrow('unsupported')
+    await expect(
+      getMeetingParticipantConversation(
+        { requestProfile } as never,
+        meeting,
+        participants[1],
+        { 'gateway-b': 'remote' },
+        [connectedAgent]
+      )
+    ).rejects.toThrow('unsupported')
     expect(requestProfile).not.toHaveBeenCalled()
   })
 
@@ -362,13 +370,9 @@ describe('Operations structured meeting client', () => {
 
     const requestProfile = vi.fn().mockResolvedValue({ messages: [] })
 
-    await expect(getMeetingParticipantConversation(
-      { requestProfile } as never,
-      meeting,
-      participants[1],
-      {},
-      []
-    )).rejects.toThrow('connection mode')
+    await expect(
+      getMeetingParticipantConversation({ requestProfile } as never, meeting, participants[1], {}, [])
+    ).rejects.toThrow('connection mode')
     expect(requestProfile).not.toHaveBeenCalled()
   })
 
@@ -395,17 +399,19 @@ describe('Operations structured meeting client', () => {
   it('rejects conversation access for a route that is not seated', async () => {
     const requestProfile = vi.fn()
 
-    await expect(getMeetingParticipantConversation(
-      { requestProfile } as never,
-      {
-        ...draft(),
-        runnerSessions: { 'gateway-b::intruder': 'stored-intruder' },
-        state: 'running' as const
-      },
-      { connectionId: 'gateway-b', profile: 'intruder' },
-      { 'gateway-b': 'remote' },
-      []
-    )).rejects.toThrow('not seated')
+    await expect(
+      getMeetingParticipantConversation(
+        { requestProfile } as never,
+        {
+          ...draft(),
+          runnerSessions: { 'gateway-b::intruder': 'stored-intruder' },
+          state: 'running' as const
+        },
+        { connectionId: 'gateway-b', profile: 'intruder' },
+        { 'gateway-b': 'remote' },
+        []
+      )
+    ).rejects.toThrow('not seated')
     expect(requestProfile).not.toHaveBeenCalled()
   })
 
@@ -442,22 +448,26 @@ describe('Operations structured meeting client', () => {
       round: 1,
       startedAt: 1_800_000_000_123
     })
-    expect(meetingToWire(parsed)).toEqual(expect.objectContaining({
-      round_run: {
-        participant: { connection: 'gateway-b', profile: 'research' },
-        round: 1,
-        started_at: 1_800_000_000_123
-      }
-    }))
+    expect(meetingToWire(parsed)).toEqual(
+      expect.objectContaining({
+        round_run: {
+          participant: { connection: 'gateway-b', profile: 'research' },
+          round: 1,
+          started_at: 1_800_000_000_123
+        }
+      })
+    )
 
-    expect(meetingFromWire({
-      ...meetingToWire(draft()),
-      roundRun: {
-        participant: participants[0],
-        round: 2,
-        startedAt: 1_800_000_000_456
-      }
-    }).roundRun).toEqual({
+    expect(
+      meetingFromWire({
+        ...meetingToWire(draft()),
+        roundRun: {
+          participant: participants[0],
+          round: 2,
+          startedAt: 1_800_000_000_456
+        }
+      }).roundRun
+    ).toEqual({
       participant: participants[0],
       round: 2,
       startedAt: 1_800_000_000_456
@@ -467,14 +477,25 @@ describe('Operations structured meeting client', () => {
   it.each([
     { caseName: 'absent', marker: undefined },
     { caseName: 'partial', marker: { participant: { connection: 'gateway-b', profile: 'research' }, round: 1 } },
-    { caseName: 'invalid participant', marker: { participant: { connection: '', profile: 'research' }, round: 1, started_at: 1 } },
-    { caseName: 'non-integer round', marker: { participant: { connection: 'gateway-b', profile: 'research' }, round: 1.5, started_at: 1 } },
-    { caseName: 'non-positive timestamp', marker: { participant: { connection: 'gateway-b', profile: 'research' }, round: 1, started_at: 0 } }
+    {
+      caseName: 'invalid participant',
+      marker: { participant: { connection: '', profile: 'research' }, round: 1, started_at: 1 }
+    },
+    {
+      caseName: 'non-integer round',
+      marker: { participant: { connection: 'gateway-b', profile: 'research' }, round: 1.5, started_at: 1 }
+    },
+    {
+      caseName: 'non-positive timestamp',
+      marker: { participant: { connection: 'gateway-b', profile: 'research' }, round: 1, started_at: 0 }
+    }
   ])('drops an $caseName round run marker from the public wire shape', ({ marker }) => {
-    expect(meetingFromWire({
-      ...meetingToWire(draft()),
-      round_run: marker
-    }).roundRun).toBeUndefined()
+    expect(
+      meetingFromWire({
+        ...meetingToWire(draft()),
+        round_run: marker
+      }).roundRun
+    ).toBeUndefined()
   })
 
   it('applies every meeting round run freshness boundary', () => {
@@ -533,7 +554,10 @@ describe('Operations structured meeting client', () => {
       {
         caseName: 'for a participant no longer seated',
         expected: false,
-        meeting: { ...running, roundRun: { ...freshMarker, participant: { connectionId: 'gateway-b', profile: 'former' } } }
+        meeting: {
+          ...running,
+          roundRun: { ...freshMarker, participant: { connectionId: 'gateway-b', profile: 'former' } }
+        }
       },
       { caseName: 'while waiting', expected: false, meeting: { ...running, state: 'waiting' } },
       { caseName: 'without a marker', expected: false, meeting: { ...running, roundRun: undefined } }
@@ -647,8 +671,7 @@ describe('Operations structured meeting client', () => {
 
     unbind = bindOperationsApi(rest as never)
 
-    await expect(persistMeetingTransition(waiting, 3, 'resume'))
-      .rejects.toThrow('meeting round runner')
+    await expect(persistMeetingTransition(waiting, 3, 'resume')).rejects.toThrow('meeting round runner')
     expect(rest).not.toHaveBeenCalled()
   })
 
@@ -659,19 +682,22 @@ describe('Operations structured meeting client', () => {
     const rest = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error('409 Meeting version conflict'), { status: 409 }))
-      .mockResolvedValueOnce({ meeting: {
-        ...authoritative,
-        source: { connection: 'gateway-a', profile: 'chair' },
-        chair: { connection: 'gateway-a', profile: 'chair' },
-        participants: [
-          { connection: 'gateway-a', profile: 'chair' },
-          { connection: 'gateway-b', profile: 'research' }
-        ],
-        max_rounds: 3,
-        current_round: 1,
-        evidence: [],
-        action_items: []
-      }, version: 12 })
+      .mockResolvedValueOnce({
+        meeting: {
+          ...authoritative,
+          source: { connection: 'gateway-a', profile: 'chair' },
+          chair: { connection: 'gateway-a', profile: 'chair' },
+          participants: [
+            { connection: 'gateway-a', profile: 'chair' },
+            { connection: 'gateway-b', profile: 'research' }
+          ],
+          max_rounds: 3,
+          current_round: 1,
+          evidence: [],
+          action_items: []
+        },
+        version: 12
+      })
 
     unbind = bindOperationsApi(rest as never)
 
@@ -684,13 +710,15 @@ describe('Operations structured meeting client', () => {
   it('rejects a connected sourceId a2a round without calling public A2A REST', async () => {
     const running: MeetingRecord = {
       ...draft(),
-      contributions: [{
-        evidenceRefs: [],
-        id: 'meeting-1:r1:gateway-a:chair',
-        kind: 'pass',
-        participant: participants[0],
-        round: 1
-      }],
+      contributions: [
+        {
+          evidenceRefs: [],
+          id: 'meeting-1:r1:gateway-a:chair',
+          kind: 'pass',
+          participant: participants[0],
+          round: 1
+        }
+      ],
       currentRound: 1,
       participants: [participants[0], a2aParticipant],
       state: 'running'
@@ -710,7 +738,9 @@ describe('Operations structured meeting client', () => {
 
       const record = options?.body?.record
 
-      if (!record) {throw new Error('unexpected meeting read')}
+      if (!record) {
+        throw new Error('unexpected meeting read')
+      }
       writes.push(record)
 
       return { meeting: record, version: 5 + writes.length }
@@ -720,13 +750,15 @@ describe('Operations structured meeting client', () => {
 
     unbind = bindOperationsApi(rest as never)
 
-    await expect(runMeetingRound(
-      { requestProfile } as never,
-      running,
-      5,
-      {},
-      { agents: [connectedA2A], now: () => 2_000_000_000_000 }
-    )).rejects.toThrow('Generic connected meeting participants are unsupported')
+    await expect(
+      runMeetingRound(
+        { requestProfile } as never,
+        running,
+        5,
+        {},
+        { agents: [connectedA2A], now: () => 2_000_000_000_000 }
+      )
+    ).rejects.toThrow('Generic connected meeting participants are unsupported')
     expect(rest.mock.calls.some(([path]) => String(path).startsWith('/agents/a2a/'))).toBe(false)
     expect(requestProfile).not.toHaveBeenCalled()
     expect(writes).toHaveLength(2)
@@ -739,13 +771,15 @@ describe('Operations structured meeting client', () => {
 
     const running: MeetingRecord = {
       ...draft(),
-      contributions: [{
-        evidenceRefs: [],
-        id: 'meeting-1:r1:gateway-a:chair',
-        kind: 'pass',
-        participant: participants[0],
-        round: 1
-      }],
+      contributions: [
+        {
+          evidenceRefs: [],
+          id: 'meeting-1:r1:gateway-a:chair',
+          kind: 'pass',
+          participant: participants[0],
+          round: 1
+        }
+      ],
       currentRound: 1,
       maxRounds: 1,
       participants: [participants[0], a2aParticipant],
@@ -760,45 +794,52 @@ describe('Operations structured meeting client', () => {
       const requestIds: string[] = []
       const writes: Array<Record<string, unknown>> = []
 
-      const rest = vi.fn(async (path: string, options?: {
-        body?: { message?: string; record?: Record<string, unknown>; request_id?: string }
-        method?: string
-      }) => {
-        if (path === '/meetings/meeting-1') {
-          const record = options?.body?.record
+      const rest = vi.fn(
+        async (
+          path: string,
+          options?: {
+            body?: { message?: string; record?: Record<string, unknown>; request_id?: string }
+            method?: string
+          }
+        ) => {
+          if (path === '/meetings/meeting-1') {
+            const record = options?.body?.record
 
-          if (!record) {throw new Error('unexpected meeting read')}
-          writes.push(record)
-          storedVersion += 1
-
-          return { meeting: record, version: storedVersion }
-        }
-
-        if (options?.method === 'POST') {
-          const marker = '<hermes-meeting id="meeting-1">'
-          const message = String(options.body?.message ?? '')
-          expect(message).toMatch(/^<hermes-meeting id="meeting-1">\n/)
-          expect(message.split(marker).length - 1).toBe(1)
-          requestIds.push(String(options.body?.request_id ?? ''))
-
-          return { reply: 'Ship the signed candidate.', request_status: 'completed', state: 'completed' }
-        }
-
-        const requestId = new URL(path, 'https://operations.test').searchParams.get('request_id') ?? ''
-
-        requestIds.push(requestId)
-        historyReads += 1
-
-        return historyReads === 1
-          ? { messages: [], request_status: 'completed' }
-          : {
-              messages: [
-                { role: 'user', content: '<hermes-meeting id="meeting-1">\nRound prompt' },
-                { role: 'assistant', content: 'Ship the signed candidate.' }
-              ],
-              request_status: 'completed'
+            if (!record) {
+              throw new Error('unexpected meeting read')
             }
-      })
+            writes.push(record)
+            storedVersion += 1
+
+            return { meeting: record, version: storedVersion }
+          }
+
+          if (options?.method === 'POST') {
+            const marker = '<hermes-meeting id="meeting-1">'
+            const message = String(options.body?.message ?? '')
+            expect(message).toMatch(/^<hermes-meeting id="meeting-1">\n/)
+            expect(message.split(marker).length - 1).toBe(1)
+            requestIds.push(String(options.body?.request_id ?? ''))
+
+            return { reply: 'Ship the signed candidate.', request_status: 'completed', state: 'completed' }
+          }
+
+          const requestId = new URL(path, 'https://operations.test').searchParams.get('request_id') ?? ''
+
+          requestIds.push(requestId)
+          historyReads += 1
+
+          return historyReads === 1
+            ? { messages: [], request_status: 'completed' }
+            : {
+                messages: [
+                  { role: 'user', content: '<hermes-meeting id="meeting-1">\nRound prompt' },
+                  { role: 'assistant', content: 'Ship the signed candidate.' }
+                ],
+                request_status: 'completed'
+              }
+        }
+      )
 
       unbind = bindOperationsApi(rest as never)
 
@@ -851,13 +892,15 @@ describe('Operations structured meeting client', () => {
   it('durably waits on a public A2A waiting status without fabricating a contribution', async () => {
     const running: MeetingRecord = {
       ...draft(),
-      contributions: [{
-        evidenceRefs: [],
-        id: 'meeting-1:r1:gateway-a:chair',
-        kind: 'pass',
-        participant: participants[0],
-        round: 1
-      }],
+      contributions: [
+        {
+          evidenceRefs: [],
+          id: 'meeting-1:r1:gateway-a:chair',
+          kind: 'pass',
+          participant: participants[0],
+          round: 1
+        }
+      ],
       currentRound: 1,
       participants: [participants[0], a2aParticipant],
       state: 'running'
@@ -867,28 +910,35 @@ describe('Operations structured meeting client', () => {
     const requestIds: string[] = []
     const writes: Array<Record<string, unknown>> = []
 
-    const rest = vi.fn(async (path: string, options?: {
-      body?: { record?: Record<string, unknown> }
-      method?: string
-    }) => {
-      if (path === '/meetings/meeting-1') {
-        const record = options?.body?.record
+    const rest = vi.fn(
+      async (
+        path: string,
+        options?: {
+          body?: { record?: Record<string, unknown> }
+          method?: string
+        }
+      ) => {
+        if (path === '/meetings/meeting-1') {
+          const record = options?.body?.record
 
-        if (!record) {throw new Error('unexpected meeting read')}
-        writes.push(record)
-        storedVersion += 1
+          if (!record) {
+            throw new Error('unexpected meeting read')
+          }
+          writes.push(record)
+          storedVersion += 1
 
-        return { meeting: record, version: storedVersion }
+          return { meeting: record, version: storedVersion }
+        }
+
+        if (options?.method === 'POST') {
+          throw new Error('waiting A2A request must not be submitted again')
+        }
+
+        requestIds.push(new URL(path, 'https://operations.test').searchParams.get('request_id') ?? '')
+
+        return { messages: [], request_status: 'waiting' }
       }
-
-      if (options?.method === 'POST') {
-        throw new Error('waiting A2A request must not be submitted again')
-      }
-
-      requestIds.push(new URL(path, 'https://operations.test').searchParams.get('request_id') ?? '')
-
-      return { messages: [], request_status: 'waiting' }
-    })
+    )
 
     const requestProfile = vi.fn()
 
@@ -913,9 +963,9 @@ describe('Operations structured meeting client', () => {
       session: 'agent-1'
     })
     expect(result.meeting.contributions).toHaveLength(running.contributions.length)
-    expect(result.meeting.contributions).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ participant: a2aParticipant })
-    ]))
+    expect(result.meeting.contributions).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ participant: a2aParticipant })])
+    )
     expect(result.meeting.runnerSessions).toEqual({ 'a2a::agent-1': 'agent-1' })
     expect(writes).toHaveLength(2)
     expect(writes[1]).not.toHaveProperty('round_run')
@@ -936,14 +986,16 @@ describe('Operations structured meeting client', () => {
 
     const running: MeetingRecord = {
       ...draft(),
-      contributions: [{
-        id: 'meeting-1:r1:gateway-a:chair',
-        round: 1,
-        participant: participants[0],
-        kind: 'speak',
-        text: 'Chair evidence',
-        evidenceRefs: []
-      }],
+      contributions: [
+        {
+          id: 'meeting-1:r1:gateway-a:chair',
+          round: 1,
+          participant: participants[0],
+          kind: 'speak',
+          text: 'Chair evidence',
+          evidenceRefs: []
+        }
+      ],
       currentRound: 1,
       state: 'running'
     }
@@ -952,17 +1004,21 @@ describe('Operations structured meeting client', () => {
     let storedVersion = 5
     const writes: Array<{ expectedVersion: number; record: Record<string, unknown> }> = []
 
-    const rest = vi.fn(async (_path: string, options?: { body?: { expected_version?: number; record?: Record<string, unknown> } }) => {
-      const expectedVersion = options?.body?.expected_version
-      const record = options?.body?.record
+    const rest = vi.fn(
+      async (_path: string, options?: { body?: { expected_version?: number; record?: Record<string, unknown> } }) => {
+        const expectedVersion = options?.body?.expected_version
+        const record = options?.body?.record
 
-      if (expectedVersion === undefined || !record) {throw new Error('unexpected read')}
-      writes.push({ expectedVersion, record })
-      events.push(record.round_run ? 'persist:marker' : 'persist:checkpoint')
-      storedVersion += 1
+        if (expectedVersion === undefined || !record) {
+          throw new Error('unexpected read')
+        }
+        writes.push({ expectedVersion, record })
+        events.push(record.round_run ? 'persist:marker' : 'persist:checkpoint')
+        storedVersion += 1
 
-      return { meeting: record, version: storedVersion }
-    })
+        return { meeting: record, version: storedVersion }
+      }
+    )
 
     const resumeCounts = new Map<string, number>()
 
@@ -982,7 +1038,9 @@ describe('Operations structured meeting client', () => {
           : { session_id: 'runtime-research', messages: [{ role: 'assistant', content: '(pass)' }], running: false }
       }
 
-      if (method === 'prompt.submit') {return { ok: true }}
+      if (method === 'prompt.submit') {
+        return { ok: true }
+      }
       throw new Error(`unexpected ${method}`)
     })
 
@@ -1045,13 +1103,15 @@ describe('Operations structured meeting client', () => {
 
     const waiting: MeetingRecord = {
       ...draft(),
-      contributions: [{
-        evidenceRefs: [],
-        id: 'meeting-1:r1:gateway-a:chair',
-        kind: 'pass',
-        participant: participants[0],
-        round: 1
-      }],
+      contributions: [
+        {
+          evidenceRefs: [],
+          id: 'meeting-1:r1:gateway-a:chair',
+          kind: 'pass',
+          participant: participants[0],
+          round: 1
+        }
+      ],
       currentRound: 1,
       pending: {
         before: 1,
@@ -1070,7 +1130,9 @@ describe('Operations structured meeting client', () => {
     const rest = vi.fn(async (_path: string, options?: { body?: { record?: Record<string, unknown> } }) => {
       const record = options?.body?.record
 
-      if (!record) {throw new Error('unexpected meeting read')}
+      if (!record) {
+        throw new Error('unexpected meeting read')
+      }
       writes.push(record)
       storedVersion += 1
 
@@ -1078,7 +1140,9 @@ describe('Operations structured meeting client', () => {
     })
 
     const requestProfile = vi.fn(async (_route, method: string) => {
-      if (method !== 'session.resume') {throw new Error(`unexpected ${method}`)}
+      if (method !== 'session.resume') {
+        throw new Error(`unexpected ${method}`)
+      }
 
       return {
         messages: [
@@ -1134,13 +1198,15 @@ describe('Operations structured meeting client', () => {
 
     unbind = bindOperationsApi(rest)
 
-    await expect(runMeetingRound(
-      { requestProfile } as never,
-      running,
-      5,
-      { 'gateway-b': 'remote', 'gateway-a': 'remote' },
-      { now: () => now }
-    )).rejects.toThrow('round is already running')
+    await expect(
+      runMeetingRound(
+        { requestProfile } as never,
+        running,
+        5,
+        { 'gateway-b': 'remote', 'gateway-a': 'remote' },
+        { now: () => now }
+      )
+    ).rejects.toThrow('round is already running')
     expect(rest).not.toHaveBeenCalled()
     expect(requestProfile).not.toHaveBeenCalled()
   })
@@ -1162,16 +1228,20 @@ describe('Operations structured meeting client', () => {
     const writes: Array<{ expectedVersion: number; record: Record<string, unknown> }> = []
     let storedVersion = 5
 
-    const rest = vi.fn(async (_path: string, options?: { body?: { expected_version?: number; record?: Record<string, unknown> } }) => {
-      const expectedVersion = options?.body?.expected_version
-      const record = options?.body?.record
+    const rest = vi.fn(
+      async (_path: string, options?: { body?: { expected_version?: number; record?: Record<string, unknown> } }) => {
+        const expectedVersion = options?.body?.expected_version
+        const record = options?.body?.record
 
-      if (expectedVersion === undefined || !record) {throw new Error('unexpected read')}
-      writes.push({ expectedVersion, record })
-      storedVersion += 1
+        if (expectedVersion === undefined || !record) {
+          throw new Error('unexpected read')
+        }
+        writes.push({ expectedVersion, record })
+        storedVersion += 1
 
-      return { meeting: record, version: storedVersion }
-    })
+        return { meeting: record, version: storedVersion }
+      }
+    )
 
     const requestProfile = vi.fn(async (_route, method: string) => {
       if (method === 'session.create') {
@@ -1227,7 +1297,8 @@ describe('Operations structured meeting client', () => {
       state: 'waiting'
     }
 
-    const rest = vi.fn()
+    const rest = vi
+      .fn()
       .mockRejectedValueOnce(Object.assign(new Error('409 Meeting version conflict'), { status: 409 }))
       .mockResolvedValueOnce({ meeting: authoritative, version: 9 })
 
@@ -1244,10 +1315,14 @@ describe('Operations structured meeting client', () => {
     )
 
     expect(rest).toHaveBeenCalledTimes(2)
-    expect(rest).toHaveBeenNthCalledWith(1, '/meetings/meeting-1', expect.objectContaining({
-      body: expect.objectContaining({ expected_version: 5 }),
-      method: 'PUT'
-    }))
+    expect(rest).toHaveBeenNthCalledWith(
+      1,
+      '/meetings/meeting-1',
+      expect.objectContaining({
+        body: expect.objectContaining({ expected_version: 5 }),
+        method: 'PUT'
+      })
+    )
     expect(rest).toHaveBeenNthCalledWith(2, '/meetings/meeting-1')
     expect(requestProfile).not.toHaveBeenCalled()
     expect(result).toMatchObject({
@@ -1261,57 +1336,64 @@ describe('Operations structured meeting client', () => {
   it.each([
     { caseName: 'successful cleanup', cleanupConflict: false },
     { caseName: 'cleanup conflict', cleanupConflict: true }
-  ])('clears the claimed marker once after native failure with $caseName and never retries', async ({ cleanupConflict }) => {
-    const running: MeetingRecord = {
-      ...draft(),
-      currentRound: 1,
-      state: 'running'
-    }
-
-    const nativeError = new Error('native session creation failed')
-    const writes: Array<{ expectedVersion: number; record: Record<string, unknown> }> = []
-
-    const rest = vi.fn(async (_path: string, options?: { body?: { expected_version?: number; record?: Record<string, unknown> } }) => {
-      const expectedVersion = options?.body?.expected_version
-      const record = options?.body?.record
-
-      if (expectedVersion === undefined || !record) {throw new Error('unexpected read')}
-      writes.push({ expectedVersion, record })
-
-      if (writes.length === 2 && cleanupConflict) {
-        throw Object.assign(new Error('409 Meeting version conflict'), { status: 409 })
+  ])(
+    'clears the claimed marker once after native failure with $caseName and never retries',
+    async ({ cleanupConflict }) => {
+      const running: MeetingRecord = {
+        ...draft(),
+        currentRound: 1,
+        state: 'running'
       }
 
-      return { meeting: record, version: expectedVersion + 1 }
-    })
+      const nativeError = new Error('native session creation failed')
+      const writes: Array<{ expectedVersion: number; record: Record<string, unknown> }> = []
 
-    const requestProfile = vi.fn().mockRejectedValue(nativeError)
+      const rest = vi.fn(
+        async (_path: string, options?: { body?: { expected_version?: number; record?: Record<string, unknown> } }) => {
+          const expectedVersion = options?.body?.expected_version
+          const record = options?.body?.record
 
-    unbind = bindOperationsApi(rest as never)
-    let caught: unknown
+          if (expectedVersion === undefined || !record) {
+            throw new Error('unexpected read')
+          }
+          writes.push({ expectedVersion, record })
 
-    try {
-      await runMeetingRound(
-        { requestProfile } as never,
-        running,
-        5,
-        { 'gateway-b': 'remote', 'gateway-a': 'remote' },
-        { now: () => 2_000_000_000_000 }
+          if (writes.length === 2 && cleanupConflict) {
+            throw Object.assign(new Error('409 Meeting version conflict'), { status: 409 })
+          }
+
+          return { meeting: record, version: expectedVersion + 1 }
+        }
       )
-    } catch (error) {
-      caught = error
+
+      const requestProfile = vi.fn().mockRejectedValue(nativeError)
+
+      unbind = bindOperationsApi(rest as never)
+      let caught: unknown
+
+      try {
+        await runMeetingRound(
+          { requestProfile } as never,
+          running,
+          5,
+          { 'gateway-b': 'remote', 'gateway-a': 'remote' },
+          { now: () => 2_000_000_000_000 }
+        )
+      } catch (error) {
+        caught = error
+      }
+
+      expect(caught).toBe(nativeError)
+      expect(requestProfile).toHaveBeenCalledOnce()
+      expect(writes).toHaveLength(2)
+      expect(writes.map(write => write.expectedVersion)).toEqual([5, 6])
+      expect(writes[0].record).toHaveProperty('round_run')
+      const { round_run: discardedRoundRun, ...claimedWithoutMarker } = writes[0].record
+
+      void discardedRoundRun
+      expect(writes[1].record).toEqual(claimedWithoutMarker)
     }
-
-    expect(caught).toBe(nativeError)
-    expect(requestProfile).toHaveBeenCalledOnce()
-    expect(writes).toHaveLength(2)
-    expect(writes.map(write => write.expectedVersion)).toEqual([5, 6])
-    expect(writes[0].record).toHaveProperty('round_run')
-    const { round_run: discardedRoundRun, ...claimedWithoutMarker } = writes[0].record
-
-    void discardedRoundRun
-    expect(writes[1].record).toEqual(claimedWithoutMarker)
-  })
+  )
 
   it('runs a least-privilege source-qualified round and persists pending owner input', async () => {
     const running = { ...draft(), currentRound: 1, state: 'running' as const }
@@ -1353,11 +1435,14 @@ describe('Operations structured meeting client', () => {
     )
     expect(result.pending).toMatchObject({ kind: 'clarify', participant: participants[0] })
     expect(result.meeting.state).toBe('waiting')
-    expect(rest).toHaveBeenCalledWith('/meetings/meeting-1', expect.objectContaining({
-      body: expect.objectContaining({
-        record: expect.objectContaining({ pending: expect.objectContaining({ kind: 'clarify' }) })
+    expect(rest).toHaveBeenCalledWith(
+      '/meetings/meeting-1',
+      expect.objectContaining({
+        body: expect.objectContaining({
+          record: expect.objectContaining({ pending: expect.objectContaining({ kind: 'clarify' }) })
+        })
       })
-    }))
+    )
   })
 
   it('omits cleared pending state when a successful round is persisted', async () => {
@@ -1374,7 +1459,9 @@ describe('Operations structured meeting client', () => {
     const requestProfile = vi.fn(async (route, method: string) => {
       const key = `${route.connectionId}:${route.profile}`
 
-      if (method === 'session.create') {return { session_id: `runtime-${key}`, stored_session_id: `stored-${key}` }}
+      if (method === 'session.create') {
+        return { session_id: `runtime-${key}`, stored_session_id: `stored-${key}` }
+      }
 
       if (method === 'prompt.submit') {
         prompted.add(key)
@@ -1396,7 +1483,10 @@ describe('Operations structured meeting client', () => {
       'gateway-b': 'remote'
     })
 
-    const put = rest.mock.calls.find(([, options]) => options?.body) as [string, { body: { record: Record<string, unknown> } }]
+    const put = rest.mock.calls.find(([, options]) => options?.body) as [
+      string,
+      { body: { record: Record<string, unknown> } }
+    ]
     expect(result.meeting.state).toBe('completed')
     expect(put[1].body.record).not.toHaveProperty('pending')
   })
@@ -1406,15 +1496,17 @@ describe('Operations structured meeting client', () => {
 
     const completed = {
       ...draft(),
-      actionItems: [{
-        id: 'publish',
-        ownerRoute: participants[1],
-        title: 'Publish release',
-        acceptanceCriteria: 'Signed artifact is available.',
-        priority: 'high',
-        dueIntent: 'Next checkpoint',
-        dedupeKey: 'meeting:meeting-1:action:publish'
-      }],
+      actionItems: [
+        {
+          id: 'publish',
+          ownerRoute: participants[1],
+          title: 'Publish release',
+          acceptanceCriteria: 'Signed artifact is available.',
+          priority: 'high',
+          dueIntent: 'Next checkpoint',
+          dedupeKey: 'meeting:meeting-1:action:publish'
+        }
+      ],
       state: 'completed' as const
     }
 

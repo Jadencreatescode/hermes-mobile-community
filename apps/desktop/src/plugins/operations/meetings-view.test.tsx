@@ -69,14 +69,16 @@ const meeting = {
   action_items: [],
   agenda: 'Choose the verified release plan.',
   chair: { connection: 'local', profile: 'chair' },
-  contributions: [{
-    evidence_refs: [],
-    id: 'review-r1',
-    kind: 'speak',
-    participant: { connection: 'local', profile: 'reviewer' },
-    round: 1,
-    text: 'Ship the visual room.'
-  }],
+  contributions: [
+    {
+      evidence_refs: [],
+      id: 'review-r1',
+      kind: 'speak',
+      participant: { connection: 'local', profile: 'reviewer' },
+      round: 1,
+      text: 'Ship the visual room.'
+    }
+  ],
   current_round: 1,
   decisions: [],
   dissent: [],
@@ -95,7 +97,9 @@ const meeting = {
 beforeEach(() => {
   vi.clearAllMocks()
   requestProfile.mockImplementation(async (method: string) => {
-    if (method === 'operations.meetings.list') {return { meetings: [{ meeting, version: 1 }] }}
+    if (method === 'operations.meetings.list') {
+      return { meetings: [{ meeting, version: 1 }] }
+    }
     throw new Error(`Unexpected request: ${method}`)
   })
 })
@@ -126,13 +130,15 @@ describe('Meetings graphical room integration', () => {
   it('resumes a waiting participant turn through recovery instead of dropping it', async () => {
     const waitingMeeting = {
       ...meeting,
-      contributions: [{
-        evidence_refs: [],
-        id: 'chair-r1',
-        kind: 'pass',
-        participant: { connection: 'local', profile: 'chair' },
-        round: 1
-      }],
+      contributions: [
+        {
+          evidence_refs: [],
+          id: 'chair-r1',
+          kind: 'pass',
+          participant: { connection: 'local', profile: 'chair' },
+          round: 1
+        }
+      ],
       pending: {
         before: 1,
         kind: 'clarify',
@@ -155,7 +161,9 @@ describe('Meetings graphical room integration', () => {
 
       const record = options?.body?.record
 
-      if (!record) {throw new Error(`Unexpected REST call: ${path}`)}
+      if (!record) {
+        throw new Error(`Unexpected REST call: ${path}`)
+      }
       writes.push(record)
       version += 1
 
@@ -163,7 +171,9 @@ describe('Meetings graphical room integration', () => {
     })
 
     requestProfile.mockImplementation(async (_route: unknown, method: string) => {
-      if (method !== 'session.resume') {throw new Error(`Unexpected request: ${method}`)}
+      if (method !== 'session.resume') {
+        throw new Error(`Unexpected request: ${method}`)
+      }
 
       return {
         messages: [
@@ -268,16 +278,23 @@ describe('Meetings graphical room integration', () => {
 
     const conversation = screen.getByRole('dialog', { name: 'Review Bot' })
 
-    await waitFor(() => expect(requestProfile).toHaveBeenCalledWith(
-      { connectionId: 'local', mode: 'local', profile: 'reviewer', targetProfile: 'reviewer' },
-      'session.resume',
-      expect.objectContaining({ profile: 'reviewer', session_id: 'stored-reviewer', source: 'meeting' })
-    ))
+    await waitFor(() =>
+      expect(requestProfile).toHaveBeenCalledWith(
+        { connectionId: 'local', mode: 'local', profile: 'reviewer', targetProfile: 'reviewer' },
+        'session.resume',
+        expect.objectContaining({ profile: 'reviewer', session_id: 'stored-reviewer', source: 'meeting' })
+      )
+    )
     expect(within(conversation).getByRole('status').textContent).toContain('Working')
-    expect(within(conversation).getByText('You').closest('article')?.textContent).toContain('Check the release evidence.')
-    expect(within(conversation).getByText('Review Bot', { selector: 'article p' }).closest('article')?.textContent).toContain('Evidence verified.')
-    expect(conversation.textContent).toContain("Messages from this participant's meeting turn. Prompts run only in this meeting context.")
-
+    expect(within(conversation).getByText('You').closest('article')?.textContent).toContain(
+      'Check the release evidence.'
+    )
+    expect(
+      within(conversation).getByText('Review Bot', { selector: 'article p' }).closest('article')?.textContent
+    ).toContain('Evidence verified.')
+    expect(conversation.textContent).toContain(
+      "Messages from this participant's meeting turn. Prompts run only in this meeting context."
+    )
   })
 
   it('sends a marked native meeting prompt once and replaces the transcript after confirmation', async () => {
@@ -305,19 +322,22 @@ describe('Meetings graphical room integration', () => {
     let resumes = 0
 
     requestProfile.mockImplementation(async (_route: unknown, method: string) => {
-      if (method === 'prompt.submit') {return { ok: true }}
+      if (method === 'prompt.submit') {
+        return { ok: true }
+      }
 
       if (method === 'session.resume') {
         resumes += 1
 
         return {
-          messages: resumes >= 3
-            ? [
-                { role: 'assistant', content: 'Earlier evidence.' },
-                { role: 'user', content: '<hermes-meeting id="meeting-room-1">\nCheck the final release evidence.' },
-                { role: 'assistant', content: 'Final evidence verified.' }
-              ]
-            : [{ role: 'assistant', content: 'Earlier evidence.' }],
+          messages:
+            resumes >= 3
+              ? [
+                  { role: 'assistant', content: 'Earlier evidence.' },
+                  { role: 'user', content: '<hermes-meeting id="meeting-room-1">\nCheck the final release evidence.' },
+                  { role: 'assistant', content: 'Final evidence verified.' }
+                ]
+              : [{ role: 'assistant', content: 'Earlier evidence.' }],
           running: false,
           session_id: 'runtime-reviewer'
         }
@@ -339,15 +359,17 @@ describe('Meetings graphical room integration', () => {
     expect(within(conversation).getByText(`${prompt.length} / 8000`)).toBeTruthy()
     fireEvent.click(within(conversation).getByRole('button', { name: 'Send meeting prompt' }))
 
-    await waitFor(() => expect(requestProfile).toHaveBeenCalledWith(
-      { connectionId: 'local', mode: 'local', profile: 'reviewer', targetProfile: 'reviewer' },
-      'prompt.submit',
-      {
-        queued: true,
-        session_id: 'runtime-reviewer',
-        text: '<hermes-meeting id="meeting-room-1">\nCheck the final release evidence.'
-      }
-    ))
+    await waitFor(() =>
+      expect(requestProfile).toHaveBeenCalledWith(
+        { connectionId: 'local', mode: 'local', profile: 'reviewer', targetProfile: 'reviewer' },
+        'prompt.submit',
+        {
+          queued: true,
+          session_id: 'runtime-reviewer',
+          text: '<hermes-meeting id="meeting-room-1">\nCheck the final release evidence.'
+        }
+      )
+    )
     const submit = requestProfile.mock.calls.find(([, method]) => method === 'prompt.submit')
 
     expect(submit?.[2].text.match(/<hermes-meeting id="meeting-room-1">/g)).toHaveLength(1)
@@ -366,7 +388,8 @@ describe('Meetings graphical room integration', () => {
     }
 
     const typedPrompt = '  Decide whether to send this again.  '
-    const deliveryWarning = 'Your prompt may have been submitted, but delivery could not be confirmed. It was not retried.'
+    const deliveryWarning =
+      'Your prompt may have been submitted, but delivery could not be confirmed. It was not retried.'
 
     const rest = vi.fn(async (path: string) => {
       if (path.startsWith('/meetings?')) {
@@ -381,7 +404,9 @@ describe('Meetings graphical room integration', () => {
     })
 
     requestProfile.mockImplementation(async (_route: unknown, method: string) => {
-      if (method === 'prompt.submit') {throw new Error('Connection dropped after submit.')}
+      if (method === 'prompt.submit') {
+        throw new Error('Connection dropped after submit.')
+      }
 
       if (method === 'session.resume') {
         return {
@@ -504,12 +529,16 @@ describe('Meetings graphical room integration', () => {
 
     let resolveChair!: (value: unknown) => void
     let resolveReviewer!: (value: unknown) => void
-    const chairResponse = new Promise(resolve => { resolveChair = resolve })
-    const reviewerResponse = new Promise(resolve => { resolveReviewer = resolve })
+    const chairResponse = new Promise(resolve => {
+      resolveChair = resolve
+    })
+    const reviewerResponse = new Promise(resolve => {
+      resolveReviewer = resolve
+    })
 
-    requestProfile.mockImplementation((route: { profile: string }) => route.profile === 'reviewer'
-      ? reviewerResponse
-      : chairResponse)
+    requestProfile.mockImplementation((route: { profile: string }) =>
+      route.profile === 'reviewer' ? reviewerResponse : chairResponse
+    )
     unbind = bindOperationsApi(rest as never)
 
     render(<MeetingsView snapshot={snapshot} />)
@@ -517,20 +546,24 @@ describe('Meetings graphical room integration', () => {
     const openChair = screen.getByRole('button', { name: 'Open Chair Bot meeting conversation' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Review Bot meeting conversation' }))
-    await waitFor(() => expect(requestProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ profile: 'reviewer' }),
-      'session.resume',
-      expect.any(Object)
-    ))
+    await waitFor(() =>
+      expect(requestProfile).toHaveBeenCalledWith(
+        expect.objectContaining({ profile: 'reviewer' }),
+        'session.resume',
+        expect.any(Object)
+      )
+    )
     fireEvent.click(within(screen.getByRole('dialog', { name: 'Review Bot' })).getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Review Bot' })).toBeNull())
 
     fireEvent.click(openChair)
-    await waitFor(() => expect(requestProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ profile: 'chair' }),
-      'session.resume',
-      expect.any(Object)
-    ))
+    await waitFor(() =>
+      expect(requestProfile).toHaveBeenCalledWith(
+        expect.objectContaining({ profile: 'chair' }),
+        'session.resume',
+        expect.any(Object)
+      )
+    )
     await act(async () => {
       resolveChair({
         messages: [{ role: 'assistant', content: 'Current chair message.' }],
@@ -557,7 +590,6 @@ describe('Meetings graphical room integration', () => {
     expect(within(conversation).queryByText('Stale reviewer message.')).toBeNull()
     expect(within(conversation).queryByRole('alert')).toBeNull()
   })
-
 
   it('offers only runnable public meeting sources in snapshot order', async () => {
     const unsupportedAgents: OperationsAgentModel[] = [
@@ -665,8 +697,9 @@ describe('Meetings graphical room integration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Conclude meeting' }))
 
     await waitFor(() => expect(putBody).toBeDefined())
-    expect((putBody?.record?.action_items?.[0] as Record<string, unknown> | undefined)?.acceptance_criteria)
-      .toBe('Verify the completed result.')
+    expect((putBody?.record?.action_items?.[0] as Record<string, unknown> | undefined)?.acceptance_criteria).toBe(
+      'Verify the completed result.'
+    )
   })
 
   it('keeps setup and meeting records behind deliberate controls', async () => {
@@ -729,10 +762,12 @@ describe('Meetings graphical room integration', () => {
   it('shows the live participant before network work and clears only that cue after failure', async () => {
     const liveMeeting = {
       ...meeting,
-      contributions: [{
-        ...meeting.contributions[0],
-        participant: { connection: 'local', profile: 'chair' }
-      }]
+      contributions: [
+        {
+          ...meeting.contributions[0],
+          participant: { connection: 'local', profile: 'chair' }
+        }
+      ]
     }
 
     const rest = vi.fn(async (path: string, options?: { body?: { record?: unknown } }) => {
@@ -748,7 +783,9 @@ describe('Meetings graphical room integration', () => {
     })
 
     let rejectRequest!: (cause: Error) => void
-    const participantRequest = new Promise((_resolve, reject) => { rejectRequest = reject })
+    const participantRequest = new Promise((_resolve, reject) => {
+      rejectRequest = reject
+    })
 
     requestProfile.mockReturnValue(participantRequest)
     unbind = bindOperationsApi(rest as never)
@@ -783,7 +820,7 @@ describe('Meetings graphical room integration', () => {
       round_run: {
         participant: { connection: 'local', profile: 'reviewer' },
         round: 1,
-        started_at: Date.now() - (10 * 60 * 1000) - 1
+        started_at: Date.now() - 10 * 60 * 1000 - 1
       }
     }
 
@@ -851,14 +888,16 @@ describe('Meetings graphical room integration', () => {
         { connection: 'local', profile: 'chair' },
         { connection: 'a2a', profile: 'agent-1' }
       ],
-      contributions: [{
-        evidence_refs: [],
-        id: 'agent-r1',
-        kind: 'speak',
-        participant: { connection: 'a2a', profile: 'agent-1' },
-        round: 1,
-        text: 'A2A agent contribution.'
-      }]
+      contributions: [
+        {
+          evidence_refs: [],
+          id: 'agent-r1',
+          kind: 'speak',
+          participant: { connection: 'a2a', profile: 'agent-1' },
+          round: 1,
+          text: 'A2A agent contribution.'
+        }
+      ]
     }
 
     const rest = vi.fn(async (path: string) => {
@@ -901,7 +940,9 @@ describe('Meetings graphical room integration', () => {
 describe('PB4 – seat/role assignment controls (C3)', () => {
   it('shows role selector for each checked participant in the create dialog', async () => {
     const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [] } }
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [] }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -925,7 +966,9 @@ describe('PB4 – seat/role assignment controls (C3)', () => {
 
   it('seat label input appears only after a non-empty role is chosen', async () => {
     const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [] } }
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [] }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -945,14 +988,18 @@ describe('PB4 – seat/role assignment controls (C3)', () => {
     expect(screen.queryByPlaceholderText('Seat label')).toBeNull()
 
     // Choose a role
-    fireEvent.change(screen.getByRole('combobox', { name: /Role for Chair Bot/i }), { target: { value: 'contributor' } })
+    fireEvent.change(screen.getByRole('combobox', { name: /Role for Chair Bot/i }), {
+      target: { value: 'contributor' }
+    })
 
     await waitFor(() => expect(screen.getByPlaceholderText('Seat label')).toBeTruthy())
   })
 
   it('role selector disappears when participant is unchecked', async () => {
     const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [] } }
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [] }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -1031,14 +1078,16 @@ const outputVersionWire = {
     title: 'Onboarding guide',
     summary: 'A one-page guide.',
     primary_file: 'index.txt',
-    files: [{
-      path: 'index.txt',
-      media_type: 'text/plain',
-      role: 'primary',
-      preview_policy: 'text',
-      byte_size: 31,
-      sha256: 'a'.repeat(64)
-    }]
+    files: [
+      {
+        path: 'index.txt',
+        media_type: 'text/plain',
+        role: 'primary',
+        preview_policy: 'text',
+        byte_size: 31,
+        sha256: 'a'.repeat(64)
+      }
+    ]
   },
   created_at: 1
 }
@@ -1046,7 +1095,9 @@ const outputVersionWire = {
 describe('production brief collection at creation', () => {
   async function openCreateDialog() {
     const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [] } }
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [] }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -1062,7 +1113,9 @@ describe('production brief collection at creation', () => {
 
   it('opens a neutral Production or Conclusion choice from every in-page entry', async () => {
     const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [] } }
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [] }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -1083,18 +1136,14 @@ describe('production brief collection at creation', () => {
     const onCreateRequestHandled = vi.fn()
 
     const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [] } }
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [] }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
     unbind = bindOperationsApi(rest as never)
-    render(
-      <MeetingsView
-        createRequested
-        onCreateRequestHandled={onCreateRequestHandled}
-        snapshot={snapshot}
-      />
-    )
+    render(<MeetingsView createRequested onCreateRequestHandled={onCreateRequestHandled} snapshot={snapshot} />)
 
     const dialog = await screen.findByRole('dialog', { name: 'Make a Meeting' })
     const production = within(dialog).getByRole('button', { name: 'Production' })
@@ -1130,9 +1179,9 @@ describe('production brief collection at creation', () => {
 
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Product kind' })).toBeTruthy())
 
-    const kinds = Array.from(
-      screen.getByRole('combobox', { name: 'Product kind' }).querySelectorAll('option')
-    ).map(option => (option as HTMLOptionElement).value)
+    const kinds = Array.from(screen.getByRole('combobox', { name: 'Product kind' }).querySelectorAll('option')).map(
+      option => (option as HTMLOptionElement).value
+    )
 
     expect(kinds).toContain('document')
     expect(kinds).toContain('interactive_web_app')
@@ -1148,8 +1197,13 @@ describe('production brief collection at creation', () => {
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Product kind' })).toBeTruthy())
 
     for (const label of [
-      /production stage/i, /game sha/i, /manifest sha/i, /zip sha/i,
-      /approved by/i, /approved at/i, /output id/i
+      /production stage/i,
+      /game sha/i,
+      /manifest sha/i,
+      /zip sha/i,
+      /approved by/i,
+      /approved at/i,
+      /output id/i
     ]) {
       expect(screen.queryByLabelText(label)).toBeNull()
     }
@@ -1161,24 +1215,23 @@ describe('production brief collection at creation', () => {
     boxes.slice(0, 3).forEach(box => fireEvent.click(box))
 
     fireEvent.change(screen.getByPlaceholderText('Meeting title'), { target: { value: 'Prod test' } })
-    fireEvent.change(
-      screen.getByPlaceholderText('Agenda and decision required'),
-      { target: { value: 'Agenda here' } }
-    )
+    fireEvent.change(screen.getByPlaceholderText('Agenda and decision required'), { target: { value: 'Agenda here' } })
 
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Orchestrator' })).toBeTruthy())
 
     const orchestrator = screen.getByRole('combobox', { name: 'Orchestrator' })
 
-    const option = Array.from(orchestrator.querySelectorAll('option'))
-      .find(row => (row as HTMLOptionElement).value !== '') as HTMLOptionElement
+    const option = Array.from(orchestrator.querySelectorAll('option')).find(
+      row => (row as HTMLOptionElement).value !== ''
+    ) as HTMLOptionElement
 
     fireEvent.change(orchestrator, { target: { value: option.value } })
     fireEvent.click(screen.getByRole('button', { name: 'Create room' }))
 
     await waitFor(() => {
-      expect(screen.getByRole('alert', { hidden: true }).textContent)
-        .toContain('needs both an orchestrator and a producer')
+      expect(screen.getByRole('alert', { hidden: true }).textContent).toContain(
+        'needs both an orchestrator and a producer'
+      )
     })
     expect(rest.mock.calls.every(([path]) => String(path).startsWith('/meetings?'))).toBe(true)
   })
@@ -1189,46 +1242,44 @@ describe('production brief collection at creation', () => {
     boxes.slice(0, 3).forEach(box => fireEvent.click(box))
 
     fireEvent.change(screen.getByPlaceholderText('Meeting title'), { target: { value: 'Prod test' } })
-    fireEvent.change(
-      screen.getByPlaceholderText('Agenda and decision required'),
-      { target: { value: 'Agenda here' } }
-    )
+    fireEvent.change(screen.getByPlaceholderText('Agenda and decision required'), { target: { value: 'Agenda here' } })
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Orchestrator' })).toBeTruthy())
 
     const orchestrator = screen.getByRole('combobox', { name: 'Orchestrator' })
 
     const orchestratorValues = Array.from(orchestrator.querySelectorAll('option'))
-      .map(row => (row as HTMLOptionElement).value).filter(Boolean)
+      .map(row => (row as HTMLOptionElement).value)
+      .filter(Boolean)
 
     fireEvent.change(orchestrator, { target: { value: orchestratorValues[0] } })
 
     const producer = screen.getByRole('combobox', { name: 'Producer' })
 
     const producerValues = Array.from(producer.querySelectorAll('option'))
-      .map(row => (row as HTMLOptionElement).value).filter(Boolean)
+      .map(row => (row as HTMLOptionElement).value)
+      .filter(Boolean)
 
     fireEvent.change(producer, { target: { value: producerValues[0] } })
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Product kind' }), { target: { value: 'document' } })
     fireEvent.change(screen.getByLabelText('Output title'), { target: { value: 'Onboarding guide' } })
-    fireEvent.change(
-      screen.getByLabelText('Acceptance statement'),
-      { target: { value: 'A reviewer confirms every step.' } }
-    )
+    fireEvent.change(screen.getByLabelText('Acceptance statement'), {
+      target: { value: 'A reviewer confirms every step.' }
+    })
 
     // Every participant is seated, but no seat is an independent reviewer.
     for (const name of ['Chair Bot', 'Review Bot', 'A2A Harness Bot']) {
-      fireEvent.change(
-        screen.getByRole('combobox', { name: new RegExp(`Role for ${name}`, 'i') }),
-        { target: { value: 'contributor' } }
-      )
+      fireEvent.change(screen.getByRole('combobox', { name: new RegExp(`Role for ${name}`, 'i') }), {
+        target: { value: 'contributor' }
+      })
     }
 
     fireEvent.click(screen.getByRole('button', { name: 'Create room' }))
 
     await waitFor(() => {
-      expect(screen.getByRole('alert', { hidden: true }).textContent)
-        .toContain('reviewer seat that is neither the orchestrator nor the producer')
+      expect(screen.getByRole('alert', { hidden: true }).textContent).toContain(
+        'reviewer seat that is neither the orchestrator nor the producer'
+      )
     })
     expect(rest.mock.calls.every(([path]) => String(path).startsWith('/meetings?'))).toBe(true)
   })
@@ -1241,9 +1292,13 @@ describe('production meeting completion is approval only', () => {
         return { meetings: [{ meeting: productionMeetingWire, version: 1 }] }
       }
 
-      if (path.endsWith('/outputs?limit=20')) { return { outputs } }
+      if (path.endsWith('/outputs?limit=20')) {
+        return { outputs }
+      }
 
-      if (path.startsWith('/meetings/')) { return { meeting: productionMeetingWire, version: 1 } }
+      if (path.startsWith('/meetings/')) {
+        return { meeting: productionMeetingWire, version: 1 }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -1275,9 +1330,13 @@ describe('production meeting completion is approval only', () => {
 
   it('keeps the conclude form for an ordinary conclusion meeting', async () => {
     const rest = vi.fn(async (path: string) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [{ meeting, version: 1 }] } }
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [{ meeting, version: 1 }] }
+      }
 
-      if (path.endsWith('/outputs?limit=20')) { return { outputs: [] } }
+      if (path.endsWith('/outputs?limit=20')) {
+        return { outputs: [] }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -1305,10 +1364,12 @@ describe('production meeting completion is approval only', () => {
       if (path.endsWith('/outputs?limit=20')) {
         return {
           meeting_id: 'meeting-room-1',
-          outputs: [{
-            output: outputWire,
-            eligibility: { approve: true, download: true, preview: true }
-          }]
+          outputs: [
+            {
+              output: outputWire,
+              eligibility: { approve: true, download: true, preview: true }
+            }
+          ]
         }
       }
 
@@ -1321,7 +1382,9 @@ describe('production meeting completion is approval only', () => {
         }
       }
 
-      if (path.startsWith('/meetings/')) { return { meeting: productionMeetingWire, version: 1 } }
+      if (path.startsWith('/meetings/')) {
+        return { meeting: productionMeetingWire, version: 1 }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -1342,9 +1405,13 @@ describe('production meeting completion is approval only', () => {
     const briefed = { ...productionMeetingWire, production_stage: 'briefing' }
 
     const rest = vi.fn(async (path: string, options?: { body?: unknown }) => {
-      if (path.startsWith('/meetings?')) { return { meetings: [{ meeting: briefed, version: 1 }] } }
+      if (path.startsWith('/meetings?')) {
+        return { meetings: [{ meeting: briefed, version: 1 }] }
+      }
 
-      if (path.endsWith('/outputs?limit=20')) { return { outputs: [] } }
+      if (path.endsWith('/outputs?limit=20')) {
+        return { outputs: [] }
+      }
 
       if (path.endsWith('/production-brief')) {
         return {
@@ -1356,7 +1423,9 @@ describe('production meeting completion is approval only', () => {
         }
       }
 
-      if (path.startsWith('/meetings/')) { return { meeting: briefed, version: 1 } }
+      if (path.startsWith('/meetings/')) {
+        return { meeting: briefed, version: 1 }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -1382,8 +1451,9 @@ describe('production meeting completion is approval only', () => {
       evidence_refs: []
     })
     // The freeze is replay-safe for the exact meeting version it saw.
-    expect((call[1] as { headers: Record<string, string> }).headers)
-      .toEqual({ 'Idempotency-Key': 'brief-meeting-room-1-1' })
+    expect((call[1] as { headers: Record<string, string> }).headers).toEqual({
+      'Idempotency-Key': 'brief-meeting-room-1-1'
+    })
   })
 })
 
@@ -1406,10 +1476,7 @@ describe('the produce action for a production_ready meeting', () => {
   it('renders Produce with zero outputs and drives the real dispatch route', async () => {
     const paths: string[] = []
 
-    const rest = vi.fn(async (
-      path: string,
-      _init?: { body?: unknown; headers?: Record<string, string> }
-    ) => {
+    const rest = vi.fn(async (path: string, _init?: { body?: unknown; headers?: Record<string, string> }) => {
       paths.push(path)
 
       if (path.startsWith('/meetings?')) {
@@ -1417,7 +1484,9 @@ describe('the produce action for a production_ready meeting', () => {
       }
 
       // The real list response: output + eligibility only, no versions/reviews.
-      if (path.endsWith('/outputs?limit=20')) { return { outputs: [] } }
+      if (path.endsWith('/outputs?limit=20')) {
+        return { outputs: [] }
+      }
 
       if (path.endsWith('/production-runs')) {
         return {
@@ -1451,10 +1520,15 @@ describe('the produce action for a production_ready meeting', () => {
       if (path.endsWith('/collect')) {
         return {
           receipt: {
-            run_id: 'mrun_1', output_id: 'mout_1', artifact_version: 1,
-            parent_artifact_version: null, game_sha256: 'a'.repeat(64),
-            manifest_sha256: 'b'.repeat(64), zip_sha256: 'c'.repeat(64),
-            total_byte_size: 31, collected_at: 4
+            run_id: 'mrun_1',
+            output_id: 'mout_1',
+            artifact_version: 1,
+            parent_artifact_version: null,
+            game_sha256: 'a'.repeat(64),
+            manifest_sha256: 'b'.repeat(64),
+            zip_sha256: 'c'.repeat(64),
+            total_byte_size: 31,
+            collected_at: 4
           },
           output: outputWire,
           eligibility: { review: true, preview: true, download: true }
@@ -1466,17 +1540,15 @@ describe('the produce action for a production_ready meeting', () => {
         return { output: outputWire, eligibility: { review: true }, versions: [], reviews: [] }
       }
 
-      if (path.startsWith('/meetings/')) { return { meeting: productionMeetingWire, version: 1 } }
+      if (path.startsWith('/meetings/')) {
+        return { meeting: productionMeetingWire, version: 1 }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
     const dispatched: string[] = []
     const history: Array<{ content: string; role: string }> = []
-    requestProfile.mockImplementation(async (
-      _route: unknown,
-      method: string,
-      params?: Record<string, unknown>
-    ) => {
+    requestProfile.mockImplementation(async (_route: unknown, method: string, params?: Record<string, unknown>) => {
       dispatched.push(method)
 
       if (method === 'session.create') {
@@ -1511,10 +1583,7 @@ describe('the produce action for a production_ready meeting', () => {
 
     fireEvent.click(produce)
 
-    await waitFor(
-      () => expect(paths.some(path => path.endsWith('/collect'))).toBe(true),
-      { timeout: 10_000 }
-    )
+    await waitFor(() => expect(paths.some(path => path.endsWith('/collect'))).toBe(true), { timeout: 10_000 })
 
     const created = rest.mock.calls.find(([path]) => String(path).endsWith('/production-runs'))!
 
@@ -1530,16 +1599,17 @@ describe('the produce action for a production_ready meeting', () => {
     // The claim carried the ACTUAL session id, and it happened before the prompt.
     const claim = rest.mock.calls.find(([path]) => String(path).endsWith('/claim'))!
 
-    expect((claim[1] as { body: Record<string, unknown> }).body)
-      .toEqual({ request_id: 'dispatch-mrun_1', session_id: 'stored-session-1' })
+    expect((claim[1] as { body: Record<string, unknown> }).body).toEqual({
+      request_id: 'dispatch-mrun_1',
+      session_id: 'stored-session-1'
+    })
     expect(dispatched.indexOf('session.create')).toBeLessThan(dispatched.indexOf('prompt.submit'))
     // The claim is taken before the prompt, with the real session id.
     expect(paths.indexOf('/meeting-output-runs/mrun_1/claim')).toBeGreaterThanOrEqual(0)
     expect(dispatched.filter(method => method === 'prompt.submit')).toHaveLength(1)
 
     // The producer session was confined to the server-assigned cwd.
-    const params = requestProfile.mock.calls.find(call => call[1] === 'session.create')?.[2] as
-      Record<string, unknown>
+    const params = requestProfile.mock.calls.find(call => call[1] === 'session.create')?.[2] as Record<string, unknown>
 
     expect(params.cwd).toBe('/server/owned/workspaces/mrun_1')
     expect(params.enabled_toolsets).toEqual(['clarify', 'file'])
@@ -1559,9 +1629,13 @@ describe('the produce action for a production_ready meeting', () => {
         return { meetings: [{ meeting: remoteProducerWire, version: 1 }] }
       }
 
-      if (path.endsWith('/outputs?limit=20')) { return { outputs: [] } }
+      if (path.endsWith('/outputs?limit=20')) {
+        return { outputs: [] }
+      }
 
-      if (path.startsWith('/meetings/')) { return { meeting: remoteProducerWire, version: 1 } }
+      if (path.startsWith('/meetings/')) {
+        return { meeting: remoteProducerWire, version: 1 }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 
@@ -1598,7 +1672,9 @@ describe('seat assignments shown in details view', () => {
         return { meetings: [{ meeting: productionMeetingWire, version: 1 }] }
       }
 
-      if (path.endsWith('/outputs?limit=20')) { return { outputs: [] } }
+      if (path.endsWith('/outputs?limit=20')) {
+        return { outputs: [] }
+      }
       throw new Error(`Unexpected REST call: ${path}`)
     })
 

@@ -356,6 +356,7 @@ describe('useComposerActions browser file cleanup', () => {
       configurable: true,
       value: { releaseBrowserFile }
     })
+
     const { result } = renderHook(() =>
       useComposerActions({
         activeSessionId: null,

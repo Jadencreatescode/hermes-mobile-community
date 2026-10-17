@@ -14,11 +14,7 @@ export interface OperationsProfileRoute {
 interface OperationsRoutinesHost {
   connections(): Promise<OperationsConnection[]>
   profileRoutes(): Promise<OperationsProfileRoute[]>
-  requestProfile(
-    route: OperationsProfileRoute,
-    method: string,
-    params?: Record<string, unknown>
-  ): Promise<unknown>
+  requestProfile(route: OperationsProfileRoute, method: string, params?: Record<string, unknown>): Promise<unknown>
 }
 
 interface RoutineJob {
@@ -60,7 +56,7 @@ function errorMessage(error: unknown): string {
 export function operationsRoutineEmptyMessage(snapshot: OperationsRoutinesSnapshot): string {
   if (snapshot.failures.length > 0) {
     const sources = snapshot.failures
-      .map(failure => failure.profile ? `${failure.connectionLabel} / @${failure.profile}` : failure.connectionLabel)
+      .map(failure => (failure.profile ? `${failure.connectionLabel} / @${failure.profile}` : failure.connectionLabel))
       .join(', ')
 
     return `Routine reads failed for ${sources}.`
@@ -86,9 +82,7 @@ export async function loadOperationsRoutines(host: OperationsRoutinesHost): Prom
   let successfulSources = 0
 
   const results = await Promise.allSettled(
-    routes.map(route =>
-      host.requestProfile(route, 'cron.manage', { action: 'list', include_disabled: true })
-    )
+    routes.map(route => host.requestProfile(route, 'cron.manage', { action: 'list', include_disabled: true }))
   )
 
   for (const [index, result] of results.entries()) {

@@ -19,6 +19,6 @@ describe('mobile control sizing', () => {
 
     const control = screen.getByRole('switch', { name: 'Enabled' })
     expect(control.className).toContain('max-sm:before:size-11')
-    expect(control.className).toContain('max-sm:before:content-[\'\']')
+    expect(control.className).toContain("max-sm:before:content-['']")
   })
 })

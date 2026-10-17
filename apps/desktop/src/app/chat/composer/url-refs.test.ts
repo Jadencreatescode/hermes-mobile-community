@@ -253,9 +253,7 @@ describe('markdownLinkFor', () => {
   })
 
   it('escapes backslashes before square brackets in the label', () => {
-    expect(markdownLinkFor('a \\[b] c', 'https://example.dev')).toBe(
-      String.raw`[a \\\[b\] c](https://example.dev)`
-    )
+    expect(markdownLinkFor('a \\[b] c', 'https://example.dev')).toBe(String.raw`[a \\\[b\] c](https://example.dev)`)
   })
 })
 

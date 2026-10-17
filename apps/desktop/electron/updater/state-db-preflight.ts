@@ -40,6 +40,7 @@ export function guardedStateDbCmdArgs(command: string, args: string[]): string[]
   }
 
   const commandLine = `""${command}" ${args.map((arg: string): string => `"${arg}"`).join(' ')}"`
+
   return ['/d', '/v:off', '/s', '/c', commandLine]
 }
 

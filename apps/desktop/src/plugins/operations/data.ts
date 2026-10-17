@@ -130,9 +130,13 @@ function displayName(profile: ProfileSummary | undefined, agent: RosterAgent): s
   const botTitle = profile?.ui_meta?.['hermes-bots']?.title?.trim()
   const named = botTitle || profile?.display_name?.trim()
 
-  if (named) {return named}
+  if (named) {
+    return named
+  }
 
-  if (agent.profile === 'default') {return agent.connectionLabel || 'Hermes'}
+  if (agent.profile === 'default') {
+    return agent.connectionLabel || 'Hermes'
+  }
 
   return agent.profile.replace(/[-_]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase())
 }
@@ -181,9 +185,8 @@ function harnessAgentToModel(agent: HarnessAgent): OperationsAgentModel {
     sourceId: 'a2a',
     sourceKind: 'a2a',
     sourceLabel: 'A2A Harness',
-    state: agent.status === 'verified' && agent.runtimeState !== 'offline'
-      ? (agent.runtimeState ?? 'unknown')
-      : 'unknown',
+    state:
+      agent.status === 'verified' && agent.runtimeState !== 'offline' ? (agent.runtimeState ?? 'unknown') : 'unknown',
     verified: agent.status === 'verified',
     workSummary: agent.workSummary || agent.capabilities.slice(0, 3).join(', ') || 'A2A connected agent'
   }
@@ -210,12 +213,14 @@ export async function loadOperationsSnapshot(
     .filter(source => !source.reachable || source.error)
     .map(source => `${source.label}: ${source.error || 'unreachable'}`)
 
-  if (statusResult.status === 'rejected') {partialFailures.push('Hermes status unavailable')}
+  if (statusResult.status === 'rejected') {
+    partialFailures.push('Hermes status unavailable')
+  }
 
   const degraded = new Set<string>()
 
   const agents = await Promise.all(
-// health: allow CC -- retained public Operations wire normalization is migration scoped and contract tested
+    // health: allow CC -- retained public Operations wire normalization is migration scoped and contract tested
     roster.agents.map(async agent => {
       const route = routeFor(agent)
       let profile: ProfileSummary | undefined
@@ -227,8 +232,13 @@ export async function loadOperationsSnapshot(
         const [profilesResult, sessionsResult, tasksResult, diagnosticsResult] = await Promise.all([
           host.requestProfile<{ profiles?: ProfileSummary[] }>(route, 'profiles.list', { include_sessions: true }),
           host.requestProfile<{ sessions?: LiveSession[] }>(route, 'session.active_list', {}),
-          host.requestProfile<{ tasks?: KanbanTask[]; count?: number }>(route, 'kanban.board', { assignee: agent.profile }),
-          host.requestProfile<{ diagnostics?: Array<{ task_id?: string; diagnostics?: Array<{ resolved?: boolean; severity?: string }> }>; count?: number }>(route, 'kanban.diagnostics', {})
+          host.requestProfile<{ tasks?: KanbanTask[]; count?: number }>(route, 'kanban.board', {
+            assignee: agent.profile
+          }),
+          host.requestProfile<{
+            diagnostics?: Array<{ task_id?: string; diagnostics?: Array<{ resolved?: boolean; severity?: string }> }>
+            count?: number
+          }>(route, 'kanban.diagnostics', {})
         ])
 
         profile = profilesResult.profiles?.find(row => row.name === agent.profile)
@@ -242,7 +252,9 @@ export async function loadOperationsSnapshot(
       } catch (error) {
         detailsReachable = false
         degraded.add(agent.connectionId)
-        partialFailures.push(`${agent.connectionLabel} / ${agent.profile}: ${error instanceof Error ? error.message : String(error)}`)
+        partialFailures.push(
+          `${agent.connectionLabel} / ${agent.profile}: ${error instanceof Error ? error.message : String(error)}`
+        )
       }
 
       const canonical = profile?.canonical_session || undefined
@@ -277,7 +289,8 @@ export async function loadOperationsSnapshot(
         workerHeartbeatAt: profile?.worker_session?.last_active
       })
 
-      const assignment = tasks.find(task => task.status === 'blocked') || tasks.find(task => task.status === 'review') || tasks[0]
+      const assignment =
+        tasks.find(task => task.status === 'blocked') || tasks.find(task => task.status === 'review') || tasks[0]
       const openSessionId = canonical?.resolved_id || canonical?.id || related?.session_key || fallback?.id
 
       return {
@@ -297,7 +310,12 @@ export async function loadOperationsSnapshot(
         sourceLabel: agent.connectionLabel,
         state,
         workSummary:
-          canonical?.preview || related?.preview || assignment?.latest_summary || assignment?.title || fallback?.preview || 'No active work'
+          canonical?.preview ||
+          related?.preview ||
+          assignment?.latest_summary ||
+          assignment?.title ||
+          fallback?.preview ||
+          'No active work'
       }
     })
   )
@@ -312,9 +330,7 @@ export async function loadOperationsSnapshot(
     label: source.label,
     reachable: source.reachable,
     status: (!source.reachable ? 'offline' : degraded.has(source.connectionId) ? 'degraded' : 'online') as
-      | 'degraded'
-      | 'offline'
-      | 'online'
+      'degraded' | 'offline' | 'online'
   }))
 
   return {
@@ -502,15 +518,12 @@ export async function getA2AChatHistory(agentId: string, requestId = ''): Promis
     messages,
     mirror_session_id: typeof row.mirror_session_id === 'string' ? row.mirror_session_id : undefined,
     pending_message: typeof row.pending_message === 'string' ? row.pending_message : undefined,
-    request_status: row.request_status === null ? null : typeof row.request_status === 'string' ? row.request_status : null
+    request_status:
+      row.request_status === null ? null : typeof row.request_status === 'string' ? row.request_status : null
   }
 }
 
-export async function sendA2AChatMessage(
-  agentId: string,
-  message: string,
-  requestId = ''
-): Promise<A2AChatSendResult> {
+export async function sendA2AChatMessage(agentId: string, message: string, requestId = ''): Promise<A2AChatSendResult> {
   const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/chat`, {
     method: 'POST',
     body: { message: message.trim(), request_id: requestId }
@@ -539,7 +552,7 @@ function normalizeControlResult(value: unknown): A2AControlResult {
   const rawState = typeof row.state === 'string' ? row.state : 'unknown'
 
   const state = ['idle', 'working', 'waiting', 'reviewing', 'blocked', 'offline'].includes(rawState)
-    ? rawState as A2ARuntimeState
+    ? (rawState as A2ARuntimeState)
     : 'unknown'
 
   return {
@@ -551,7 +564,9 @@ function normalizeControlResult(value: unknown): A2AControlResult {
 }
 
 export async function refreshA2AAgent(agentId: string): Promise<HarnessAgent> {
-  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/refresh`, { method: 'POST' })
+  const response = await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/refresh`, {
+    method: 'POST'
+  })
 
   return normalizeHarnessAgent(response)
 }
@@ -561,21 +576,30 @@ export async function getA2ALiveState(agentId: string): Promise<A2AControlResult
 }
 
 export async function startOrResumeA2AAgent(agentId: string, prompt: string): Promise<A2AControlResult> {
-  return normalizeControlResult(await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/start-or-resume`, {
-    method: 'POST', body: { prompt: prompt.trim() }
-  }))
+  return normalizeControlResult(
+    await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/start-or-resume`, {
+      method: 'POST',
+      body: { prompt: prompt.trim() }
+    })
+  )
 }
 
 export async function steerA2AAgent(agentId: string, message: string): Promise<A2AControlResult> {
-  return normalizeControlResult(await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/steer`, {
-    method: 'POST', body: { message: message.trim() }
-  }))
+  return normalizeControlResult(
+    await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/steer`, {
+      method: 'POST',
+      body: { message: message.trim() }
+    })
+  )
 }
 
 export async function interruptA2AAgent(agentId: string): Promise<A2AControlResult> {
-  return normalizeControlResult(await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/interrupt`, {
-    method: 'POST', body: { confirm: true }
-  }))
+  return normalizeControlResult(
+    await operationsApi()<unknown>(`/agents/a2a/${encodeURIComponent(agentId)}/interrupt`, {
+      method: 'POST',
+      body: { confirm: true }
+    })
+  )
 }
 
 // ── normalization ───────────────────────────────────────────────────────────
@@ -593,11 +617,13 @@ function normalizeHarnessAgent(value: unknown): HarnessAgent {
   const rawCapabilities = Array.isArray(row.capabilities) ? row.capabilities : []
   const capabilities = rawCapabilities.filter((c: unknown): c is string => typeof c === 'string')
   const rawOperations = Array.isArray(row.supported_operations) ? row.supported_operations : []
-  const supportedOperations = rawOperations.filter((operation: unknown): operation is string => typeof operation === 'string')
+  const supportedOperations = rawOperations.filter(
+    (operation: unknown): operation is string => typeof operation === 'string'
+  )
   const rawRuntimeState = typeof row.runtime_state === 'string' ? row.runtime_state : 'unknown'
 
   const runtimeState = ['idle', 'working', 'waiting', 'reviewing', 'blocked', 'offline'].includes(rawRuntimeState)
-    ? rawRuntimeState as A2ARuntimeState
+    ? (rawRuntimeState as A2ARuntimeState)
     : 'unknown'
 
   return {

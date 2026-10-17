@@ -25,7 +25,17 @@ test('the legacy cmd preflight preserves safe argv and rejects shell syntax', ()
   ])
   assert.equal(stateDbPreflightInvocation(command, args).command, windowsCmdPath())
 
-  for (const unsafe of ['bad&arg', 'bad|arg', 'bad%PATH%', 'bad\rarg', 'bad\narg', 'bad"arg', 'bad<arg', 'bad>arg', 'bad^arg']) {
+  for (const unsafe of [
+    'bad&arg',
+    'bad|arg',
+    'bad%PATH%',
+    'bad\rarg',
+    'bad\narg',
+    'bad"arg',
+    'bad<arg',
+    'bad>arg',
+    'bad^arg'
+  ]) {
     assert.throws((): void => {
       guardedStateDbCmdArgs(command, [unsafe])
     }, /unsafe Windows command argument/)

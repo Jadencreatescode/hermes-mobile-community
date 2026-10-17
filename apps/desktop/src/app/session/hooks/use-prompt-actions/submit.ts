@@ -163,7 +163,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
   } = deps
 
   return useCallback(
-// health: allow CC FUNC_LINES -- retained public attachment and binary transport flow is migration scoped; preserve the reviewed interaction ordering
+    // health: allow CC FUNC_LINES -- retained public attachment and binary transport flow is migration scoped; preserve the reviewed interaction ordering
     async (rawText: string, options?: SubmitTextOptions) => {
       const usingComposerAttachments = !options?.attachments
 

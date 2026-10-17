@@ -33,10 +33,7 @@ function loadIconOverrides(): Record<string, { iconColor?: string; iconShape?: s
   }
 }
 
-function saveIconOverride(
-  agentId: string,
-  patch: { iconColor?: string; iconShape?: string }
-): void {
+function saveIconOverride(agentId: string, patch: { iconColor?: string; iconShape?: string }): void {
   const current = loadIconOverrides()
   const next = { ...current, [agentId]: { ...current[agentId], ...patch } }
 
@@ -59,10 +56,7 @@ function safeJsonParse(value: unknown): Record<string, unknown> {
   }
 }
 
-export async function loadQuickSettings(
-  agentId: string,
-  request: RequestGateway
-): Promise<QuickSettings> {
+export async function loadQuickSettings(agentId: string, request: RequestGateway): Promise<QuickSettings> {
   const result = await request<{ value?: string | null }>('config.get', { key: settingsKey(agentId) })
   const parsed = safeJsonParse(result?.value)
   const iconOverrides = loadIconOverrides()[agentId] ?? {}
@@ -75,7 +69,7 @@ export async function loadQuickSettings(
     iconColor: iconOverrides.iconColor || profileColor(agentId) || '#6b7280',
     iconShape: ['circle', 'square', 'rounded'].includes(parsed.iconShape as string)
       ? (parsed.iconShape as 'circle' | 'rounded' | 'square')
-      : (iconOverrides.iconShape as 'circle' | 'rounded' | 'square') ?? 'rounded'
+      : ((iconOverrides.iconShape as 'circle' | 'rounded' | 'square') ?? 'rounded')
   }
 }
 

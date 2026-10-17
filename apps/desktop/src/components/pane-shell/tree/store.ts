@@ -1310,8 +1310,7 @@ narrowQuery?.addEventListener('change', event => $narrowViewport.set(event.match
 // ✕ must stay always-visible, independent of viewport width (an iPad in
 // landscape, a phone in split-screen, a PWA at a wide standalone viewport all
 // sit above the 768px collapse breakpoint yet are still finger-driven).
-const hoverNoneQuery =
-  typeof window !== 'undefined' ? window.matchMedia?.('(hover: none)') : undefined
+const hoverNoneQuery = typeof window !== 'undefined' ? window.matchMedia?.('(hover: none)') : undefined
 
 export const $hoverNone = atom(Boolean(hoverNoneQuery?.matches))
 

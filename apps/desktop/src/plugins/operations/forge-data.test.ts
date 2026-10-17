@@ -36,8 +36,12 @@ describe('forge-data', () => {
 
 describe('isForgeUnavailable', () => {
   it('matches the backend’s disabled-plugin 404 verdict', () => {
-    expect(isForgeUnavailable(new Error('404: {"detail":"No such API endpoint: /api/plugins/kanban/board"}'))).toBe(true)
-    expect(isForgeUnavailable(new Error("Error invoking remote method 'hermes:api': Error: 404: No such API endpoint"))).toBe(true)
+    expect(isForgeUnavailable(new Error('404: {"detail":"No such API endpoint: /api/plugins/kanban/board"}'))).toBe(
+      true
+    )
+    expect(
+      isForgeUnavailable(new Error("Error invoking remote method 'hermes:api': Error: 404: No such API endpoint"))
+    ).toBe(true)
     expect(isForgeUnavailable('no such api endpoint')).toBe(true)
   })
 

@@ -56,10 +56,7 @@ export function TrainingModePage({ profile }: TrainingModePageProps) {
   const [coachingIndex, setCoachingIndex] = useState(0)
   const [coachingAnswer, setCoachingAnswer] = useState('')
 
-  const draft = useMemo<TrainingDraft>(
-    () => ({ name, goal, steps, demonstration }),
-    [demonstration, goal, name, steps]
-  )
+  const draft = useMemo<TrainingDraft>(() => ({ name, goal, steps, demonstration }), [demonstration, goal, name, steps])
 
   const ready = Boolean(name.trim() && goal.trim() && steps.trim() && reviewed && secretFree && draftOnly)
   const preview = serverDraft?.skill_md ?? ''
@@ -151,7 +148,8 @@ export function TrainingModePage({ profile }: TrainingModePageProps) {
             <div>
               <h2 className="text-sm font-semibold">Optional guided coaching</h2>
               <p className="text-xs text-(--ui-text-tertiary)">
-                This local, in-memory session asks bounded planning questions. It cannot call Hermes tools, open a browser, save a skill, or run the task.
+                This local, in-memory session asks bounded planning questions. It cannot call Hermes tools, open a
+                browser, save a skill, or run the task.
               </p>
             </div>
             <Button
@@ -171,7 +169,9 @@ export function TrainingModePage({ profile }: TrainingModePageProps) {
               <h3 className="text-sm font-semibold">Guided coaching session</h3>
               <p className="text-sm">{COACHING_QUESTIONS[coachingIndex]}</p>
               <div className="space-y-1.5">
-                <label className="text-sm font-medium" htmlFor="training-coaching-answer">Coaching answer</label>
+                <label className="text-sm font-medium" htmlFor="training-coaching-answer">
+                  Coaching answer
+                </label>
                 <Textarea
                   id="training-coaching-answer"
                   maxLength={500}
@@ -188,11 +188,7 @@ export function TrainingModePage({ profile }: TrainingModePageProps) {
                 >
                   Save answer and continue
                 </Button>
-                <Button
-                  className="min-h-11 w-full sm:w-auto"
-                  onClick={() => setCoaching(false)}
-                  variant="secondary"
-                >
+                <Button className="min-h-11 w-full sm:w-auto" onClick={() => setCoaching(false)} variant="secondary">
                   End coaching
                 </Button>
               </div>
@@ -202,7 +198,9 @@ export function TrainingModePage({ profile }: TrainingModePageProps) {
 
         <section className="space-y-4 rounded-xl border border-(--ui-stroke-secondary) bg-(--ui-sidebar-surface-background) p-4">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="training-name">Skill name</label>
+            <label className="text-sm font-medium" htmlFor="training-name">
+              Skill name
+            </label>
             <Input
               autoCapitalize="none"
               id="training-name"
@@ -216,7 +214,9 @@ export function TrainingModePage({ profile }: TrainingModePageProps) {
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="training-goal">Training goal</label>
+            <label className="text-sm font-medium" htmlFor="training-goal">
+              Training goal
+            </label>
             <Textarea
               id="training-goal"
               maxLength={2_000}
@@ -228,7 +228,9 @@ export function TrainingModePage({ profile }: TrainingModePageProps) {
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="training-steps">Semantic steps, never typed values</label>
+            <label className="text-sm font-medium" htmlFor="training-steps">
+              Semantic steps, never typed values
+            </label>
             <Textarea
               id="training-steps"
               maxLength={10_000}
@@ -250,7 +252,8 @@ export function TrainingModePage({ profile }: TrainingModePageProps) {
             <span>
               <strong className="block font-medium">Include a guided remote browser demonstration step</strong>
               <span className="block text-xs text-(--ui-text-tertiary)">
-                This only documents the future demonstration boundary. Training Mode does not open a browser, execute the task, or observe other iPhone apps or Safari tabs.
+                This only documents the future demonstration boundary. Training Mode does not open a browser, execute
+                the task, or observe other iPhone apps or Safari tabs.
               </span>
             </span>
           </label>
@@ -266,7 +269,8 @@ export function TrainingModePage({ profile }: TrainingModePageProps) {
             onChange={setDraftOnly}
           />
           <p className="text-xs text-(--ui-text-tertiary)">
-            The backend generates the canonical draft and binds the approval phrase to its SHA-256 hash. Editing any task input invalidates the preview and approval.
+            The backend generates the canonical draft and binds the approval phrase to its SHA-256 hash. Editing any
+            task input invalidates the preview and approval.
           </p>
         </section>
 
@@ -275,7 +279,11 @@ export function TrainingModePage({ profile }: TrainingModePageProps) {
             Complete the task details and all three acknowledgements.
           </p>
         )}
-        {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
+        {error && (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        )}
         <Button className="min-h-11 w-full sm:w-auto" disabled={!ready || busy} onClick={() => void previewSkill()}>
           {busy && !preview ? 'Building draft…' : 'Preview reviewed skill'}
         </Button>
@@ -290,7 +298,9 @@ export function TrainingModePage({ profile }: TrainingModePageProps) {
               Review every line. To save this exact draft, type <code className="break-all">{approvalPhrase}</code>.
             </p>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium" htmlFor="training-approval">Exact hash-bound approval phrase</label>
+              <label className="text-sm font-medium" htmlFor="training-approval">
+                Exact hash-bound approval phrase
+              </label>
               <Input
                 autoCapitalize="none"
                 id="training-approval"
@@ -308,7 +318,8 @@ export function TrainingModePage({ profile }: TrainingModePageProps) {
             </Button>
             {saved && (
               <p className="text-sm text-(--ui-text-secondary)">
-                The reviewed skill is saved for profile <strong>{selectedProfile}</strong>. It was not executed or scheduled.
+                The reviewed skill is saved for profile <strong>{selectedProfile}</strong>. It was not executed or
+                scheduled.
               </p>
             )}
           </section>

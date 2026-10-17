@@ -28,7 +28,7 @@ const URGENCIES = new Set<MailUrgency>(['normal', 'priority', 'critical'])
 const STATUSES = new Set<MailStatus>(['queued', 'delivered', 'acknowledged', 'failed', 'expired', 'cancelled'])
 
 export function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
 function required(value: unknown, label: string, pattern: RegExp): string {
@@ -67,17 +67,16 @@ export function normalizeMailEnvelope(value: unknown): MailEnvelope {
   const row = record(value)
   const sourceProfile = required(row.source_profile ?? row.sourceProfile, 'source profile', PROFILE_RE)
   const targetProfile = required(row.target_profile ?? row.targetProfile, 'target profile', PROFILE_RE)
-  const urgency = URGENCIES.has(row.urgency as MailUrgency) ? row.urgency as MailUrgency : 'normal'
-  const status = STATUSES.has(row.status as MailStatus) ? row.status as MailStatus : 'queued'
+  const urgency = URGENCIES.has(row.urgency as MailUrgency) ? (row.urgency as MailUrgency) : 'normal'
+  const status = STATUSES.has(row.status as MailStatus) ? (row.status as MailStatus) : 'queued'
   const rawHistory = Array.isArray(row.history) ? row.history.slice(0, 32) : []
 
   const history = rawHistory.flatMap<MailHistoryEvent>(entry => {
     const event = record(entry)
-    const eventStatus = STATUSES.has(event.status as MailStatus) ? event.status as MailStatus : null
+    const eventStatus = STATUSES.has(event.status as MailStatus) ? (event.status as MailStatus) : null
 
-    const sequence = typeof event.sequence === 'number' && Number.isInteger(event.sequence) && event.sequence > 0
-      ? event.sequence
-      : 0
+    const sequence =
+      typeof event.sequence === 'number' && Number.isInteger(event.sequence) && event.sequence > 0 ? event.sequence : 0
 
     if (!eventStatus || sequence === 0) {
       return []

@@ -1,13 +1,4 @@
-import {
-  Button,
-  Codicon,
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  Input,
-  Loader
-} from '@hermes/plugin-sdk'
+import { Button, Codicon, Dialog, DialogContent, DialogHeader, DialogTitle, Input, Loader } from '@hermes/plugin-sdk'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import {
@@ -30,7 +21,9 @@ const BOT_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/
 function nameError(value: string): string | null {
   const trimmed = value.trim()
 
-  if (!trimmed) {return 'Give this Bot a name.'}
+  if (!trimmed) {
+    return 'Give this Bot a name.'
+  }
 
   if (!BOT_NAME_PATTERN.test(trimmed)) {
     return 'Use lowercase letters, numbers, dashes, or underscores, starting with a letter or number.'
@@ -87,7 +80,9 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
   const [error, setError] = useState('')
 
   const selectedCatalog = useMemo(() => {
-    if (!state) {return null}
+    if (!state) {
+      return null
+    }
 
     return state.machines.find(m => m.machine.id === selectedMachineId) ?? null
   }, [state, selectedMachineId])
@@ -114,7 +109,9 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
   }, [])
 
   useEffect(() => {
-    if (!open) {return}
+    if (!open) {
+      return
+    }
     setName('')
     setSelectedMachineId('')
     setHarness('')
@@ -124,26 +121,34 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
     void load()
   }, [open, load])
 
-  const handleClose = useCallback((next: boolean) => {
-    onOpenChange(next)
-  }, [onOpenChange])
+  const handleClose = useCallback(
+    (next: boolean) => {
+      onOpenChange(next)
+    },
+    [onOpenChange]
+  )
 
-  const handleMachineChange = useCallback((machineId: string) => {
-    setSelectedMachineId(machineId)
-    setError('')
+  const handleMachineChange = useCallback(
+    (machineId: string) => {
+      setSelectedMachineId(machineId)
+      setError('')
 
-    const catalog = state?.machines.find(m => m.machine.id === machineId)
+      const catalog = state?.machines.find(m => m.machine.id === machineId)
 
-    if (catalog) {
-      setHarness(catalog.harnesses.find(h => h.selectable)?.id ?? '')
-      setModel(catalog.models[0]?.id ?? '')
-    }
-  }, [state])
+      if (catalog) {
+        setHarness(catalog.harnesses.find(h => h.selectable)?.id ?? '')
+        setModel(catalog.models[0]?.id ?? '')
+      }
+    },
+    [state]
+  )
 
   const nameErr = useMemo(() => nameError(name), [name])
 
   const providerGroups = useMemo(() => {
-    if (!selectedCatalog) {return new Map<string, MakeBotModel[]>()}
+    if (!selectedCatalog) {
+      return new Map<string, MakeBotModel[]>()
+    }
 
     return groupModelsByProvider(selectedCatalog.models)
   }, [selectedCatalog])
@@ -151,13 +156,20 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
   const selectedHarness = selectedCatalog?.harnesses.find(h => h.id === harness)
 
   const submit = useCallback(async () => {
-    if (nameErr || creating || !state) {return}
+    if (nameErr || creating || !state) {
+      return
+    }
     setCreating(true)
     setError('')
 
     try {
       const result = await createBot({
-        name: name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64),
+        name: name
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9_-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 64),
         harness: harness || undefined,
         model: model || undefined,
         connectionId: selectedMachineId || undefined
@@ -203,7 +215,9 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
                 ))}
               </div>
               <div className="flex justify-end gap-2">
-                <Button className="min-h-11" onClick={() => handleClose(false)} size="sm" variant="ghost">Cancel</Button>
+                <Button className="min-h-11" onClick={() => handleClose(false)} size="sm" variant="ghost">
+                  Cancel
+                </Button>
                 <Button className="min-h-11" onClick={() => void load()} size="sm">
                   <Codicon name="refresh" /> Check again
                 </Button>
@@ -216,7 +230,9 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
                 Add a provider and model in Settings so this Bot knows what to run.
               </p>
               <div className="flex justify-end gap-2">
-                <Button className="min-h-11" onClick={() => handleClose(false)} size="sm" variant="ghost">Cancel</Button>
+                <Button className="min-h-11" onClick={() => handleClose(false)} size="sm" variant="ghost">
+                  Cancel
+                </Button>
                 <Button className="min-h-11" onClick={() => void load()} size="sm">
                   <Codicon name="refresh" /> Check again
                 </Button>
@@ -225,11 +241,11 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
           ) : state.degraded && state.degradedReason === 'no_machine' ? (
             <div className="space-y-3">
               <p className="text-sm text-(--ui-text-secondary)">This machine could not be reached.</p>
-              <p className="text-xs text-(--ui-text-tertiary)">
-                Make sure Hermes is running and try again.
-              </p>
+              <p className="text-xs text-(--ui-text-tertiary)">Make sure Hermes is running and try again.</p>
               <div className="flex justify-end gap-2">
-                <Button className="min-h-11" onClick={() => handleClose(false)} size="sm" variant="ghost">Cancel</Button>
+                <Button className="min-h-11" onClick={() => handleClose(false)} size="sm" variant="ghost">
+                  Cancel
+                </Button>
                 <Button className="min-h-11" onClick={() => void load()} size="sm">
                   <Codicon name="refresh" /> Check again
                 </Button>
@@ -282,17 +298,21 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
                     value={harness}
                   >
                     {selectedCatalog?.harnesses.some(h => h.selectable) ? (
-                      selectedCatalog.harnesses.filter(h => h.selectable).map(h => (
-                        <option key={h.id} value={h.id}>{h.label}</option>
-                      ))
+                      selectedCatalog.harnesses
+                        .filter(h => h.selectable)
+                        .map(h => (
+                          <option key={h.id} value={h.id}>
+                            {h.label}
+                          </option>
+                        ))
                     ) : (
-                      <option disabled value="">No harness detected</option>
+                      <option disabled value="">
+                        No harness detected
+                      </option>
                     )}
                   </select>
                   {selectedHarness ? (
-                    <span className="text-xs text-(--ui-text-tertiary)">
-                      Detected · {selectedHarness.source}
-                    </span>
+                    <span className="text-xs text-(--ui-text-tertiary)">Detected · {selectedHarness.source}</span>
                   ) : null}
                 </Field>
               </div>
@@ -301,42 +321,39 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
                 <div className="space-y-2">
                   <p className="text-xs font-semibold text-(--ui-text-secondary)">Available to download</p>
                   <div className="space-y-2">
-                    {selectedCatalog.harnesses.filter(h => !h.selectable).map(h => (
-                      <div
-                        className="flex min-w-0 items-center justify-between gap-2 rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-surface-secondary) px-3 py-2"
-                        key={h.id}
-                      >
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium text-(--ui-text-primary)">{h.label}</p>
-                          <p className="text-[0.68rem] text-(--ui-text-tertiary)">{h.source}</p>
+                    {selectedCatalog.harnesses
+                      .filter(h => !h.selectable)
+                      .map(h => (
+                        <div
+                          className="flex min-w-0 items-center justify-between gap-2 rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-surface-secondary) px-3 py-2"
+                          key={h.id}
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-(--ui-text-primary)">{h.label}</p>
+                            <p className="text-[0.68rem] text-(--ui-text-tertiary)">{h.source}</p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            {h.downloadUrl ? (
+                              <a
+                                aria-label={`Download ${h.label}`}
+                                className="grid size-7 place-items-center rounded-md text-(--ui-text-secondary) transition-colors hover:bg-white/5 hover:text-(--ui-text-primary)"
+                                href={h.downloadUrl}
+                                rel="noopener noreferrer"
+                                target="_blank"
+                                title={`Download ${h.label}`}
+                              >
+                                <Codicon name="link-external" size="0.875rem" />
+                              </a>
+                            ) : null}
+                          </div>
                         </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          {h.downloadUrl ? (
-                            <a
-                              aria-label={`Download ${h.label}`}
-                              className="grid size-7 place-items-center rounded-md text-(--ui-text-secondary) transition-colors hover:bg-white/5 hover:text-(--ui-text-primary)"
-                              href={h.downloadUrl}
-                              rel="noopener noreferrer"
-                              target="_blank"
-                              title={`Download ${h.label}`}
-                            >
-                              <Codicon name="link-external" size="0.875rem" />
-                            </a>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
+                      ))}
                   </div>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-[0.68rem] text-(--ui-text-tertiary)">
                       Hermes never installs a harness automatically.
                     </p>
-                    <Button
-                      className="h-7 px-2 text-xs"
-                      onClick={() => void load()}
-                      size="sm"
-                      variant="ghost"
-                    >
+                    <Button className="h-7 px-2 text-xs" onClick={() => void load()} size="sm" variant="ghost">
                       <Codicon name="refresh" size="0.875rem" /> Refresh
                     </Button>
                   </div>
@@ -354,7 +371,9 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
                   {Array.from(providerGroups.entries()).map(([provider, models]) => (
                     <optgroup key={provider} label={provider}>
                       {models.map(m => (
-                        <option key={m.id} value={m.id}>{m.label}</option>
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
                       ))}
                     </optgroup>
                   ))}
@@ -362,19 +381,31 @@ export function MakeBotDialog({ open, onCreated, onOpenChange }: MakeBotDialogPr
               </Field>
 
               {nameErr ? (
-                <p className="text-xs text-destructive" role="alert">{nameErr}</p>
+                <p className="text-xs text-destructive" role="alert">
+                  {nameErr}
+                </p>
               ) : null}
               {error ? (
-                <p className="text-xs text-destructive" role="alert">{error}</p>
+                <p className="text-xs text-destructive" role="alert">
+                  {error}
+                </p>
               ) : null}
 
               <div className="flex flex-wrap items-center justify-between gap-2 border-t border-(--ui-stroke-tertiary) pt-3">
                 <p className="min-w-0 text-[0.68rem] text-(--ui-text-tertiary)">
-                  {nameErr || (selectedCatalog ? `Created on ${selectedCatalog.machine.label}.` : 'Created on this machine.')}
+                  {nameErr ||
+                    (selectedCatalog ? `Created on ${selectedCatalog.machine.label}.` : 'Created on this machine.')}
                 </p>
                 <div className="flex shrink-0 items-center gap-2">
-                  <Button className="min-h-11" onClick={() => handleClose(false)} size="sm" variant="ghost">Cancel</Button>
-                  <Button className="min-h-11" disabled={Boolean(nameErr) || creating} onClick={() => void submit()} size="sm">
+                  <Button className="min-h-11" onClick={() => handleClose(false)} size="sm" variant="ghost">
+                    Cancel
+                  </Button>
+                  <Button
+                    className="min-h-11"
+                    disabled={Boolean(nameErr) || creating}
+                    onClick={() => void submit()}
+                    size="sm"
+                  >
                     <Codicon className={creating ? 'animate-spin' : ''} name={creating ? 'sync' : 'check'} />
                     {creating ? 'Creating…' : 'Create Bot'}
                   </Button>

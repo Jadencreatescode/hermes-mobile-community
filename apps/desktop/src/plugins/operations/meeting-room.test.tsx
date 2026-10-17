@@ -105,30 +105,65 @@ describe('graphical Bot meeting room', () => {
   })
 
   it('highlights only the latest participant with a real speaking contribution', () => {
-    render(<MeetingRoom agents={agents} meeting={{
-      ...meeting,
-      contributions: [
-        { id: 'chair-r1', round: 1, participant: meeting.participants[0], kind: 'speak', text: 'Opening position', evidenceRefs: [] },
-        { id: 'review-r1', round: 1, participant: meeting.participants[2], kind: 'speak', text: 'Latest evidence', evidenceRefs: [] },
-        { id: 'research-r1', round: 1, participant: meeting.participants[1], kind: 'pass', text: '', evidenceRefs: [] }
-      ]
-    }} />)
+    render(
+      <MeetingRoom
+        agents={agents}
+        meeting={{
+          ...meeting,
+          contributions: [
+            {
+              id: 'chair-r1',
+              round: 1,
+              participant: meeting.participants[0],
+              kind: 'speak',
+              text: 'Opening position',
+              evidenceRefs: []
+            },
+            {
+              id: 'review-r1',
+              round: 1,
+              participant: meeting.participants[2],
+              kind: 'speak',
+              text: 'Latest evidence',
+              evidenceRefs: []
+            },
+            {
+              id: 'research-r1',
+              round: 1,
+              participant: meeting.participants[1],
+              kind: 'pass',
+              text: '',
+              evidenceRefs: []
+            }
+          ]
+        }}
+      />
+    )
 
     expect(screen.getByRole('button', { name: 'Open Review Bot workspace' }).dataset.speaker).toBe('latest')
     expect(screen.getAllByTestId('meeting-room-seat').filter(seat => seat.dataset.speaker === 'latest')).toHaveLength(1)
   })
 
   it('shows thinking, latest-speaker, and idle activity cues at their desks', () => {
-    render(<MeetingRoom
-      agents={agents}
-      meeting={{
-        ...meeting,
-        contributions: [
-          { id: 'review-r1', round: 1, participant: meeting.participants[2], kind: 'speak', text: 'Latest evidence', evidenceRefs: [] }
-        ]
-      }}
-      thinkingParticipant={meeting.participants[1]}
-    />)
+    render(
+      <MeetingRoom
+        agents={agents}
+        meeting={{
+          ...meeting,
+          contributions: [
+            {
+              id: 'review-r1',
+              round: 1,
+              participant: meeting.participants[2],
+              kind: 'speak',
+              text: 'Latest evidence',
+              evidenceRefs: []
+            }
+          ]
+        }}
+        thinkingParticipant={meeting.participants[1]}
+      />
+    )
 
     const thinkingSeat = screen.getByRole('button', { name: 'Open Research Bot workspace' })
     const lastSpeakerSeat = screen.getByRole('button', { name: 'Open Review Bot workspace' })
@@ -162,15 +197,17 @@ describe('graphical Bot meeting room', () => {
   })
 
   it('replaces the round console with a completed meeting wrap up preview', () => {
-    render(<MeetingRoom
-      agents={agents}
-      meeting={{
-        ...meeting,
-        actionItems: [{ title: 'Publish the verified release' }],
-        decisions: [{ text: 'Proceed with the verified release plan.' }],
-        state: 'completed'
-      }}
-    />)
+    render(
+      <MeetingRoom
+        agents={agents}
+        meeting={{
+          ...meeting,
+          actionItems: [{ title: 'Publish the verified release' }],
+          decisions: [{ text: 'Proceed with the verified release plan.' }],
+          state: 'completed'
+        }}
+      />
+    )
 
     const wrapUp = screen.getByRole('region', { name: 'Meeting wrap up' })
 
@@ -186,18 +223,22 @@ describe('graphical Bot meeting room', () => {
     const onCreateTasks = vi.fn()
     const onOpenConversations = vi.fn()
     const onOpenDetails = vi.fn()
+
     const completedMeeting = {
       ...meeting,
       actionItems: [{ title: 'Publish release' }, { title: 'Notify reviewers' }],
       state: 'completed' as const
     }
-    const { unmount } = render(<MeetingRoom
-      agents={agents}
-      meeting={completedMeeting}
-      onCreateTasks={onCreateTasks}
-      onOpenConversations={onOpenConversations}
-      onOpenDetails={onOpenDetails}
-    />)
+
+    const { unmount } = render(
+      <MeetingRoom
+        agents={agents}
+        meeting={completedMeeting}
+        onCreateTasks={onCreateTasks}
+        onOpenConversations={onOpenConversations}
+        onOpenDetails={onOpenDetails}
+      />
+    )
 
     const conversations = screen.getByRole('button', { name: 'Conversations' })
     const details = screen.getByRole('button', { name: 'Full wrap up' })
@@ -209,6 +250,7 @@ describe('graphical Bot meeting room', () => {
       expect(button.getAttribute('title')).toBeNull()
       fireEvent.click(button)
     }
+
     expect(onOpenConversations).toHaveBeenCalledOnce()
     expect(onOpenDetails).toHaveBeenCalledOnce()
     expect(onCreateTasks).toHaveBeenCalledOnce()
@@ -221,11 +263,13 @@ describe('graphical Bot meeting room', () => {
   })
 
   it('uses public-safe fallback previews when a completed meeting has no decision or action', () => {
-    render(<MeetingRoom
-      agents={agents}
-      meeting={{ ...meeting, actionItems: [], decisions: [], state: 'completed' }}
-      onCreateTasks={vi.fn()}
-    />)
+    render(
+      <MeetingRoom
+        agents={agents}
+        meeting={{ ...meeting, actionItems: [], decisions: [], state: 'completed' }}
+        onCreateTasks={vi.fn()}
+      />
+    )
 
     const wrapUp = screen.getByRole('region', { name: 'Meeting wrap up' })
 
@@ -265,7 +309,9 @@ describe('graphical Bot meeting room', () => {
     expect(screen.getByTestId('meeting-room-floor')).toBeTruthy()
     expect(screen.getByTestId('meeting-room-table')).toBeTruthy()
     expect(screen.getByTestId('meeting-room-console')).toBeTruthy()
-    expect(container.querySelector('[data-room-scene]')?.className).toContain('min-h-[clamp(32rem,calc(100dvh-13rem),52rem)]')
+    expect(container.querySelector('[data-room-scene]')?.className).toContain(
+      'min-h-[clamp(32rem,calc(100dvh-13rem),52rem)]'
+    )
     expect(container.querySelector('[data-participant-card]')).toBeNull()
   })
 
@@ -334,9 +380,7 @@ describe('graphical Bot meeting room', () => {
   it('handles agent leave gracefully by removing seat', () => {
     const leaveMeeting: MeetingRecord = {
       ...meeting,
-      participants: [
-        { connectionId: 'gateway-a', profile: 'chair' }
-      ]
+      participants: [{ connectionId: 'gateway-a', profile: 'chair' }]
     }
 
     render(<MeetingRoom agents={agents} meeting={leaveMeeting} />)

@@ -16,7 +16,15 @@ vi.mock('@/api/client', () => ({
 // eslint-disable-next-line no-restricted-imports
 import { hermesApi } from '@/api/client'
 
-function mockRoster(machines: { id: string; kind: 'local' | 'remote' | 'ssh' | 'cloud' | 'tailscale'; label: string; state?: string; connected?: boolean }[]) {
+function mockRoster(
+  machines: {
+    id: string
+    kind: 'local' | 'remote' | 'ssh' | 'cloud' | 'tailscale'
+    label: string
+    state?: string
+    connected?: boolean
+  }[]
+) {
   const bridge = {
     getMachineRoster: vi.fn().mockResolvedValue({
       machines: machines.map(m => ({
@@ -41,12 +49,8 @@ describe('fetchMakeBotCatalog', () => {
 
   it('returns harnesses and models from the backend', async () => {
     vi.mocked(hermesApi).mockResolvedValueOnce({
-      harnesses: [
-        { id: 'hermes', label: 'Hermes', detected: true, source: 'native' }
-      ],
-      models: [
-        { id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' }
-      ]
+      harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }],
+      models: [{ id: 'claude-sonnet-4', label: 'claude-sonnet-4', provider: 'anthropic' }]
     })
 
     const catalog = await fetchMakeBotCatalog()
@@ -79,14 +83,8 @@ describe('fetchMakeBotCatalog', () => {
 
   it('returns empty arrays when fields are malformed', async () => {
     vi.mocked(hermesApi).mockResolvedValueOnce({
-      harnesses: [
-        { id: 123, label: null, detected: 'yes', source: 456 },
-        { label: 'missing id' }
-      ],
-      models: [
-        { id: null, label: 123, provider: true },
-        { label: 'missing id' }
-      ]
+      harnesses: [{ id: 123, label: null, detected: 'yes', source: 456 }, { label: 'missing id' }],
+      models: [{ id: null, label: 123, provider: true }, { label: 'missing id' }]
     })
 
     const catalog = await fetchMakeBotCatalog()
@@ -98,8 +96,22 @@ describe('fetchMakeBotCatalog', () => {
   it('reads selectable and downloadUrl from the backend', async () => {
     vi.mocked(hermesApi).mockResolvedValueOnce({
       harnesses: [
-        { id: 'hermes', label: 'Hermes', detected: true, selectable: true, source: 'native', download_url: 'https://github.com/NousResearch/Hermes-Agent#readme' },
-        { id: 'codex', label: 'Codex', detected: false, selectable: false, source: 'none', download_url: 'https://www.npmjs.com/package/@openai/codex' }
+        {
+          id: 'hermes',
+          label: 'Hermes',
+          detected: true,
+          selectable: true,
+          source: 'native',
+          download_url: 'https://github.com/NousResearch/Hermes-Agent#readme'
+        },
+        {
+          id: 'codex',
+          label: 'Codex',
+          detected: false,
+          selectable: false,
+          source: 'none',
+          download_url: 'https://www.npmjs.com/package/@openai/codex'
+        }
       ],
       models: []
     })
@@ -127,9 +139,7 @@ describe('fetchMakeBotCatalog', () => {
 
   it('treats missing selectable as false and missing download_url as undefined', async () => {
     vi.mocked(hermesApi).mockResolvedValueOnce({
-      harnesses: [
-        { id: 'generic_a2a', label: 'Generic A2A', detected: false, source: 'none' }
-      ],
+      harnesses: [{ id: 'generic_a2a', label: 'Generic A2A', detected: false, source: 'none' }],
       models: []
     })
 
@@ -141,10 +151,7 @@ describe('fetchMakeBotCatalog', () => {
 
   it('filters out harness entries with missing ids', async () => {
     vi.mocked(hermesApi).mockResolvedValueOnce({
-      harnesses: [
-        { id: 'hermes', label: 'Hermes', detected: true, source: 'native' },
-        { label: 'No ID' }
-      ],
+      harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }, { label: 'No ID' }],
       models: []
     })
 
@@ -157,10 +164,7 @@ describe('fetchMakeBotCatalog', () => {
   it('filters out model entries with missing ids', async () => {
     vi.mocked(hermesApi).mockResolvedValueOnce({
       harnesses: [],
-      models: [
-        { id: 'gpt-4', label: 'GPT-4', provider: 'openai' },
-        { provider: 'no-id' }
-      ]
+      models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }, { provider: 'no-id' }]
     })
 
     const catalog = await fetchMakeBotCatalog()
@@ -189,10 +193,12 @@ describe('fetchMakeBotCatalogForConnection', () => {
 
     const catalog = await fetchMakeBotCatalogForConnection('homelab')
 
-    expect(hermesApi).toHaveBeenCalledWith(expect.objectContaining({
-      path: '/api/bots/catalog',
-      connectionId: 'homelab'
-    }))
+    expect(hermesApi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/api/bots/catalog',
+        connectionId: 'homelab'
+      })
+    )
     expect(catalog.harnesses).toHaveLength(1)
   })
 
@@ -201,11 +207,13 @@ describe('fetchMakeBotCatalogForConnection', () => {
 
     await fetchMakeBotCatalogForConnection('homelab', 5000)
 
-    expect(hermesApi).toHaveBeenCalledWith(expect.objectContaining({
-      path: '/api/bots/catalog',
-      connectionId: 'homelab',
-      timeoutMs: 5000
-    }))
+    expect(hermesApi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/api/bots/catalog',
+        connectionId: 'homelab',
+        timeoutMs: 5000
+      })
+    )
   })
 
   it('uses null connectionId for local', async () => {
@@ -213,10 +221,12 @@ describe('fetchMakeBotCatalogForConnection', () => {
 
     await fetchMakeBotCatalogForConnection('local')
 
-    expect(hermesApi).toHaveBeenCalledWith(expect.objectContaining({
-      path: '/api/bots/catalog',
-      connectionId: 'local'
-    }))
+    expect(hermesApi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/api/bots/catalog',
+        connectionId: 'local'
+      })
+    )
   })
 })
 
@@ -332,7 +342,10 @@ describe('loadMakeBotState', () => {
 
   it('degrades to no_harness when the only online machine has no harnesses', async () => {
     mockRoster([{ id: 'local', kind: 'local', label: 'This device' }])
-    vi.mocked(hermesApi).mockResolvedValueOnce({ harnesses: [], models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }] })
+    vi.mocked(hermesApi).mockResolvedValueOnce({
+      harnesses: [],
+      models: [{ id: 'gpt-4', label: 'GPT-4', provider: 'openai' }]
+    })
 
     const state = await loadMakeBotState()
 
@@ -342,7 +355,10 @@ describe('loadMakeBotState', () => {
 
   it('degrades to no_model when the only online machine has no models', async () => {
     mockRoster([{ id: 'local', kind: 'local', label: 'This device' }])
-    vi.mocked(hermesApi).mockResolvedValueOnce({ harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }], models: [] })
+    vi.mocked(hermesApi).mockResolvedValueOnce({
+      harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }],
+      models: []
+    })
 
     const state = await loadMakeBotState()
 
@@ -376,7 +392,10 @@ describe('loadMakeBotState', () => {
     ])
     vi.mocked(hermesApi)
       .mockResolvedValueOnce({ harnesses: [], models: [] })
-      .mockResolvedValueOnce({ harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }], models: [] })
+      .mockResolvedValueOnce({
+        harnesses: [{ id: 'hermes', label: 'Hermes', detected: true, source: 'native' }],
+        models: []
+      })
 
     const state = await loadMakeBotState()
 
@@ -551,11 +570,13 @@ describe('createBot', () => {
       connectionId: 'homelab'
     })
 
-    expect(hermesApi).toHaveBeenCalledWith(expect.objectContaining({
-      path: '/api/bots',
-      method: 'POST',
-      connectionId: 'homelab'
-    }))
+    expect(hermesApi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/api/bots',
+        method: 'POST',
+        connectionId: 'homelab'
+      })
+    )
   })
 })
 

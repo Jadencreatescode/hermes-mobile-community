@@ -1,7 +1,15 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { getA2AChatHistory, getA2ALiveState, interruptA2AAgent, refreshA2AAgent, sendA2AChatMessage, startOrResumeA2AAgent, steerA2AAgent } = vi.hoisted(() => ({
+const {
+  getA2AChatHistory,
+  getA2ALiveState,
+  interruptA2AAgent,
+  refreshA2AAgent,
+  sendA2AChatMessage,
+  startOrResumeA2AAgent,
+  steerA2AAgent
+} = vi.hoisted(() => ({
   getA2AChatHistory: vi.fn(),
   getA2ALiveState: vi.fn(),
   interruptA2AAgent: vi.fn(),
@@ -42,9 +50,14 @@ afterEach(() => {
 
 describe('ConnectedAgentChat', () => {
   it('ignores legacy plaintext outbox entries instead of restoring secret-bearing content', async () => {
-    window.localStorage.setItem('hermes.operations.connected-agent.outbox.v1', JSON.stringify({
-      agentId: 'a2a:claude-reviewer', message: 'token=legacy-secret', requestId: 'durable-request'
-    }))
+    window.localStorage.setItem(
+      'hermes.operations.connected-agent.outbox.v1',
+      JSON.stringify({
+        agentId: 'a2a:claude-reviewer',
+        message: 'token=legacy-secret',
+        requestId: 'durable-request'
+      })
+    )
     getA2AChatHistory.mockResolvedValue({ messages: [], mirror_session_id: 'mirror_1' })
     render(<ConnectedAgentChatSurface agent={harnessAgent()} />)
     await screen.findByLabelText('Message Claude Reviewer')
@@ -90,16 +103,25 @@ describe('ConnectedAgentChat', () => {
     fireEvent.change(composer, { target: { value: 'Crash-safe message' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send to Claude Reviewer' }))
     expect((await screen.findByRole('alert')).textContent).toContain('connection closed after acceptance')
-    expect(JSON.parse(window.localStorage.getItem('hermes.operations.connected-agent.outbox.v1') || '{}')).toMatchObject({
-      agentId: 'a2a:claude-reviewer', requestId: expect.any(String)
+    expect(
+      JSON.parse(window.localStorage.getItem('hermes.operations.connected-agent.outbox.v1') || '{}')
+    ).toMatchObject({
+      agentId: 'a2a:claude-reviewer',
+      requestId: expect.any(String)
     })
-    expect(window.localStorage.getItem('hermes.operations.connected-agent.outbox.v1')).not.toContain('Crash-safe message')
+    expect(window.localStorage.getItem('hermes.operations.connected-agent.outbox.v1')).not.toContain(
+      'Crash-safe message'
+    )
   })
 
   it('restores the durable pending text after reload and retries with the same request identity', async () => {
-    window.localStorage.setItem('hermes.operations.connected-agent.outbox.v1', JSON.stringify({
-      agentId: 'a2a:claude-reviewer', requestId: 'durable-request'
-    }))
+    window.localStorage.setItem(
+      'hermes.operations.connected-agent.outbox.v1',
+      JSON.stringify({
+        agentId: 'a2a:claude-reviewer',
+        requestId: 'durable-request'
+      })
+    )
     getA2AChatHistory.mockImplementation(async (_agentId: string, requestId?: string) => ({
       messages: [],
       mirror_session_id: 'mirror_1',
@@ -107,27 +129,41 @@ describe('ConnectedAgentChat', () => {
       pending_message: requestId ? 'Original durable message' : undefined
     }))
     sendA2AChatMessage.mockResolvedValue({
-      reply: 'Recovered.', state: 'completed', request_status: 'committed',
-      native_session_id: 'ctx-1', connector_event_id: 'durable-request'
+      reply: 'Recovered.',
+      state: 'completed',
+      request_status: 'committed',
+      native_session_id: 'ctx-1',
+      connector_event_id: 'durable-request'
     })
 
     render(<ConnectedAgentChatSurface agent={harnessAgent()} />)
     const composer = await screen.findByRole('textbox', { name: 'Message Claude Reviewer' })
     await waitFor(() => expect((composer as HTMLTextAreaElement).value).toBe('Original durable message'))
     fireEvent.click(screen.getByRole('button', { name: 'Send to Claude Reviewer' }))
-    await waitFor(() => expect(sendA2AChatMessage).toHaveBeenCalledWith(
-      'a2a:claude-reviewer', 'Original durable message', 'durable-request'
-    ))
+    await waitFor(() =>
+      expect(sendA2AChatMessage).toHaveBeenCalledWith(
+        'a2a:claude-reviewer',
+        'Original durable message',
+        'durable-request'
+      )
+    )
   })
 
   it('abandons an orphaned pending identity before sending unrelated text', async () => {
-    window.localStorage.setItem('hermes.operations.connected-agent.outbox.v1', JSON.stringify({
-      agentId: 'a2a:claude-reviewer', requestId: 'orphaned-request'
-    }))
+    window.localStorage.setItem(
+      'hermes.operations.connected-agent.outbox.v1',
+      JSON.stringify({
+        agentId: 'a2a:claude-reviewer',
+        requestId: 'orphaned-request'
+      })
+    )
     getA2AChatHistory.mockResolvedValue({ messages: [], mirror_session_id: 'mirror_1' })
     sendA2AChatMessage.mockResolvedValue({
-      reply: 'New reply.', state: 'idle', request_status: 'committed',
-      native_session_id: 'ctx-1', connector_event_id: 'new-request'
+      reply: 'New reply.',
+      state: 'idle',
+      request_status: 'committed',
+      native_session_id: 'ctx-1',
+      connector_event_id: 'new-request'
     })
 
     render(<ConnectedAgentChatSurface agent={harnessAgent()} />)
@@ -231,7 +267,13 @@ describe('ConnectedAgentChat', () => {
       mirror_session_id: 'mirror_1',
       request_status: requestId ? 'committed' : undefined
     }))
-    sendA2AChatMessage.mockResolvedValue({ reply: 'Got it', state: 'completed', request_status: 'committed', native_session_id: 'mirror_1', connector_event_id: 'evt-1' })
+    sendA2AChatMessage.mockResolvedValue({
+      reply: 'Got it',
+      state: 'completed',
+      request_status: 'committed',
+      native_session_id: 'mirror_1',
+      connector_event_id: 'evt-1'
+    })
 
     render(<ConnectedAgentChatSurface agent={harnessAgent()} />)
 
@@ -254,7 +296,10 @@ describe('ConnectedAgentChat', () => {
   })
 
   it('shows degraded status in agent metadata', async () => {
-    getA2AChatHistory.mockResolvedValue({ messages: [{ role: 'assistant', content: 'Last message.' }], mirror_session_id: 'mirror_1' })
+    getA2AChatHistory.mockResolvedValue({
+      messages: [{ role: 'assistant', content: 'Last message.' }],
+      mirror_session_id: 'mirror_1'
+    })
 
     render(<ConnectedAgentChatSurface agent={{ ...harnessAgent(), status: 'degraded' }} />)
 

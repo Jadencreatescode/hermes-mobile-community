@@ -52,11 +52,12 @@ describe('browser runtime descriptor', () => {
   })
 
   it('loads the descriptor from the fixed same-origin relay endpoint with cookies', async () => {
-    const fetcher = vi.fn(async () =>
-      new Response(JSON.stringify(descriptor), {
-        status: 200,
-        headers: { 'content-type': 'application/json' }
-      })
+    const fetcher = vi.fn(
+      async () =>
+        new Response(JSON.stringify(descriptor), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
     )
 
     await expect(loadBrowserRuntimeDescriptor(fetcher, new URL('https://mobile.example.test/app/'))).resolves.toEqual(

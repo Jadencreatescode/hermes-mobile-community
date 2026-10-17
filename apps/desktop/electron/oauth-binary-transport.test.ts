@@ -34,7 +34,9 @@ function matchingDelimiter(start: number, open: string, close: string): number {
     const next = source[index + 1]
 
     if (lineComment) {
-      if (char === '\n') {lineComment = false}
+      if (char === '\n') {
+        lineComment = false
+      }
 
       continue
     }
@@ -78,11 +80,17 @@ function matchingDelimiter(start: number, open: string, close: string): number {
       continue
     }
 
-    if (char === open) {depth += 1}
+    if (char === open) {
+      depth += 1
+    }
 
-    if (char === close) {depth -= 1}
+    if (char === close) {
+      depth -= 1
+    }
 
-    if (depth === 0) {return index}
+    if (depth === 0) {
+      return index
+    }
   }
 
   return -1
@@ -134,10 +142,14 @@ function shaped(statusCode: number, headers: Record<string, unknown>, payload: B
 test('binaryTransportResponse returns the exact bytes, media type, and headers', () => {
   const payload = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00])
 
-  const response = shaped(200, {
-    'Content-Type': 'application/zip',
-    'X-Hermes-Artifact-Sha256': 'd'.repeat(64)
-  }, payload)
+  const response = shaped(
+    200,
+    {
+      'Content-Type': 'application/zip',
+      'X-Hermes-Artifact-Sha256': 'd'.repeat(64)
+    },
+    payload
+  )
 
   assert.equal(Object.prototype.toString.call(response.bytes), '[object ArrayBuffer]')
   assert.deepEqual([...new Uint8Array(response.bytes)], [...payload])

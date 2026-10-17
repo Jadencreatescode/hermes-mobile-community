@@ -75,7 +75,14 @@ const boardWith = (columns: ForgeBoard['columns']): ForgeBoard => ({
 })
 
 const task = (
-  overrides: { assignee?: null | string; body?: null | string; id?: string; priority?: number; status?: string; title?: string } = {}
+  overrides: {
+    assignee?: null | string
+    body?: null | string
+    id?: string
+    priority?: number
+    status?: string
+    title?: string
+  } = {}
 ): ForgeTask => ({
   assignee: null,
   body: null,

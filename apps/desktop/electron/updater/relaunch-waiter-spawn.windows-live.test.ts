@@ -32,9 +32,7 @@ it.runIf(process.platform === 'win32').each([
       )
 
       expect(handle).toBeUndefined()
-      expect(logs.join('\n')).toMatch(
-        new RegExp(`exited before its handshake after \\d+ms \\(exit code ${expected},`)
-      )
+      expect(logs.join('\n')).toMatch(new RegExp(`exited before its handshake after \\d+ms \\(exit code ${expected},`))
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

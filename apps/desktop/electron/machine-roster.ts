@@ -22,19 +22,15 @@ export function buildMachineRoster(
   registry: ConnectionRegistry,
   peers: TailscalePeer[]
 ): { machines: MachineRosterEntry[] } {
-  const registryLabels = new Set(
-    registry.connections.map((c: { label: string }) => labelKey(c.label))
-  )
+  const registryLabels = new Set(registry.connections.map((c: { label: string }) => labelKey(c.label)))
 
-  const machines: MachineRosterEntry[] = registry.connections.map(
-    (c: { id: string; label: string; kind: string }) => ({
-      id: c.id,
-      label: c.label,
-      kind: c.kind,
-      state: 'offline',
-      connected: true
-    })
-  )
+  const machines: MachineRosterEntry[] = registry.connections.map((c: { id: string; label: string; kind: string }) => ({
+    id: c.id,
+    label: c.label,
+    kind: c.kind,
+    state: 'offline',
+    connected: true
+  }))
 
   for (const peer of peers) {
     if (registryLabels.has(labelKey(peer.label))) {

@@ -143,7 +143,10 @@ describe('public A2A Bot roster provider', () => {
 
   it('refreshes through the public A2A status endpoint', async () => {
     getA2AAgentStatus.mockResolvedValue({
-      agentId: 'a2a:reviewer', capabilities: ['chat.send'], name: 'Release Reviewer', status: 'verified'
+      agentId: 'a2a:reviewer',
+      capabilities: ['chat.send'],
+      name: 'Release Reviewer',
+      status: 'verified'
     })
 
     await a2aBotRosterProvider.refresh_agent?.({ id: 'a2a:reviewer' } as never)
@@ -166,13 +169,15 @@ describe('public A2A Bot roster provider', () => {
       rest: vi.fn()
     } as never)
 
-    expect(contributions).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        area: 'bots.roster.providers',
-        data: a2aBotRosterProvider,
-        id: 'verified-a2a-agents'
-      })
-    ]))
+    expect(contributions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          area: 'bots.roster.providers',
+          data: a2aBotRosterProvider,
+          id: 'verified-a2a-agents'
+        })
+      ])
+    )
     expect(onDispose).toHaveBeenCalledWith(disposeA2ABotWorkspaces)
   })
 })

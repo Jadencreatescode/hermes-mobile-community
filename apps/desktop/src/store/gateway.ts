@@ -1793,6 +1793,7 @@ function publishTurnLease(scope: string, activeTurn: boolean): void {
 
 function releaseTerminalTurnLease(scope: string, event: GatewayEvent): void {
   const sessionId = String(event.session_id || '').trim()
+
   if (!sessionId) {
     return
   }
@@ -1808,9 +1809,11 @@ function releaseTerminalTurnLease(scope: string, event: GatewayEvent): void {
 
   if (event.type === 'session.reclaimed') {
     const release = g.turnLeases.get(key)
+
     if (typeof release === 'function') {
       release()
     }
+
     return
   }
 
@@ -1823,6 +1826,7 @@ function releaseTerminalTurnLease(scope: string, event: GatewayEvent): void {
       setTimeout(() => {
         g.turnLeaseReleaseTimers.delete(key)
         const release = g.turnLeases.get(key)
+
         if (typeof release === 'function') {
           release()
         }

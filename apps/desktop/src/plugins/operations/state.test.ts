@@ -50,11 +50,11 @@ describe('mapOperationsAgentState', () => {
   it('requires a fresh worker heartbeat before reporting working', () => {
     const nowMs = 2_000_000
 
-    expect(
-      mapOperationsAgentState({ nowMs, sourceReachable: true, workerHeartbeatAt: (nowMs - 149_000) / 1000 })
-    ).toBe('working')
-    expect(
-      mapOperationsAgentState({ nowMs, sourceReachable: true, workerHeartbeatAt: (nowMs - 151_000) / 1000 })
-    ).toBe('idle')
+    expect(mapOperationsAgentState({ nowMs, sourceReachable: true, workerHeartbeatAt: (nowMs - 149_000) / 1000 })).toBe(
+      'working'
+    )
+    expect(mapOperationsAgentState({ nowMs, sourceReachable: true, workerHeartbeatAt: (nowMs - 151_000) / 1000 })).toBe(
+      'idle'
+    )
   })
 })

@@ -1,11 +1,4 @@
-import {
-  Button,
-  Codicon,
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle
-} from '@hermes/plugin-sdk'
+import { Button, Codicon, Dialog, DialogContent, DialogHeader, DialogTitle } from '@hermes/plugin-sdk'
 import { useCallback, useEffect, useState } from 'react'
 
 import {
@@ -29,7 +22,8 @@ const OUTBOX_KEY = 'hermes.operations.connected-agent.outbox.v1'
 
 function readPendingTurn(agentId: string): PendingConnectedTurn | null {
   try {
-    const value = JSON.parse(window.localStorage.getItem(OUTBOX_KEY) || 'null') as (PendingConnectedTurn & { message?: unknown }) | null
+    const value = JSON.parse(window.localStorage.getItem(OUTBOX_KEY) || 'null') as
+      (PendingConnectedTurn & { message?: unknown }) | null
 
     if (value && 'message' in value) {
       window.localStorage.removeItem(OUTBOX_KEY)
@@ -58,19 +52,14 @@ function clearPendingTurn(turn: PendingConnectedTurn) {
 function AgentMetadata({ agent, runtimeState }: { agent: HarnessAgent; runtimeState?: string }) {
   return (
     <p className="text-xs text-(--ui-text-tertiary)">
-      {agent.status} · state: {runtimeState || agent.runtimeState || 'unknown'} {agent.capabilities.length > 0 ? `· ${agent.capabilities.join(', ')}` : ''}
+      {agent.status} · state: {runtimeState || agent.runtimeState || 'unknown'}{' '}
+      {agent.capabilities.length > 0 ? `· ${agent.capabilities.join(', ')}` : ''}
     </p>
   )
 }
 
 // health: allow CC -- retained public connected-agent chat flow is security reviewed; preserve its established state branches during migration
-export function ConnectedAgentChatSurface({
-  agent,
-  showHeader = true
-}: {
-  agent: HarnessAgent
-  showHeader?: boolean
-}) {
+export function ConnectedAgentChatSurface({ agent, showHeader = true }: { agent: HarnessAgent; showHeader?: boolean }) {
   const [messages, setMessages] = useState<A2AChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
@@ -83,13 +72,16 @@ export function ConnectedAgentChatSurface({
   const canSend = agent.capabilities.includes('chat.send')
   const operations = new Set(supportedOperations)
 
-  const refresh = useCallback(async (requestId = '') => {
-    const result = await getA2AChatHistory(agent.agentId, requestId)
+  const refresh = useCallback(
+    async (requestId = '') => {
+      const result = await getA2AChatHistory(agent.agentId, requestId)
 
-    setMessages(result.messages)
+      setMessages(result.messages)
 
-    return result
-  }, [agent.agentId])
+      return result
+    },
+    [agent.agentId]
+  )
 
   useEffect(() => {
     setDraft('')
@@ -101,29 +93,37 @@ export function ConnectedAgentChatSurface({
   }, [refresh])
 
   useEffect(() => {
-    if (restored || loading || busy) {return}
+    if (restored || loading || busy) {
+      return
+    }
     setRestored(true)
     const pending = readPendingTurn(agent.agentId)
 
-    if (!pending) {return}
+    if (!pending) {
+      return
+    }
     setPendingRequestId(pending.requestId)
-    void refresh(pending.requestId).then(result => {
-      if (result.request_status === 'committed') {
-        clearPendingTurn(pending)
-        setPendingRequestId('')
-      } else if (result.request_status === 'pending' && result.pending_message) {
-        setDraft(result.pending_message)
-      } else {
-        clearPendingTurn(pending)
-        setPendingRequestId('')
-      }
-    }).catch(cause => setError(cause instanceof Error ? cause.message : String(cause)))
+    void refresh(pending.requestId)
+      .then(result => {
+        if (result.request_status === 'committed') {
+          clearPendingTurn(pending)
+          setPendingRequestId('')
+        } else if (result.request_status === 'pending' && result.pending_message) {
+          setDraft(result.pending_message)
+        } else {
+          clearPendingTurn(pending)
+          setPendingRequestId('')
+        }
+      })
+      .catch(cause => setError(cause instanceof Error ? cause.message : String(cause)))
   }, [agent.agentId, busy, loading, refresh, restored])
 
   const send = async () => {
     const message = draft.trim()
 
-    if (!canSend || !message || busy) {return}
+    if (!canSend || !message || busy) {
+      return
+    }
 
     setBusy(true)
     setError('')
@@ -164,7 +164,9 @@ export function ConnectedAgentChatSurface({
   }
 
   const control = async (operation: 'get_state' | 'interrupt' | 'refresh' | 'start_or_resume' | 'steer') => {
-    if (busy) {return}
+    if (busy) {
+      return
+    }
     setBusy(true)
     setError('')
 
@@ -180,11 +182,14 @@ export function ConnectedAgentChatSurface({
       } else {
         const message = draft.trim()
 
-        if (!message) {return}
+        if (!message) {
+          return
+        }
 
-        const result = operation === 'start_or_resume'
-          ? await startOrResumeA2AAgent(agent.agentId, message)
-          : await steerA2AAgent(agent.agentId, message)
+        const result =
+          operation === 'start_or_resume'
+            ? await startOrResumeA2AAgent(agent.agentId, message)
+            : await steerA2AAgent(agent.agentId, message)
 
         setRuntimeState(result.state)
         setDraft('')
@@ -197,7 +202,9 @@ export function ConnectedAgentChatSurface({
   }
 
   return (
-    <div className={`flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-(--ui-bg-primary) ${showHeader ? 'h-full' : ''}`}>
+    <div
+      className={`flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-(--ui-bg-primary) ${showHeader ? 'h-full' : ''}`}
+    >
       {showHeader ? (
         <header className="shrink-0 border-b border-(--ui-stroke-tertiary) px-4 py-3">
           <h2 className="truncate text-sm font-semibold text-(--ui-text-primary)">{agent.name || agent.agentId}</h2>
@@ -206,18 +213,46 @@ export function ConnectedAgentChatSurface({
       ) : null}
 
       <div className="flex flex-wrap gap-2 border-b border-(--ui-stroke-tertiary) px-3 py-2">
-        <Button disabled={busy} onClick={() => void control('refresh')} size="sm" variant="ghost">Refresh verification</Button>
+        <Button disabled={busy} onClick={() => void control('refresh')} size="sm" variant="ghost">
+          Refresh verification
+        </Button>
         {operations.has('get_state') ? (
-          <Button disabled={busy} onClick={() => void control('get_state')} size="sm" variant="ghost">Read live state</Button>
+          <Button disabled={busy} onClick={() => void control('get_state')} size="sm" variant="ghost">
+            Read live state
+          </Button>
         ) : null}
         {operations.has('start_or_resume') ? (
-          <Button aria-label={`Start or resume ${agent.name || agent.agentId}`} disabled={busy || !draft.trim()} onClick={() => void control('start_or_resume')} size="sm" variant="ghost">Start / resume</Button>
+          <Button
+            aria-label={`Start or resume ${agent.name || agent.agentId}`}
+            disabled={busy || !draft.trim()}
+            onClick={() => void control('start_or_resume')}
+            size="sm"
+            variant="ghost"
+          >
+            Start / resume
+          </Button>
         ) : null}
         {operations.has('steer') ? (
-          <Button aria-label={`Steer ${agent.name || agent.agentId}`} disabled={busy || !draft.trim()} onClick={() => void control('steer')} size="sm" variant="ghost">Steer</Button>
+          <Button
+            aria-label={`Steer ${agent.name || agent.agentId}`}
+            disabled={busy || !draft.trim()}
+            onClick={() => void control('steer')}
+            size="sm"
+            variant="ghost"
+          >
+            Steer
+          </Button>
         ) : null}
         {operations.has('interrupt') ? (
-          <Button aria-label={`Interrupt ${agent.name || agent.agentId}`} disabled={busy} onClick={() => void control('interrupt')} size="sm" variant="ghost">Interrupt</Button>
+          <Button
+            aria-label={`Interrupt ${agent.name || agent.agentId}`}
+            disabled={busy}
+            onClick={() => void control('interrupt')}
+            size="sm"
+            variant="ghost"
+          >
+            Interrupt
+          </Button>
         ) : null}
       </div>
 
@@ -230,8 +265,12 @@ export function ConnectedAgentChatSurface({
           <div className="grid min-h-36 place-items-center rounded-xl border border-dashed border-(--ui-stroke-tertiary) p-4 text-center">
             <div>
               <Codicon className="text-xl text-(--ui-accent)" name="comment-discussion" />
-              <p className="mt-2 text-sm font-medium text-(--ui-text-primary)">Start the connected agent conversation</p>
-              <p className="mt-1 text-xs text-(--ui-text-tertiary)">Messages stay attached to this agent’s native harness context.</p>
+              <p className="mt-2 text-sm font-medium text-(--ui-text-primary)">
+                Start the connected agent conversation
+              </p>
+              <p className="mt-1 text-xs text-(--ui-text-tertiary)">
+                Messages stay attached to this agent’s native harness context.
+              </p>
             </div>
           </div>
         ) : null}
@@ -258,7 +297,11 @@ export function ConnectedAgentChatSurface({
         {!canSend ? (
           <p className="mb-2 text-xs text-(--ui-text-tertiary)">This connector did not advertise chat.send.</p>
         ) : null}
-        {error ? <p className="mb-2 text-sm text-destructive" role="alert">{error}</p> : null}
+        {error ? (
+          <p className="mb-2 text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        ) : null}
         <div className="flex min-w-0 items-end gap-2">
           <textarea
             aria-label={`Message ${agent.name || agent.agentId}`}
@@ -283,13 +326,7 @@ export function ConnectedAgentChatSurface({
   )
 }
 
-export function ConnectedAgentChat({
-  agent,
-  onClose
-}: {
-  agent: HarnessAgent
-  onClose: () => void
-}) {
+export function ConnectedAgentChat({ agent, onClose }: { agent: HarnessAgent; onClose: () => void }) {
   return (
     <Dialog onOpenChange={open => !open && onClose()} open>
       <DialogContent className="flex max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-2xl flex-col overflow-hidden p-0 sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100vw-2rem)]">

@@ -9,9 +9,7 @@ const { loadConnectedAgents, loadOperationsRoutines, loadOperationsSnapshot, lis
 }))
 
 const forgeBoard = vi.hoisted(() => ({
-  columns: [
-    { name: 'ready', tasks: [{ id: 't_forge01', title: 'Ship the forge panel', status: 'ready' }] }
-  ],
+  columns: [{ name: 'ready', tasks: [{ id: 't_forge01', title: 'Ship the forge panel', status: 'ready' }] }],
   assignees: [],
   tenants: []
 }))
@@ -229,7 +227,9 @@ describe('OperationsPage', () => {
   it('never lets an older overlapping refresh replace newer source state', async () => {
     vi.useFakeTimers()
     let resolveOlder: (value: typeof snapshot) => void = () => undefined
-    const older = new Promise<typeof snapshot>(resolve => { resolveOlder = resolve })
+    const older = new Promise<typeof snapshot>(resolve => {
+      resolveOlder = resolve
+    })
 
     const newest = {
       ...snapshot,
@@ -242,14 +242,14 @@ describe('OperationsPage', () => {
     }
 
     loadConnectedAgents.mockResolvedValue([])
-    loadOperationsSnapshot
-      .mockResolvedValueOnce(snapshot)
-      .mockReturnValueOnce(older)
-      .mockResolvedValueOnce(newest)
+    loadOperationsSnapshot.mockResolvedValueOnce(snapshot).mockReturnValueOnce(older).mockResolvedValueOnce(newest)
     loadOperationsRoutines.mockResolvedValue(routines)
 
     render(<OperationsPage />)
-    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
     expect(screen.getByText('Release Bot')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Operations' }))
     await act(async () => {
@@ -257,7 +257,10 @@ describe('OperationsPage', () => {
       await Promise.resolve()
     })
     expect(screen.getByText('Newest Bot')).toBeTruthy()
-    await act(async () => { resolveOlder(stale); await Promise.resolve() })
+    await act(async () => {
+      resolveOlder(stale)
+      await Promise.resolve()
+    })
 
     expect(screen.getByText('Newest Bot')).toBeTruthy()
     expect(screen.queryByText('Stale Bot')).toBeNull()

@@ -52,7 +52,9 @@ describe('WorkspaceView', () => {
 
   it('explains that workspace authority remains with existing Hermes surfaces', () => {
     render(<WorkspaceView agents={[]} />)
-    expect(screen.getByText(/transcript, files, changes, terminal, and preview remain in the existing Hermes workspace/i)).toBeTruthy()
+    expect(
+      screen.getByText(/transcript, files, changes, terminal, and preview remain in the existing Hermes workspace/i)
+    ).toBeTruthy()
     expect(screen.getByText('No Bot workspaces available.')).toBeTruthy()
   })
 })

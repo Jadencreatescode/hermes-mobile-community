@@ -142,8 +142,7 @@ describe('deliverable package DTO normalization', () => {
   })
 
   it('reads a null parent artifact version as the lineage root', () => {
-    expect(outputVersionFromWire({ ...versionWire, parent_artifact_version: null }).parentArtifactVersion)
-      .toBeNull()
+    expect(outputVersionFromWire({ ...versionWire, parent_artifact_version: null }).parentArtifactVersion).toBeNull()
   })
 
   it('normalizes an output and bounds its state', () => {
@@ -218,8 +217,11 @@ describe('deliverable package DTO normalization', () => {
       active_run: { run_id: 'mrun_1', kind: 'revision', state: 'open' },
       active_review: { request_id: 'mrev_9', artifact_version: 2 },
       active_prompt_claim: {
-        claim_id: 'mclaim_1', scope: 'mrun_1', session_id: 'session-1',
-        expires_at: 90, renewals: 2
+        claim_id: 'mclaim_1',
+        scope: 'mrun_1',
+        session_id: 'session-1',
+        expires_at: 90,
+        renewals: 2
       },
       receipt: {
         run_id: 'mrun_0',
@@ -239,8 +241,11 @@ describe('deliverable package DTO normalization', () => {
     expect(recovery.activePromptClaimId).toBe('mclaim_1')
     expect(recovery.observedAt).toBe(100)
     expect(recovery.activePromptClaim).toEqual({
-      claimId: 'mclaim_1', scope: 'mrun_1', sessionId: 'session-1',
-      expiresAt: 90, renewals: 2
+      claimId: 'mclaim_1',
+      scope: 'mrun_1',
+      sessionId: 'session-1',
+      expiresAt: 90,
+      renewals: 2
     })
     expect(recovery.receipt?.zipSha256).toBe('c'.repeat(64))
     expect(recoveryFromWire({ output: outputWire }).activeRunId).toBeNull()
@@ -263,7 +268,8 @@ describe('deliverable package DTO normalization', () => {
 
 describe('deliverable package REST clients', () => {
   it('lists and reads outputs through the authenticated plugin namespace', async () => {
-    const rest = vi.fn()
+    const rest = vi
+      .fn()
       .mockResolvedValueOnce({ outputs: [{ output: outputWire, eligibility: { approve: true } }] })
       .mockResolvedValueOnce({
         output: outputWire,
@@ -285,11 +291,16 @@ describe('deliverable package REST clients', () => {
   })
 
   it('freezes a brief and starts a run with canonical snake_case bodies', async () => {
-    const rest = vi.fn()
+    const rest = vi
+      .fn()
       .mockResolvedValueOnce({ meeting_version: 4, brief_hash: 'd'.repeat(64), production_stage: 'production_ready' })
       .mockResolvedValueOnce({
-        run_id: 'mrun_1', output_id: 'mout_1', kind: 'production',
-        meeting_id: 'meeting_1', meeting_version: 5, parent_artifact_version: null,
+        run_id: 'mrun_1',
+        output_id: 'mout_1',
+        kind: 'production',
+        meeting_id: 'meeting_1',
+        meeting_version: 5,
+        parent_artifact_version: null,
         workspace_identity: { device: '1', inode: '2', output_device: '1', output_inode: '3' }
       })
 
@@ -344,16 +355,25 @@ describe('deliverable package REST clients', () => {
   })
 
   it('parses the server-assigned cwd off the create-run dispatcher response', async () => {
-    const rest = vi.fn()
+    const rest = vi
+      .fn()
       .mockResolvedValueOnce({
-        run_id: 'mrun_1', output_id: 'mout_1', kind: 'production', meeting_id: 'meeting_1',
-        meeting_version: 5, parent_artifact_version: null,
+        run_id: 'mrun_1',
+        output_id: 'mout_1',
+        kind: 'production',
+        meeting_id: 'meeting_1',
+        meeting_version: 5,
+        parent_artifact_version: null,
         cwd: '/server/owned/workspaces/mrun_1',
         workspace_identity: { device: '1', inode: '2', output_device: '1', output_inode: '3' }
       })
       .mockResolvedValueOnce({
-        run_id: 'mrun_2', output_id: 'mout_1', kind: 'revision', meeting_id: 'meeting_1',
-        meeting_version: 9, parent_artifact_version: 1,
+        run_id: 'mrun_2',
+        output_id: 'mout_1',
+        kind: 'revision',
+        meeting_id: 'meeting_1',
+        meeting_version: 9,
+        parent_artifact_version: 1,
         cwd: '/server/owned/workspaces/mrun_2',
         workspace_identity: { device: '1', inode: '4', output_device: '1', output_inode: '5' }
       })
@@ -383,25 +403,43 @@ describe('deliverable package REST clients', () => {
   })
 
   it('routes a revision run and its claim/collect through the revision paths', async () => {
-    const rest = vi.fn()
+    const rest = vi
+      .fn()
       .mockResolvedValueOnce({
-        run_id: 'mrun_2', output_id: 'mout_1', kind: 'revision',
-        meeting_id: 'meeting_1', meeting_version: 9, parent_artifact_version: 1,
+        run_id: 'mrun_2',
+        output_id: 'mout_1',
+        kind: 'revision',
+        meeting_id: 'meeting_1',
+        meeting_version: 9,
+        parent_artifact_version: 1,
         workspace_identity: { device: '1', inode: '4', output_device: '1', output_inode: '5' }
       })
       .mockResolvedValueOnce({
-        run_id: 'mrun_2', output_id: 'mout_1', kind: 'revision',
+        run_id: 'mrun_2',
+        output_id: 'mout_1',
+        kind: 'revision',
         workspace: {
           cwd: '/server/owned/path',
           identity: { device: '1', inode: '4', output_device: '1', output_inode: '5' }
-        }, collection_claim: 'claim-token',
-        brief: 'Produce the guide.', brief_hash: 'd'.repeat(64),
-        acceptance_statement: 'Reviewed.', parent_artifact_version: 1
+        },
+        collection_claim: 'claim-token',
+        brief: 'Produce the guide.',
+        brief_hash: 'd'.repeat(64),
+        acceptance_statement: 'Reviewed.',
+        parent_artifact_version: 1
       })
       .mockResolvedValueOnce({
-        receipt: { run_id: 'mrun_2', output_id: 'mout_1', artifact_version: 2, parent_artifact_version: 1,
-          game_sha256: 'a'.repeat(64), manifest_sha256: 'b'.repeat(64), zip_sha256: 'c'.repeat(64),
-          total_byte_size: 32, collected_at: 7 },
+        receipt: {
+          run_id: 'mrun_2',
+          output_id: 'mout_1',
+          artifact_version: 2,
+          parent_artifact_version: 1,
+          game_sha256: 'a'.repeat(64),
+          manifest_sha256: 'b'.repeat(64),
+          zip_sha256: 'c'.repeat(64),
+          total_byte_size: 32,
+          collected_at: 7
+        },
         output: outputWire,
         eligibility: { review: true }
       })
@@ -423,7 +461,10 @@ describe('deliverable package REST clients', () => {
     expect(revision.parentArtifactVersion).toBe(1)
 
     const claim = await claimOutputRun({
-      runId: 'mrun_2', requestId: 'dispatch-1', sessionId: 'session-2', kind: 'revision'
+      runId: 'mrun_2',
+      requestId: 'dispatch-1',
+      sessionId: 'session-2',
+      kind: 'revision'
     })
 
     expect(rest).toHaveBeenLastCalledWith('/meeting-output-revision-runs/mrun_2/claim', {
@@ -434,11 +475,17 @@ describe('deliverable package REST clients', () => {
     expect(claim.cwd).toBe('/server/owned/path')
     expect(claim.collectionClaim).toBe('claim-token')
     expect(claim.workspaceIdentity).toEqual({
-      device: '1', inode: '4', outputDevice: '1', outputInode: '5'
+      device: '1',
+      inode: '4',
+      outputDevice: '1',
+      outputInode: '5'
     })
 
     const collected = await collectOutputRun({
-      runId: 'mrun_2', collectionClaim: 'claim-token', kind: 'revision', idempotencyKey: 'collect-1'
+      runId: 'mrun_2',
+      collectionClaim: 'claim-token',
+      kind: 'revision',
+      idempotencyKey: 'collect-1'
     })
 
     expect(rest).toHaveBeenLastCalledWith('/meeting-output-revision-runs/mrun_2/collect', {
@@ -451,7 +498,8 @@ describe('deliverable package REST clients', () => {
   })
 
   it('sends the reviewer as a canonical route and posts structured findings', async () => {
-    const rest = vi.fn()
+    const rest = vi
+      .fn()
       .mockResolvedValueOnce({
         request_id: 'mrev_1',
         artifact_version: 2,
@@ -459,8 +507,16 @@ describe('deliverable package REST clients', () => {
         artifact_summary: { files: manifestWire.files }
       })
       .mockResolvedValueOnce({
-        review: { request_id: 'mrev_1', artifact_version: 2, verdict: 'changes_requested', state: 'completed',
-          reviewer: { connection: 'local', profile: 'reviewer' }, findings: [], checks: {}, created_at: 1 },
+        review: {
+          request_id: 'mrev_1',
+          artifact_version: 2,
+          verdict: 'changes_requested',
+          state: 'completed',
+          reviewer: { connection: 'local', profile: 'reviewer' },
+          findings: [],
+          checks: {},
+          created_at: 1
+        },
         output: outputWire,
         eligibility: { revise: true }
       })
@@ -468,7 +524,10 @@ describe('deliverable package REST clients', () => {
     unbind = bindOperationsApi(rest as never)
 
     const review = await createReviewRun({
-      outputId: 'mout_1', expectedOutputVersion: 6, reviewer, idempotencyKey: 'review-run-1'
+      outputId: 'mout_1',
+      expectedOutputVersion: 6,
+      reviewer,
+      idempotencyKey: 'review-run-1'
     })
 
     expect(rest).toHaveBeenCalledWith('/meeting-outputs/mout_1/review-runs', {
@@ -500,9 +559,13 @@ describe('deliverable package REST clients', () => {
       output: { ...outputWire, state: 'approved', approved_artifact_version: 2 },
       eligibility: { download: true },
       artifact_binding: {
-        output_id: 'mout_1', artifact_version: 2, game_sha256: 'a'.repeat(64),
-        manifest_sha256: 'b'.repeat(64), zip_sha256: 'c'.repeat(64),
-        approved_by: 'Owner', approved_at: 1_800_000_200
+        output_id: 'mout_1',
+        artifact_version: 2,
+        game_sha256: 'a'.repeat(64),
+        manifest_sha256: 'b'.repeat(64),
+        zip_sha256: 'c'.repeat(64),
+        approved_by: 'Owner',
+        approved_at: 1_800_000_200
       }
     })
 
@@ -549,39 +612,38 @@ describe('deliverable package REST clients', () => {
     unbind = bindOperationsApi(rest as never)
 
     const preview = await previewOutputFile({ outputId: 'mout_1', artifactVersion: 2, path: 'notes/checklist.txt' })
-    expect(rest).toHaveBeenCalledWith(
-      '/meeting-outputs/mout_1/versions/2/files/notes/checklist.txt',
-      { responseType: 'binary' }
-    )
+    expect(rest).toHaveBeenCalledWith('/meeting-outputs/mout_1/versions/2/files/notes/checklist.txt', {
+      responseType: 'binary'
+    })
     expect(preview.mediaType).toBe('text/plain')
     expect(preview.sha256).toBe('a'.repeat(64))
 
     await downloadOutputPackage({ outputId: 'mout_1', artifactVersion: 2 })
-    expect(rest).toHaveBeenLastCalledWith(
-      '/meeting-outputs/mout_1/versions/2/download',
-      { responseType: 'binary' }
-    )
+    expect(rest).toHaveBeenLastCalledWith('/meeting-outputs/mout_1/versions/2/download', { responseType: 'binary' })
   })
 
   it('percent-encodes each preview path segment without collapsing the path', async () => {
     const rest = vi.fn().mockResolvedValue({
-      bytes: new ArrayBuffer(1), mediaType: 'text/plain', status: 200, headers: {}
+      bytes: new ArrayBuffer(1),
+      mediaType: 'text/plain',
+      status: 200,
+      headers: {}
     })
 
     unbind = bindOperationsApi(rest as never)
     await previewOutputFile({ outputId: 'mout_1', artifactVersion: 1, path: 'a b/c#d.txt' })
 
-    expect(rest).toHaveBeenCalledWith(
-      '/meeting-outputs/mout_1/versions/1/files/a%20b/c%23d.txt',
-      { responseType: 'binary' }
-    )
+    expect(rest).toHaveBeenCalledWith('/meeting-outputs/mout_1/versions/1/files/a%20b/c%23d.txt', {
+      responseType: 'binary'
+    })
   })
 
   it('refuses an artifact response that carries no bytes', async () => {
-    unbind = bindOperationsApi((vi.fn().mockResolvedValue({ bytes: 'not-bytes' })) as never)
+    unbind = bindOperationsApi(vi.fn().mockResolvedValue({ bytes: 'not-bytes' }) as never)
 
-    await expect(previewOutputFile({ outputId: 'mout_1', artifactVersion: 1, path: 'index.txt' }))
-      .rejects.toThrow('did not carry bytes')
+    await expect(previewOutputFile({ outputId: 'mout_1', artifactVersion: 1, path: 'index.txt' })).rejects.toThrow(
+      'did not carry bytes'
+    )
   })
 
   it('rejects an invalid output id or artifact version before any request', async () => {
@@ -590,8 +652,9 @@ describe('deliverable package REST clients', () => {
     unbind = bindOperationsApi(rest as never)
 
     await expect(getMeetingOutput('../escape')).rejects.toThrow('Output id is invalid')
-    await expect(downloadOutputPackage({ outputId: 'mout_1', artifactVersion: 0 }))
-      .rejects.toThrow('Artifact version is invalid')
+    await expect(downloadOutputPackage({ outputId: 'mout_1', artifactVersion: 0 })).rejects.toThrow(
+      'Artifact version is invalid'
+    )
     expect(rest).not.toHaveBeenCalled()
   })
 
@@ -616,16 +679,24 @@ describe('deliverable package REST clients', () => {
     // recognize cannot read back the cwd or the collection claim it granted.
     // The key is derived from the run/review and the session being bound, so
     // the identical retry replays and a different session still conflicts.
-    const rest = vi.fn()
+    const rest = vi
+      .fn()
       .mockResolvedValueOnce({
-        run_id: 'mrun_1', output_id: 'mout_1', kind: 'production',
-        workspace: { cwd: '/server/owned/path' }, collection_claim: 'claim-token',
-        brief: 'Produce the guide.', brief_hash: 'd'.repeat(64),
-        acceptance_statement: 'Reviewed.', parent_artifact_version: null,
-        session_id: 'session-1', claim: { renewals: 0 }
+        run_id: 'mrun_1',
+        output_id: 'mout_1',
+        kind: 'production',
+        workspace: { cwd: '/server/owned/path' },
+        collection_claim: 'claim-token',
+        brief: 'Produce the guide.',
+        brief_hash: 'd'.repeat(64),
+        acceptance_statement: 'Reviewed.',
+        parent_artifact_version: null,
+        session_id: 'session-1',
+        claim: { renewals: 0 }
       })
       .mockResolvedValueOnce({
-        request_id: 'mrev_1', artifact_version: 2,
+        request_id: 'mrev_1',
+        artifact_version: 2,
         reviewer: { connection: 'local', profile: 'reviewer' }
       })
 
@@ -639,7 +710,9 @@ describe('deliverable package REST clients', () => {
     })
 
     await claimReviewRun({
-      requestId: 'mrev_1', dispatchId: 'review-dispatch-1', sessionId: 'session-reviewer-1',
+      requestId: 'mrev_1',
+      dispatchId: 'review-dispatch-1',
+      sessionId: 'session-reviewer-1',
       claimGeneration: 2
     })
     expect(rest).toHaveBeenLastCalledWith('/meeting-output-review-runs/mrev_1/claim', {
@@ -654,12 +727,14 @@ describe('deliverable package REST clients', () => {
 
     unbind = bindOperationsApi(rest as never)
 
-    await expect(freezeProductionBrief({
-      meetingId: 'meeting_1',
-      expectedVersion: 3,
-      brief: 'Produce the guide.',
-      idempotencyKey: '  '
-    })).rejects.toThrow('idempotency key')
+    await expect(
+      freezeProductionBrief({
+        meetingId: 'meeting_1',
+        expectedVersion: 3,
+        brief: 'Produce the guide.',
+        idempotencyKey: '  '
+      })
+    ).rejects.toThrow('idempotency key')
     expect(rest).not.toHaveBeenCalled()
   })
 })

@@ -16,19 +16,13 @@ import type { RouteIdentity } from './meetings'
 
 export const OUTPUT_KIND = 'deliverable_package_v1'
 
-export const PRODUCT_KINDS = [
-  'interactive_web_app',
-  'three_scene',
-  'audio_asset',
-  'video_asset',
-  'document'
-] as const
+export const PRODUCT_KINDS = ['interactive_web_app', 'three_scene', 'audio_asset', 'video_asset', 'document'] as const
 
-export type ProductKind = typeof PRODUCT_KINDS[number]
+export type ProductKind = (typeof PRODUCT_KINDS)[number]
 
 export const OUTPUT_STATES = ['candidate', 'reviewing', 'changes_requested', 'verified', 'approved'] as const
 
-export type OutputState = typeof OUTPUT_STATES[number]
+export type OutputState = (typeof OUTPUT_STATES)[number]
 
 export type FindingSeverity = 'low' | 'medium' | 'high' | 'critical'
 
@@ -198,9 +192,7 @@ export interface ArtifactBytes {
 // ---------------------------------------------------------------------------
 
 function row(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
 function list(value: unknown): unknown[] {
@@ -287,9 +279,7 @@ export function findingFromWire(value: unknown): ReviewFinding {
   const path = text(source.path)
 
   return Object.freeze({
-    severity: (['low', 'medium', 'high', 'critical'].includes(severity)
-      ? severity
-      : 'low') as FindingSeverity,
+    severity: (['low', 'medium', 'high', 'critical'].includes(severity) ? severity : 'low') as FindingSeverity,
     code: text(source.code),
     detail: text(source.detail),
     ...(path ? { path } : {})
@@ -302,9 +292,7 @@ export function checksFromWire(value: unknown): DeterministicChecks {
 
   return Object.freeze({
     ok: source.ok === true,
-    checks: Object.freeze(Object.fromEntries(
-      Object.entries(checks).map(([key, item]) => [key, item === true])
-    )),
+    checks: Object.freeze(Object.fromEntries(Object.entries(checks).map(([key, item]) => [key, item === true]))),
     failedChecks: Object.freeze(list(source.failed_checks ?? source.failedChecks).map(text))
   })
 }
@@ -347,9 +335,7 @@ export function outputFromWire(value: unknown): MeetingOutput {
     currentArtifactVersion: count(source.current_artifact_version ?? source.currentArtifactVersion),
     verifiedArtifactVersion: count(source.verified_artifact_version ?? source.verifiedArtifactVersion),
     approvedArtifactVersion: count(source.approved_artifact_version ?? source.approvedArtifactVersion),
-    state: (OUTPUT_STATES as readonly string[]).includes(state)
-      ? state as OutputState
-      : 'candidate',
+    state: (OUTPUT_STATES as readonly string[]).includes(state) ? (state as OutputState) : 'candidate',
     version: count(source.version),
     findings: Object.freeze(list(source.findings).map(findingFromWire)),
     createdAt: count(source.created_at ?? source.createdAt),
@@ -433,13 +419,15 @@ export function recoveryFromWire(value: unknown): OutputRecovery {
     activeReviewRequestId: text(activeReview.request_id ?? activeReview.requestId) || null,
     activePromptClaimId: claimId || null,
     observedAt: count(source.observed_at ?? source.observedAt),
-    activePromptClaim: claimId ? Object.freeze({
-      claimId,
-      scope: text(activeClaim.scope),
-      sessionId: text(activeClaim.session_id ?? activeClaim.sessionId),
-      expiresAt: count(activeClaim.expires_at ?? activeClaim.expiresAt),
-      renewals: count(activeClaim.renewals)
-    }) : null,
+    activePromptClaim: claimId
+      ? Object.freeze({
+          claimId,
+          scope: text(activeClaim.scope),
+          sessionId: text(activeClaim.session_id ?? activeClaim.sessionId),
+          expiresAt: count(activeClaim.expires_at ?? activeClaim.expiresAt),
+          renewals: count(activeClaim.renewals)
+        })
+      : null,
     receipt: receipt ? receiptFromWire(receipt) : null
   })
 }
@@ -510,9 +498,7 @@ export function outputSummaryFromWire(value: unknown): MeetingOutputSummary {
 /** List the meeting's outputs. This is the lean server shape -- ask
  *  getMeetingOutput for versions and reviews. */
 export async function listMeetingOutputs(meetingId: string): Promise<MeetingOutputSummary[]> {
-  const response = await operationsApi()<{ outputs?: unknown[] }>(
-    `/meetings/${outputId(meetingId)}/outputs?limit=20`
-  )
+  const response = await operationsApi()<{ outputs?: unknown[] }>(`/meetings/${outputId(meetingId)}/outputs?limit=20`)
 
   return (response.outputs ?? []).map(outputSummaryFromWire)
 }
@@ -522,9 +508,7 @@ export async function getMeetingOutput(id: string): Promise<MeetingOutputDetail>
 }
 
 export async function listOutputVersions(id: string): Promise<OutputVersion[]> {
-  const response = await operationsApi()<{ versions?: unknown[] }>(
-    `/meeting-outputs/${outputId(id)}/versions`
-  )
+  const response = await operationsApi()<{ versions?: unknown[] }>(`/meeting-outputs/${outputId(id)}/versions`)
 
   return (response.versions ?? []).map(outputVersionFromWire)
 }
@@ -540,9 +524,8 @@ export async function freezeProductionBrief(input: {
   evidenceRefs?: readonly string[]
   idempotencyKey: string
 }): Promise<{ meetingVersion: number; briefHash: string; productionStage: string }> {
-  const response = row(await operationsApi()<unknown>(
-    `/meetings/${outputId(input.meetingId)}/production-brief`,
-    {
+  const response = row(
+    await operationsApi()<unknown>(`/meetings/${outputId(input.meetingId)}/production-brief`, {
       method: 'POST',
       body: {
         expected_version: input.expectedVersion,
@@ -550,8 +533,8 @@ export async function freezeProductionBrief(input: {
         evidence_refs: [...(input.evidenceRefs ?? [])]
       },
       ...idempotent(input.idempotencyKey)
-    }
-  ))
+    })
+  )
 
   return {
     meetingVersion: count(response.meeting_version),
@@ -567,9 +550,8 @@ export async function createProductionRun(input: {
   submissionId: string
   idempotencyKey: string
 }): Promise<OutputRun> {
-  return runFromWire(await operationsApi()<unknown>(
-    `/meetings/${outputId(input.meetingId)}/production-runs`,
-    {
+  return runFromWire(
+    await operationsApi()<unknown>(`/meetings/${outputId(input.meetingId)}/production-runs`, {
       method: 'POST',
       body: {
         expected_version: input.expectedVersion,
@@ -577,8 +559,8 @@ export async function createProductionRun(input: {
         submission_id: input.submissionId
       },
       ...idempotent(input.idempotencyKey)
-    }
-  ))
+    })
+  )
 }
 
 export async function createRevisionRun(input: {
@@ -587,17 +569,16 @@ export async function createRevisionRun(input: {
   producerSessionId: string
   idempotencyKey: string
 }): Promise<OutputRun> {
-  return runFromWire(await operationsApi()<unknown>(
-    `/meeting-outputs/${outputId(input.outputId)}/revision-runs`,
-    {
+  return runFromWire(
+    await operationsApi()<unknown>(`/meeting-outputs/${outputId(input.outputId)}/revision-runs`, {
       method: 'POST',
       body: {
         expected_output_version: input.expectedOutputVersion,
         producer_session_id: input.producerSessionId
       },
       ...idempotent(input.idempotencyKey)
-    }
-  ))
+    })
+  )
 }
 
 /** The dispatcher door. The returned cwd and collection claim are run-scoped
@@ -632,11 +613,13 @@ export async function claimOutputRun(input: {
 }> {
   const base = input.kind === 'revision' ? '/meeting-output-revision-runs' : '/meeting-output-runs'
 
-  const response = row(await operationsApi()<unknown>(`${base}/${outputId(input.runId)}/claim`, {
-    method: 'POST',
-    body: { request_id: input.requestId, session_id: input.sessionId },
-    ...idempotent(claimKey('claim', input.runId, input.sessionId, input.claimGeneration ?? 0))
-  }))
+  const response = row(
+    await operationsApi()<unknown>(`${base}/${outputId(input.runId)}/claim`, {
+      method: 'POST',
+      body: { request_id: input.requestId, session_id: input.sessionId },
+      ...idempotent(claimKey('claim', input.runId, input.sessionId, input.claimGeneration ?? 0))
+    })
+  )
 
   const workspace = row(response.workspace)
   const identity = row(workspace.identity)
@@ -671,16 +654,13 @@ export async function claimReviewRun(input: {
   sessionId: string
   claimGeneration?: number
 }): Promise<{ requestId: string; artifactVersion: number; reviewer: RouteIdentity }> {
-  const response = row(await operationsApi()<unknown>(
-    `/meeting-output-review-runs/${outputId(input.requestId)}/claim`,
-    {
+  const response = row(
+    await operationsApi()<unknown>(`/meeting-output-review-runs/${outputId(input.requestId)}/claim`, {
       method: 'POST',
       body: { request_id: input.dispatchId, session_id: input.sessionId },
-      ...idempotent(claimKey(
-        'review-claim', input.requestId, input.sessionId, input.claimGeneration ?? 0
-      ))
-    }
-  ))
+      ...idempotent(claimKey('review-claim', input.requestId, input.sessionId, input.claimGeneration ?? 0))
+    })
+  )
 
   return {
     requestId: text(response.request_id),
@@ -697,11 +677,13 @@ export async function collectOutputRun(input: {
 }): Promise<{ receipt: CollectionReceipt; output: MeetingOutput; eligibility: OutputEligibility }> {
   const base = input.kind === 'revision' ? '/meeting-output-revision-runs' : '/meeting-output-runs'
 
-  const response = row(await operationsApi()<unknown>(`${base}/${outputId(input.runId)}/collect`, {
-    method: 'POST',
-    body: { collection_claim: input.collectionClaim },
-    ...idempotent(input.idempotencyKey)
-  }))
+  const response = row(
+    await operationsApi()<unknown>(`${base}/${outputId(input.runId)}/collect`, {
+      method: 'POST',
+      body: { collection_claim: input.collectionClaim },
+      ...idempotent(input.idempotencyKey)
+    })
+  )
 
   return {
     receipt: receiptFromWire(response.receipt),
@@ -721,17 +703,16 @@ export async function createReviewRun(input: {
   checks: DeterministicChecks
   manifest: readonly ManifestFile[]
 }> {
-  const response = row(await operationsApi()<unknown>(
-    `/meeting-outputs/${outputId(input.outputId)}/review-runs`,
-    {
+  const response = row(
+    await operationsApi()<unknown>(`/meeting-outputs/${outputId(input.outputId)}/review-runs`, {
       method: 'POST',
       body: {
         expected_output_version: input.expectedOutputVersion,
         reviewer: routeToWire(input.reviewer)
       },
       ...idempotent(input.idempotencyKey)
-    }
-  ))
+    })
+  )
 
   return {
     requestId: text(response.request_id),
@@ -747,9 +728,8 @@ export async function completeReviewRun(input: {
   findings?: readonly ReviewFinding[]
   idempotencyKey: string
 }): Promise<{ review: ReviewRun; output: MeetingOutput; eligibility: OutputEligibility }> {
-  const response = row(await operationsApi()<unknown>(
-    `/meeting-output-review-runs/${outputId(input.requestId)}/complete`,
-    {
+  const response = row(
+    await operationsApi()<unknown>(`/meeting-output-review-runs/${outputId(input.requestId)}/complete`, {
       method: 'POST',
       body: {
         verdict: input.verdict,
@@ -761,8 +741,8 @@ export async function completeReviewRun(input: {
         }))
       },
       ...idempotent(input.idempotencyKey)
-    }
-  ))
+    })
+  )
 
   return {
     review: reviewRunFromWire(response.review),
@@ -781,9 +761,8 @@ export async function approveMeetingOutput(input: {
   version: OutputVersion
   idempotencyKey: string
 }): Promise<{ output: MeetingOutput; eligibility: OutputEligibility; artifactBinding: Record<string, unknown> }> {
-  const response = row(await operationsApi()<unknown>(
-    `/meeting-outputs/${outputId(input.outputId)}/approve`,
-    {
+  const response = row(
+    await operationsApi()<unknown>(`/meeting-outputs/${outputId(input.outputId)}/approve`, {
       method: 'POST',
       body: {
         meeting_id: input.meetingId,
@@ -795,8 +774,8 @@ export async function approveMeetingOutput(input: {
         zip_sha256: input.version.zipSha256
       },
       ...idempotent(input.idempotencyKey)
-    }
-  ))
+    })
+  )
 
   return {
     output: outputFromWire(response.output),
@@ -809,9 +788,11 @@ export async function approveMeetingOutput(input: {
  *  structured clone, so `instanceof` against this realm's constructor is not
  *  reliable; the brand tag is. */
 function isArrayBuffer(value: unknown): value is ArrayBuffer {
-  return Boolean(value)
-    && typeof (value as ArrayBuffer).byteLength === 'number'
-    && Object.prototype.toString.call(value) === '[object ArrayBuffer]'
+  return (
+    Boolean(value) &&
+    typeof (value as ArrayBuffer).byteLength === 'number' &&
+    Object.prototype.toString.call(value) === '[object ArrayBuffer]'
+  )
 }
 
 function binaryResponse(value: unknown): ArtifactBytes {
@@ -836,22 +817,29 @@ export async function previewOutputFile(input: {
   artifactVersion: number
   path: string
 }): Promise<ArtifactBytes> {
-  const segments = input.path.split('/').map(segment => encodeURIComponent(segment)).join('/')
+  const segments = input.path
+    .split('/')
+    .map(segment => encodeURIComponent(segment))
+    .join('/')
 
-  return binaryResponse(await operationsApi()<unknown>(
-    `/meeting-outputs/${outputId(input.outputId)}/versions/${artifactVersion(input.artifactVersion)}/files/${segments}`,
-    { responseType: 'binary' }
-  ))
+  return binaryResponse(
+    await operationsApi()<unknown>(
+      `/meeting-outputs/${outputId(input.outputId)}/versions/${artifactVersion(input.artifactVersion)}/files/${segments}`,
+      { responseType: 'binary' }
+    )
+  )
 }
 
 export async function downloadOutputPackage(input: {
   outputId: string
   artifactVersion: number
 }): Promise<ArtifactBytes> {
-  return binaryResponse(await operationsApi()<unknown>(
-    `/meeting-outputs/${outputId(input.outputId)}/versions/${artifactVersion(input.artifactVersion)}/download`,
-    { responseType: 'binary' }
-  ))
+  return binaryResponse(
+    await operationsApi()<unknown>(
+      `/meeting-outputs/${outputId(input.outputId)}/versions/${artifactVersion(input.artifactVersion)}/download`,
+      { responseType: 'binary' }
+    )
+  )
 }
 
 /** Recompute SHA-256 over downloaded bytes so the UI can prove the download

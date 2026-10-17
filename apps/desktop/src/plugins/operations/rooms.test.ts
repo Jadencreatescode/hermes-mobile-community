@@ -23,8 +23,9 @@ afterEach(() => {
 
 describe('public Operations rooms', () => {
   it('normalizes room authority without inventing floor or members', () => {
-    expect(normalizeRoom({ id: 'room-1', name: 'Release', floor: 'a2a:review', members: ['a2a:review'] }))
-      .toMatchObject({ id: 'room-1', name: 'Release', floor: 'a2a:review', memberCount: 1 })
+    expect(
+      normalizeRoom({ id: 'room-1', name: 'Release', floor: 'a2a:review', members: ['a2a:review'] })
+    ).toMatchObject({ id: 'room-1', name: 'Release', floor: 'a2a:review', memberCount: 1 })
     expect(normalizeRoom({ name: 'missing id' })).toBeNull()
     expect(roomActorLabel('owner', [])).toBe('You')
   })
@@ -60,13 +61,16 @@ describe('public Operations rooms', () => {
     expect(rest).toHaveBeenCalledWith('/rooms/room-1/members/a2a%3Areview', { method: 'POST', body: { confirm: true } })
     expect(rest).toHaveBeenCalledWith('/rooms/room-1/members/a2a%3Areview?confirm=true', { method: 'DELETE' })
     expect(rest).toHaveBeenCalledWith('/rooms/room-1/messages', {
-      method: 'POST', body: { message: 'Status?', request_id: 'message-1' }
+      method: 'POST',
+      body: { message: 'Status?', request_id: 'message-1' }
     })
     expect(rest).toHaveBeenCalledWith('/rooms/room-1/handoff', {
-      method: 'POST', body: { agent_id: 'a2a:review', confirm: true }
+      method: 'POST',
+      body: { agent_id: 'a2a:review', confirm: true }
     })
     expect(rest).toHaveBeenCalledWith('/rooms/room-1/turns', {
-      method: 'POST', body: { agent_id: 'a2a:review', message: 'Answer this.', request_id: 'turn-1' }
+      method: 'POST',
+      body: { agent_id: 'a2a:review', message: 'Answer this.', request_id: 'turn-1' }
     })
   })
 })

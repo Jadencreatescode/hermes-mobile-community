@@ -193,8 +193,8 @@ describe('resolveMediaPlaybackSrc', () => {
   })
 
   it('uses the authenticated same-origin browser stream capability for gateway audio', async () => {
-    const gatewayMediaStreamUrl = vi.fn(() =>
-      'https://mobile.example.test/api/files/stream?path=%2Froot%2Foutputs%2Fvoice.m4a&profile=voice'
+    const gatewayMediaStreamUrl = vi.fn(
+      () => 'https://mobile.example.test/api/files/stream?path=%2Froot%2Foutputs%2Fvoice.m4a&profile=voice'
     )
 
     vi.stubGlobal('window', { hermesDesktop: { gatewayMediaStreamUrl } })

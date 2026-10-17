@@ -56,9 +56,13 @@ function shortDigest(value: string): string {
 }
 
 function byteLabel(value: number): string {
-  if (value < 1024) {return `${value} B`}
+  if (value < 1024) {
+    return `${value} B`
+  }
 
-  if (value < 1024 * 1024) {return `${(value / 1024).toFixed(1)} KiB`}
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KiB`
+  }
 
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`
 }
@@ -66,9 +70,7 @@ function byteLabel(value: number): string {
 /** The independent reviewer seats the server would accept. */
 export function reviewerCandidates(meeting: MeetingRecord): RouteIdentity[] {
   const excluded = new Set(
-    [meeting.orchestrator, meeting.producer]
-      .filter(Boolean)
-      .map(route => `${route!.connectionId}::${route!.profile}`)
+    [meeting.orchestrator, meeting.producer].filter(Boolean).map(route => `${route!.connectionId}::${route!.profile}`)
   )
 
   return (meeting.seats ?? [])
@@ -140,112 +142,126 @@ export function DeliverablePackageOutput({
     setPreview(null)
   }, [selectedVersion])
 
-  const run = useCallback(async (label: string, action: () => Promise<string>) => {
-    const token = ++generation.current
-    setBusy(label)
-    setError('')
-    setNotice('')
+  const run = useCallback(
+    async (label: string, action: () => Promise<string>) => {
+      const token = ++generation.current
+      setBusy(label)
+      setError('')
+      setNotice('')
 
-    try {
-      const message = await action()
+      try {
+        const message = await action()
 
-      if (token !== generation.current) {return}
-      setNotice(message)
-      await onChanged?.()
-    } catch (cause) {
-      if (token !== generation.current) {return}
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      if (token === generation.current) {setBusy('')}
-    }
-  }, [onChanged])
+        if (token !== generation.current) {
+          return
+        }
+        setNotice(message)
+        await onChanged?.()
+      } catch (cause) {
+        if (token !== generation.current) {
+          return
+        }
+        setError(cause instanceof Error ? cause.message : String(cause))
+      } finally {
+        if (token === generation.current) {
+          setBusy('')
+        }
+      }
+    },
+    [onChanged]
+  )
 
-  const review = () => void run('review', async () => {
-    if (!onReview) {
-      throw new Error('Independent reviewer dispatch is unavailable in this view.')
-    }
+  const review = () =>
+    void run('review', async () => {
+      if (!onReview) {
+        throw new Error('Independent reviewer dispatch is unavailable in this view.')
+      }
 
-    return (await onReview()) || 'Independent review completed.'
-  })
-
-  const revise = () => void run('revise', async () => {
-    if (!onRevise) {
-      throw new Error('Revision dispatch is unavailable in this view.')
-    }
-
-    return (await onRevise()) || 'Revision collected.'
-  })
-
-  const approve = () => void run('approve', async () => {
-    // Re-read first: approval must echo the server's CURRENT versions and
-    // hashes, so a stale panel produces a 409 instead of a wrong approval.
-    const fresh = await getMeetingOutput(output.outputId)
-
-    const target = fresh.versions.find(
-      row => row.artifactVersion === fresh.output.verifiedArtifactVersion
-    )
-
-    if (!target) {
-      throw new Error('There is no verified artifact version to approve.')
-    }
-
-    const approved = await approveMeetingOutput({
-      outputId: output.outputId,
-      meetingId: output.meetingId,
-      expectedMeetingVersion: meetingVersion,
-      expectedOutputVersion: fresh.output.version,
-      version: target,
-      // Bound to the exact artifact version and the versions this approval was
-      // built against, so a double click replays and a stale panel conflicts.
-      idempotencyKey: `approve-${output.outputId}-${fresh.output.version}-${target.artifactVersion}`
+      return (await onReview()) || 'Independent review completed.'
     })
 
-    return `Artifact version ${approved.output.approvedArtifactVersion} approved by ${
-      String(approved.artifactBinding.approved_by ?? 'Owner')
-    }.`
-  })
+  const revise = () =>
+    void run('revise', async () => {
+      if (!onRevise) {
+        throw new Error('Revision dispatch is unavailable in this view.')
+      }
 
-  const previewFile = (file: ManifestFile) => void run('preview', async () => {
-    if (!version) {throw new Error('Select an artifact version first.')}
-
-    const bytes = await previewOutputFile({
-      outputId: output.outputId,
-      artifactVersion: version.artifactVersion,
-      path: file.path
+      return (await onRevise()) || 'Revision collected.'
     })
 
-    if (file.previewPolicy !== 'text') {
-      // Image and download-only members are never rendered as text here; the
-      // panel keeps download as the honest affordance.
-      setPreview(null)
+  const approve = () =>
+    void run('approve', async () => {
+      // Re-read first: approval must echo the server's CURRENT versions and
+      // hashes, so a stale panel produces a 409 instead of a wrong approval.
+      const fresh = await getMeetingOutput(output.outputId)
 
-      return `${file.path} is download-only in this panel (${file.previewPolicy}).`
-    }
+      const target = fresh.versions.find(row => row.artifactVersion === fresh.output.verifiedArtifactVersion)
 
-    setPreview({ file, text: new TextDecoder().decode(bytes.bytes) })
+      if (!target) {
+        throw new Error('There is no verified artifact version to approve.')
+      }
 
-    return `${file.path} previewed (${shortDigest(bytes.sha256)}).`
-  })
+      const approved = await approveMeetingOutput({
+        outputId: output.outputId,
+        meetingId: output.meetingId,
+        expectedMeetingVersion: meetingVersion,
+        expectedOutputVersion: fresh.output.version,
+        version: target,
+        // Bound to the exact artifact version and the versions this approval was
+        // built against, so a double click replays and a stale panel conflicts.
+        idempotencyKey: `approve-${output.outputId}-${fresh.output.version}-${target.artifactVersion}`
+      })
 
-  const download = (target: OutputVersion) => void run('download', async () => {
-    const bytes: ArtifactBytes = await downloadOutputPackage({
-      outputId: output.outputId,
-      artifactVersion: target.artifactVersion
+      return `Artifact version ${approved.output.approvedArtifactVersion} approved by ${String(
+        approved.artifactBinding.approved_by ?? 'Owner'
+      )}.`
     })
 
-    const recomputed = await sha256Hex(bytes.bytes)
+  const previewFile = (file: ManifestFile) =>
+    void run('preview', async () => {
+      if (!version) {
+        throw new Error('Select an artifact version first.')
+      }
 
-    if (recomputed !== target.zipSha256) {
-      throw new Error('The downloaded package does not match the stored zip_sha256.')
-    }
+      const bytes = await previewOutputFile({
+        outputId: output.outputId,
+        artifactVersion: version.artifactVersion,
+        path: file.path
+      })
 
-    host.notify({
-      kind: 'success',
-      message: `Deliverable v${target.artifactVersion} verified against zip_sha256`
+      if (file.previewPolicy !== 'text') {
+        // Image and download-only members are never rendered as text here; the
+        // panel keeps download as the honest affordance.
+        setPreview(null)
+
+        return `${file.path} is download-only in this panel (${file.previewPolicy}).`
+      }
+
+      setPreview({ file, text: new TextDecoder().decode(bytes.bytes) })
+
+      return `${file.path} previewed (${shortDigest(bytes.sha256)}).`
     })
 
-    return `Downloaded ${byteLabel(bytes.bytes.byteLength)} and verified against zip_sha256.`
-  })
+  const download = (target: OutputVersion) =>
+    void run('download', async () => {
+      const bytes: ArtifactBytes = await downloadOutputPackage({
+        outputId: output.outputId,
+        artifactVersion: target.artifactVersion
+      })
+
+      const recomputed = await sha256Hex(bytes.bytes)
+
+      if (recomputed !== target.zipSha256) {
+        throw new Error('The downloaded package does not match the stored zip_sha256.')
+      }
+
+      host.notify({
+        kind: 'success',
+        message: `Deliverable v${target.artifactVersion} verified against zip_sha256`
+      })
+
+      return `Downloaded ${byteLabel(bytes.bytes.byteLength)} and verified against zip_sha256.`
+    })
 
   return (
     <section
@@ -256,9 +272,7 @@ export function DeliverablePackageOutput({
     >
       <header className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-cyan-300">
-            Deliverable package
-          </p>
+          <p className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-cyan-300">Deliverable package</p>
           <h3 className="truncate text-sm font-semibold text-white">{output.title}</h3>
           <p className="mt-1 text-xs text-white/60">
             {output.productKind} · {output.kind}
@@ -281,9 +295,7 @@ export function DeliverablePackageOutput({
       </header>
 
       <section aria-label="Acceptance statement">
-        <h4 className="text-[0.62rem] font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">
-          Acceptance
-        </h4>
+        <h4 className="text-[0.62rem] font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">Acceptance</h4>
         <p className="mt-1 text-xs leading-5 text-white/75">{output.summary}</p>
       </section>
 
@@ -340,9 +352,7 @@ export function DeliverablePackageOutput({
 
       {version?.manifest.files.length ? (
         <section aria-label="Manifest files" className="space-y-1">
-          <h4 className="text-[0.62rem] font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">
-            Manifest
-          </h4>
+          <h4 className="text-[0.62rem] font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">Manifest</h4>
           <ul className="space-y-1">
             {version.manifest.files.map(file => (
               <li className="flex min-w-0 items-center gap-2 text-xs" key={file.path}>
@@ -383,13 +393,13 @@ export function DeliverablePackageOutput({
 
       {output.findings.length ? (
         <section aria-label="Review findings" className="space-y-1">
-          <h4 className="text-[0.62rem] font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">
-            Findings
-          </h4>
+          <h4 className="text-[0.62rem] font-semibold uppercase tracking-wide text-(--ui-text-tertiary)">Findings</h4>
           <ul className="space-y-1">
             {output.findings.map((finding, index) => (
               <li className="flex min-w-0 items-start gap-2 text-xs" key={`${finding.code}-${index}`}>
-                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[0.6rem] font-semibold ${SEVERITY_TONE[finding.severity]}`}>
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-[0.6rem] font-semibold ${SEVERITY_TONE[finding.severity]}`}
+                >
                   {finding.severity}
                 </span>
                 <span className="min-w-0 text-white/75">
@@ -407,8 +417,8 @@ export function DeliverablePackageOutput({
       {latestReview ? (
         <section aria-label="Review history" className="text-[0.65rem] text-white/55" data-testid="review-history">
           Latest review: v{latestReview.artifactVersion} ·{' '}
-          {latestReview.state === 'open' ? 'open' : latestReview.verdict || 'completed'} ·{' '}
-          reviewer {latestReview.reviewer.profile}
+          {latestReview.state === 'open' ? 'open' : latestReview.verdict || 'completed'} · reviewer{' '}
+          {latestReview.reviewer.profile}
           {latestReview.checks.failedChecks.length
             ? ` · failed checks: ${latestReview.checks.failedChecks.join(', ')}`
             : ''}
@@ -458,13 +468,19 @@ export function DeliverablePackageOutput({
       </div>
 
       {busy ? (
-        <p className="text-xs text-white/60" data-testid="output-busy" role="status">Working…</p>
+        <p className="text-xs text-white/60" data-testid="output-busy" role="status">
+          Working…
+        </p>
       ) : null}
       {notice ? (
-        <p className="text-xs text-emerald-200" data-testid="output-notice" role="status">{notice}</p>
+        <p className="text-xs text-emerald-200" data-testid="output-notice" role="status">
+          {notice}
+        </p>
       ) : null}
       {error ? (
-        <p className="text-xs text-red-300" data-testid="output-error" role="alert">{error}</p>
+        <p className="text-xs text-red-300" data-testid="output-error" role="alert">
+          {error}
+        </p>
       ) : null}
     </section>
   )

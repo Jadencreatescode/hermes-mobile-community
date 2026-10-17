@@ -1,10 +1,4 @@
-import {
-  type BotsRosterProvider,
-  type BotsRosterProviderAgent,
-  cn,
-  Codicon,
-  host
-} from '@hermes/plugin-sdk'
+import { type BotsRosterProvider, type BotsRosterProviderAgent, cn, Codicon, host } from '@hermes/plugin-sdk'
 import { useState } from 'react'
 
 export interface ProviderContribution {
@@ -23,9 +17,7 @@ export interface ProviderRosterRow {
   providerKey?: string
 }
 
-export async function loadProviderRoster(
-  contributions: readonly ProviderContribution[]
-): Promise<ProviderRosterRow[]> {
+export async function loadProviderRoster(contributions: readonly ProviderContribution[]): Promise<ProviderRosterRow[]> {
   // The bounded validator stays runtime JavaScript so its node:test coverage can
   // execute without the renderer toolchain.
   // @ts-expect-error The runtime module intentionally has no TypeScript declaration.
@@ -80,6 +72,7 @@ export function ProviderBotRow({ row, onRefresh }: ProviderBotRowProps) {
     }
 
     setRefreshing(true)
+
     try {
       await row.provider.refresh_agent(agent)
       await onRefresh?.()

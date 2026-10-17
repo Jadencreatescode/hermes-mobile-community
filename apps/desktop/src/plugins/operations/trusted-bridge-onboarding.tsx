@@ -43,6 +43,7 @@ export function TrustedBridgeOnboarding({ open, onOpenChange, onRegistered }: Tr
         if (resetTimerRef.current !== null) {
           window.clearTimeout(resetTimerRef.current)
         }
+
         resetTimerRef.current = window.setTimeout(() => {
           resetTimerRef.current = null
           reset()

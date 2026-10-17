@@ -262,6 +262,7 @@ test('wrapHandoffForDetachedConsole uses a fixed bootstrap and keeps hand-off da
   })
 
   assert.ok(handoff)
+
   const parameters = [
     { kind: 'value' as const, name: 'InstallRoot', value: root },
     { kind: 'value' as const, name: 'Branch', value: 'main&feature' },
@@ -270,17 +271,20 @@ test('wrapHandoffForDetachedConsole uses a fixed bootstrap and keeps hand-off da
     { kind: 'switch' as const, name: 'NoGateway' },
     { kind: 'value' as const, name: 'HandoffRun', value: 'desk-123' }
   ]
+
   const wrapped = wrapHandoffForDetachedConsole(handoff, parameters, false, 123)
 
   assert.equal(wrapped.command, windowsCmdPath())
   assert.equal(wrapped.detached, false)
   assert.deepEqual(wrapped.args.slice(0, 6), ['/d', '/s', '/c', 'start', '', '/b'])
   assert.equal(wrapped.args.includes(expected), false)
+
   for (const parameter of parameters) {
     if (parameter.kind === 'value' && parameter.name !== 'DesktopPid') {
       assert.equal(wrapped.args.includes(parameter.value), false)
     }
   }
+
   const commandIndex = wrapped.args.indexOf('-Command')
   const invoker = wrapped.args[commandIndex + 1] ?? ''
   assert.equal(invoker.includes('\n'), false)
@@ -306,6 +310,7 @@ test('wrapHandoffForDetachedConsole uses a fixed bootstrap and keeps hand-off da
 
 test('wrapHandoffForDetachedConsole rejects invalid desktop pid markers', () => {
   const scriptPath = String.raw`C:\Hermes\update.ps1`
+
   const handoff = {
     command: String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
     args: ['-File', scriptPath],
@@ -313,10 +318,7 @@ test('wrapHandoffForDetachedConsole rejects invalid desktop pid markers', () => 
   }
 
   for (const desktopPid of [1.5, 0, -1, 10_000_000_000]) {
-    assert.throws(
-      () => wrapHandoffForDetachedConsole(handoff, [], false, desktopPid),
-      /not a valid integer marker/
-    )
+    assert.throws(() => wrapHandoffForDetachedConsole(handoff, [], false, desktopPid), /not a valid integer marker/)
   }
 })
 
@@ -335,6 +337,7 @@ test.skipIf(process.platform !== 'win32')('the Windows bootstrap rejects a marke
 
   try {
     writeFileSync(scriptPath, 'exit 0\r\n')
+
     const wrapped = wrapHandoffForDetachedConsole(
       {
         command: windowsPowerShellPath(),
@@ -345,6 +348,7 @@ test.skipIf(process.platform !== 'win32')('the Windows bootstrap rejects a marke
       true,
       123
     )
+
     const result = spawnSync(wrapped.command, wrapped.args, {
       encoding: 'utf8',
       env: { ...process.env, ...wrapped.handoffEnv },
@@ -361,6 +365,7 @@ test.skipIf(process.platform !== 'win32')('the Windows bootstrap rejects a marke
 test('killHandoffTree targets the exact marker with absolute Windows executables', () => {
   let spawnedCommand = ''
   let spawnedArgs: string[] = []
+
   const fakeChild = {
     on: () => fakeChild
   }
@@ -426,6 +431,7 @@ test('the legacy installation launcher uses the absolute System32 cmd.exe', (): 
 
 test('buildWindowsHandoffPayload rejects invalid parameter names before encoding', () => {
   const scriptPath = String.raw`C:\Hermes\update.ps1`
+
   const handoff = {
     command: String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
     args: ['-File', scriptPath],
@@ -441,6 +447,7 @@ test('buildWindowsHandoffPayload rejects invalid parameter names before encoding
 test('wrapHandoffForDetachedConsole uses a validated absolute PowerShell path', () => {
   const command = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
   const scriptPath = String.raw`C:\Hermes\update.ps1`
+
   const wrapped = wrapHandoffForDetachedConsole(
     {
       command,

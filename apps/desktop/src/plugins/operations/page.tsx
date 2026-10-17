@@ -43,59 +43,61 @@ export function OperationsPage({
   const foregroundGeneration = useRef(0)
 
   const delegations = useMemo<OperationsDelegation[]>(
-    () => Object.entries(delegatedBySession as Record<string, Array<{ goal?: string; id: string; status?: string }>>)
-      .flatMap(([sessionId, items]) => items.map(item => ({ ...item, sessionId }))),
+    () =>
+      Object.entries(
+        delegatedBySession as Record<string, Array<{ goal?: string; id: string; status?: string }>>
+      ).flatMap(([sessionId, items]) => items.map(item => ({ ...item, sessionId }))),
     [delegatedBySession]
   )
 
-  const refresh = useCallback(async (quiet = false) => {
-    void activeConnectionId
-    void activeProfile
-    const generation = ++refreshGeneration.current
-    const foreground = quiet ? 0 : ++foregroundGeneration.current
+  const refresh = useCallback(
+    async (quiet = false) => {
+      void activeConnectionId
+      void activeProfile
+      const generation = ++refreshGeneration.current
+      const foreground = quiet ? 0 : ++foregroundGeneration.current
 
-    if (!quiet) {
-      setRefreshing(true)
-    }
-
-    try {
-      let a2aFailed = false
-
-      const a2aRequest = listA2AAgents().catch((cause: unknown) => {
-        a2aFailed = true
-        void cause
-
-        return [] as never[]
-      })
-
-      const [connectedAgents, a2aAgents] = await Promise.all([
-        loadConnectedAgents(),
-        a2aRequest
-      ])
-
-      const [nextSnapshot, nextRoutines] = await Promise.all([
-        loadOperationsSnapshot(host, { connectedAgents, a2aAgents, delegatedBySession: delegatedBySession as never }),
-        loadOperationsRoutines(host)
-      ])
-
-      if (generation !== refreshGeneration.current) {
-        return
+      if (!quiet) {
+        setRefreshing(true)
       }
 
-      setSnapshot(nextSnapshot)
-      setRoutines(nextRoutines)
-      setError(null)
-      setA2aError(a2aFailed ? 'Could not load A2A agents' : '')
-    } catch (cause) {
-      if (generation === refreshGeneration.current) {
-        setError(cause instanceof Error ? cause : new Error(String(cause)))
+      try {
+        let a2aFailed = false
+
+        const a2aRequest = listA2AAgents().catch((cause: unknown) => {
+          a2aFailed = true
+          void cause
+
+          return [] as never[]
+        })
+
+        const [connectedAgents, a2aAgents] = await Promise.all([loadConnectedAgents(), a2aRequest])
+
+        const [nextSnapshot, nextRoutines] = await Promise.all([
+          loadOperationsSnapshot(host, { connectedAgents, a2aAgents, delegatedBySession: delegatedBySession as never }),
+          loadOperationsRoutines(host)
+        ])
+
+        if (generation !== refreshGeneration.current) {
+          return
+        }
+
+        setSnapshot(nextSnapshot)
+        setRoutines(nextRoutines)
+        setError(null)
+        setA2aError(a2aFailed ? 'Could not load A2A agents' : '')
+      } catch (cause) {
+        if (generation === refreshGeneration.current) {
+          setError(cause instanceof Error ? cause : new Error(String(cause)))
+        }
+      } finally {
+        if (!quiet && foreground === foregroundGeneration.current) {
+          setRefreshing(false)
+        }
       }
-    } finally {
-      if (!quiet && foreground === foregroundGeneration.current) {
-        setRefreshing(false)
-      }
-    }
-  }, [activeConnectionId, activeProfile, delegatedBySession])
+    },
+    [activeConnectionId, activeProfile, delegatedBySession]
+  )
 
   useEffect(() => {
     void refresh()
@@ -105,13 +107,19 @@ export function OperationsPage({
   }, [refresh])
 
   if (!snapshot && !error) {
-    return <div className="grid h-full place-items-center"><Loader label="Loading Operations" type="lemniscate-bloom" /></div>
+    return (
+      <div className="grid h-full place-items-center">
+        <Loader label="Loading Operations" type="lemniscate-bloom" />
+      </div>
+    )
   }
 
   if (!snapshot && error) {
     return (
       <ErrorState description={error.message} title="Operations could not load">
-        <Button className="min-h-11" onClick={() => void refresh()} variant="outline">Retry</Button>
+        <Button className="min-h-11" onClick={() => void refresh()} variant="outline">
+          Retry
+        </Button>
       </ErrorState>
     )
   }
@@ -123,7 +131,9 @@ export function OperationsPage({
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-(--ui-stroke-tertiary) px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
         <div className="min-w-0">
           <h1 className="text-lg font-semibold">Operations</h1>
-          <p className="text-sm text-(--ui-text-secondary)">Bots, delegated workers, assignments, routines, and source health.</p>
+          <p className="text-sm text-(--ui-text-secondary)">
+            Bots, delegated workers, assignments, routines, and source health.
+          </p>
         </div>
         <Button
           aria-label="Refresh Operations"
@@ -141,12 +151,19 @@ export function OperationsPage({
         <OperationsNavigation active={section} onChange={setSection} />
         <section className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 pb-[calc(2rem+env(safe-area-inset-bottom))] pt-4">
           {gatewayState !== 'open' && (
-            <div className="mb-4 border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200" role="status">
-              Gateway {gatewayState === 'connecting' ? 'reconnecting' : gatewayState}. Operations data may be stale until the connection recovers.
+            <div
+              className="mb-4 border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"
+              role="status"
+            >
+              Gateway {gatewayState === 'connecting' ? 'reconnecting' : gatewayState}. Operations data may be stale
+              until the connection recovers.
             </div>
           )}
           {error && (
-            <div className="mb-4 border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert">
+            <div
+              className="mb-4 border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              role="alert"
+            >
               Refresh failed: {error.message}. The last verified snapshot remains visible.
             </div>
           )}
@@ -164,7 +181,9 @@ export function OperationsPage({
               }}
               onOnboardingOpenChange={onOnboardingOpenChange}
               onOpenAgent={agent => {
-                void openAgentWorkspace(host, agent).catch(cause => host.notifyError(cause, `Could not open ${agent.displayName}`))
+                void openAgentWorkspace(host, agent).catch(cause =>
+                  host.notifyError(cause, `Could not open ${agent.displayName}`)
+                )
               }}
               onOpenSection={setSection}
               onShowDetails={() => setSection('overview')}
