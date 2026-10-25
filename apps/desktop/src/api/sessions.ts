@@ -370,22 +370,67 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
   }
 }
 
+// ── Mutation fence (Hermes v0.22.3+) ──────────────────────────────────────
+// Backends >= 0.22.3 require request_id + expected_revision on session
+// mutations.  This helper fetches the current revision snapshot and attaches
+// the identity fields.  On an older backend that lacks the snapshot route, it
+// falls back to the pre-fence plain write so existing installs keep working.
+
+interface MutationSnapshot {
+  session_id: string
+  exists: boolean
+  runtime_revision: number
+}
+
+function _newMutationId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  // Fallback for environments without crypto.randomUUID
+  const hex = () => Math.floor(Math.random() * 16).toString(16)
+  return `${hex()}${hex()}${hex()}${hex()}-${hex()}${hex()}${hex()}${hex()}`
+}
+
+async function _fetchMutationIdentity(
+  id: string,
+  profile?: string | null
+): Promise<{ request_id: string; expected_revision: number } | null> {
+  const owner = sessionWriteProfile(profile)
+  const suffix = owner ? `?profile=${encodeURIComponent(owner)}` : ''
+  const path = `/api/sessions/${encodeURIComponent(id)}/mutation-snapshot${suffix}`
+  try {
+    const snap = await hermesApi<MutationSnapshot>({
+      ...(owner ? { profile: owner } : {}),
+      path,
+      timeoutMs: 15_000
+    })
+    if (
+      typeof snap.exists === 'boolean' &&
+      Number.isSafeInteger(snap.runtime_revision) &&
+      snap.runtime_revision >= 0
+    ) {
+      return {
+        request_id: _newMutationId(),
+        expected_revision: snap.runtime_revision
+      }
+    }
+  } catch {
+    // Older backend without the snapshot route — fall through to plain write.
+  }
+  return null
+}
+
 // Mutations take the owning `profile` so Electron can route them to the correct
 // remote backend or local profile scope. Omit for the current/default profile.
-export function setSessionArchived(id: string, archived: boolean, profile?: string | null): Promise<{ ok: boolean }> {
-  // Carry the owning profile IN THE PATCH BODY, mirroring renameSession — the
-  // backend reads its target DB from body.profile (_open_session_db_for_profile).
-  // Passing it only as request.profile (Electron routing) is not enough on a
-  // remote gateway with no remoteProfile alias: the archive lands on the wrong
-  // (default) state.db, no-ops on a missing row, and the archived/unarchived
-  // state silently fails to stick — the same class as the unscoped DELETE.
+export async function setSessionArchived(id: string, archived: boolean, profile?: string | null): Promise<{ ok: boolean }> {
   const owner = sessionWriteProfile(profile)
+  const identity = await _fetchMutationIdentity(id, profile)
 
   return hermesApi<{ ok: boolean }>({
     ...(owner ? { profile: owner } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',
-    body: { archived, ...(owner ? { profile: owner } : {}) }
+    body: { archived, ...(identity ?? {}), ...(owner ? { profile: owner } : {}) }
   })
 }
 
@@ -393,17 +438,15 @@ export function setSessionArchived(id: string, archived: boolean, profile?: stri
 // sweep (which runs backend-side, blind to Desktop localStorage) never hides a
 // pinned chat. Best-effort: the sidebar stays localStorage-driven for its own
 // display; this only feeds the backend policy.
-export function setSessionPinnedRemote(id: string, pinned: boolean, profile?: string | null): Promise<{ ok: boolean }> {
-  // Owning profile in the PATCH body (see setSessionArchived / renameSession):
-  // the handler reads its target DB from body.profile, so a remote/foreign
-  // profile's pin must travel in the body or it no-ops on the wrong state.db.
+export async function setSessionPinnedRemote(id: string, pinned: boolean, profile?: string | null): Promise<{ ok: boolean }> {
   const owner = sessionWriteProfile(profile)
+  const identity = await _fetchMutationIdentity(id, profile)
 
   return hermesApi<{ ok: boolean }>({
     ...(owner ? { profile: owner } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',
-    body: { pinned, ...(owner ? { profile: owner } : {}) }
+    body: { pinned, ...(identity ?? {}), ...(owner ? { profile: owner } : {}) }
   })
 }
 
@@ -411,18 +454,15 @@ export function setSessionPinnedRemote(id: string, pinned: boolean, profile?: st
 // (sessions.last_read_at via SessionDB.set_session_read). Same profile
 // routing as the other session mutations: a remote session's row lives only
 // on its remote host, so the owning profile must travel with the request.
-export function setSessionUnreadRemote(id: string, unread: boolean, profile?: string | null): Promise<{ ok: boolean }> {
-  // Owning profile in the PATCH body (see setSessionArchived / renameSession):
-  // the handler reads its target DB from body.profile, so a remote/foreign
-  // profile's unread toggle must travel in the body or it no-ops on the wrong
-  // state.db.
+export async function setSessionUnreadRemote(id: string, unread: boolean, profile?: string | null): Promise<{ ok: boolean }> {
   const owner = sessionWriteProfile(profile)
+  const identity = await _fetchMutationIdentity(id, profile)
 
   return hermesApi<{ ok: boolean }>({
     ...(owner ? { profile: owner } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',
-    body: { unread, ...(owner ? { profile: owner } : {}) }
+    body: { unread, ...(identity ?? {}), ...(owner ? { profile: owner } : {}) }
   })
 }
 
@@ -706,20 +746,21 @@ export async function getAllSessionMessages(
   return { session_id: resolvedSessionId, messages }
 }
 
-export function deleteSession(id: string, profile?: ProfileScope): Promise<{ ok: boolean }> {
-  // Scope the DELETE to the owning profile IN THE URL, mirroring getSession /
-  // getSessionMessages. Passing the profile only via request.profile (which the
-  // Electron main process consumes for backend routing) is NOT enough: on a
-  // remote gateway whose connection has no remoteProfile alias, the main-process
-  // path rewrite leaves the URL unscoped, so the backend opens its OWN (default)
-  // state.db, fails to find another profile's session, and returns
-  // {ok:true, already_absent:true}. The row then vanishes optimistically but was
-  // never deleted and reappears on the next sidebar refresh — the "All Profiles
-  // delete doesn't stick" report. The endpoint already honours ?profile=
-  // (get/rename/messages all send it); DELETE was the one mutation that dropped
-  // it after the api/ split. request.profile stays on for per-profile remote
-  // override + global-remote routing (both re-read/re-append the param).
+export async function deleteSession(id: string, profile?: ProfileScope): Promise<{ ok: boolean }> {
   const suffix = sessionScopeQuery(profile)
+  const identity = await _fetchMutationIdentity(id, typeof profile === 'string' ? profile : null)
+
+  if (identity) {
+    const params = new URLSearchParams(suffix ? suffix.slice(1) : '')
+    params.set('request_id', identity.request_id)
+    params.set('expected_revision', String(identity.expected_revision))
+
+    return hermesApi<{ ok: boolean }>({
+      ...sessionScoped(profile),
+      path: `/api/sessions/${encodeURIComponent(id)}?${params.toString()}`,
+      method: 'DELETE'
+    })
+  }
 
   return hermesApi<{ ok: boolean }>({
     ...sessionScoped(profile),
@@ -728,17 +769,18 @@ export function deleteSession(id: string, profile?: ProfileScope): Promise<{ ok:
   })
 }
 
-export function renameSession(
+export async function renameSession(
   id: string,
   title: string,
   profile?: string | null
 ): Promise<{ ok: boolean; title: string }> {
   const owner = sessionWriteProfile(profile)
+  const identity = await _fetchMutationIdentity(id, profile)
 
   return hermesApi<{ ok: boolean; title: string }>({
     ...(owner ? { profile: owner } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}`,
     method: 'PATCH',
-    body: { title, ...(owner ? { profile: owner } : {}) }
+    body: { title, ...(identity ?? {}), ...(owner ? { profile: owner } : {}) }
   })
 }
