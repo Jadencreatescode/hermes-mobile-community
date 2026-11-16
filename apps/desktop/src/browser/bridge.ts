@@ -153,37 +153,14 @@ export function createBrowserBridge(options: BrowserBridgeOptions = {}): Window[
 
     const baseUrl = nodeBaseUrl(location, runtimeDescriptor, connectionId)
 
-    try {
-      const response = await fetcher(`${baseUrl}/api/auth/ws-ticket`, {
-        credentials: 'include',
-        headers: { accept: 'application/json' },
-        method: 'POST'
-      })
-
-      if (!response.ok) {
-        const detail = await response.text().catch(() => '')
-
-        return {
-          error: detail || `Gateway returned HTTP ${response.status}`,
-          needsOauthLogin: response.status === 401 || response.status === 403,
-          ok: false as const
-        }
-      }
-
-      const payload = await response.json().catch(() => null)
-
-      if (!payload?.ticket) {return { error: 'Gateway returned no WebSocket ticket.', ok: false as const }}
-
-      return {
-        ok: true as const,
-        wsUrl: `${baseUrl.replace(/^http/, 'ws')}/api/ws?ticket=${encodeURIComponent(payload.ticket)}`
-      }
-    } catch (error) {
-      return {
-        error: error instanceof Error ? error.message : String(error),
-        needsOauthLogin: error instanceof Error && /401|unauthorized/i.test(error.message),
-        ok: false as const
-      }
+    // The mobile relay injects the dashboard session token into proxied WS
+    // connections (?token=).  In loopback mode the dashboard WS endpoint
+    // accepts ?token=<SESSION_TOKEN> directly — no OAuth ticket is needed.
+    // Bypass POST /api/auth/ws-ticket (which requires an OAuth session cookie
+    // and returns 401 in loopback mode) and return the WS URL directly.
+    return {
+      ok: true as const,
+      wsUrl: `${baseUrl.replace(/^http/, 'ws')}/api/ws`
     }
   }
 
@@ -324,6 +301,42 @@ export function createBrowserBridge(options: BrowserBridgeOptions = {}): Window[
         // Continue to the explicit login page even if an expired session cannot
         // be revoked. A successful login replaces the stale browser cookies.
         return { ok: false, connected: false }
+      }
+    },
+    getBootstrapState: async () => ({
+      active: false,
+      bundled: false,
+      completedAt: null,
+      error: null,
+      log: [],
+      manifest: null,
+      setupChoice: null,
+      stages: {},
+      startedAt: null,
+      unsupportedPlatform: null
+    }),
+    onBootstrapEvent: noSubscription,
+    resetBootstrap: async () => ({ ok: true }),
+    repairBootstrap: async () => ({ ok: false, error: 'Not available in the mobile browser' }),
+    applyConnectionConfig: async (config: { mode?: string; remoteUrl?: string }) => {
+      // In the browser, a config apply is a best-effort re-navigation to
+      // rebuild the bridge with the new connection context. The existing
+      // connection registry handles node switching; the caller reloads.
+      return { ok: true }
+    },
+    probeConnectionConfig: async (remoteUrl: string) => {
+      try {
+        const resp = await fetcher(new URL('/api/status', remoteUrl).toString(), { credentials: 'include' })
+
+        if (!resp.ok) {
+          return null
+        }
+
+        const status = await resp.json()
+
+        return { providers: status?.auth_providers ?? [] }
+      } catch {
+        return null
       }
     },
     onBackendExit: noSubscription,
